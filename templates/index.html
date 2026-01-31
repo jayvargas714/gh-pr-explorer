@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHub PR Explorer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+{% raw %}
+    <div id="app">
+        <header class="app-header">
+            <div class="header-content">
+                <h1 class="logo">
+                    <span class="logo-icon">
+                        <svg viewBox="0 0 16 16" width="24" height="24" fill="currentColor">
+                            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                        </svg>
+                    </span>
+                    PR Explorer
+                </h1>
+                <button class="theme-toggle" @click="toggleTheme" :title="darkMode ? 'Switch to light mode' : 'Switch to dark mode'">
+                    <span v-if="darkMode">&#9788;</span>
+                    <span v-else>&#9790;</span>
+                </button>
+            </div>
+        </header>
+
+        <main class="app-main">
+            <!-- Account/Organization Selector -->
+            <section class="account-selector">
+                <div class="selector-wrapper">
+                    <label>Account / Organization</label>
+                    <div class="account-buttons" v-if="!accountsLoading">
+                        <button
+                            v-for="account in accounts"
+                            :key="account.login"
+                            class="account-btn"
+                            :class="{ active: selectedAccount?.login === account.login }"
+                            @click="selectAccount(account)"
+                        >
+                            <img v-if="account.avatar_url" :src="account.avatar_url" :alt="account.login" class="account-avatar">
+                            <span class="account-name">{{ account.login }}</span>
+                            <span class="account-type">{{ account.is_personal ? 'Personal' : 'Org' }}</span>
+                        </button>
+                    </div>
+                    <div v-else class="loading-inline">
+                        <div class="spinner-small"></div>
+                        <span>Loading accounts...</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Repository Selector -->
+            <section class="repo-selector" v-if="selectedAccount">
+                <div class="selector-wrapper">
+                    <label for="repo-search">Repository</label>
+                    <div class="search-input-wrapper">
+                        <input
+                            type="text"
+                            id="repo-search"
+                            v-model="repoSearch"
+                            @focus="showRepoDropdown = true"
+                            @input="filterRepos"
+                            placeholder="Search repositories..."
+                            autocomplete="off"
+                            :disabled="reposLoading"
+                        >
+                        <div class="dropdown" v-if="showRepoDropdown && filteredRepos.length > 0" @mouseleave="showRepoDropdown = false">
+                            <div
+                                v-for="repo in filteredRepos"
+                                :key="repo.owner.login + '/' + repo.name"
+                                class="dropdown-item"
+                                @click="selectRepo(repo)"
+                            >
+                                <span class="repo-name">{{ repo.name }}</span>
+                                <span class="repo-visibility" :class="{ private: repo.isPrivate }">
+                                    {{ repo.isPrivate ? 'Private' : 'Public' }}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-if="reposLoading" class="loading-inline">
+                        <div class="spinner-small"></div>
+                    </div>
+                    <span v-if="selectedRepo" class="selected-repo-badge">
+                        {{ selectedRepo.name }}
+                        <button class="clear-btn" @click="clearRepo">&times;</button>
+                    </span>
+                    <span class="repo-count" v-if="!reposLoading && repos.length > 0">
+                        {{ repos.length }} repos
+                    </span>
+                </div>
+            </section>
+
+            <!-- Enhanced Filter Panel -->
+            <section class="filter-panel" v-if="selectedRepo">
+                <div class="filter-header" @click="filtersExpanded = !filtersExpanded">
+                    <h2>
+                        Filters
+                        <span class="filter-count" v-if="activeFiltersCount > 0">({{ activeFiltersCount }} active)</span>
+                    </h2>
+                    <div class="filter-header-actions">
+                        <button class="btn-text" @click.stop="resetFilters" v-if="activeFiltersCount > 0">Clear all</button>
+                        <span class="toggle-icon">{{ filtersExpanded ? '&#9650;' : '&#9660;' }}</span>
+                    </div>
+                </div>
+
+                <div class="filter-content" v-show="filtersExpanded">
+                    <!-- Filter Tabs -->
+                    <div class="filter-tabs">
+                        <button :class="{ active: activeFilterTab === 'basic' }" @click="activeFilterTab = 'basic'">Basic</button>
+                        <button :class="{ active: activeFilterTab === 'review' }" @click="activeFilterTab = 'review'">Review</button>
+                        <button :class="{ active: activeFilterTab === 'people' }" @click="activeFilterTab = 'people'">People</button>
+                        <button :class="{ active: activeFilterTab === 'dates' }" @click="activeFilterTab = 'dates'">Dates</button>
+                        <button :class="{ active: activeFilterTab === 'advanced' }" @click="activeFilterTab = 'advanced'">Advanced</button>
+                    </div>
+
+                    <!-- Basic Filters Tab -->
+                    <div class="filter-tab-content" v-show="activeFilterTab === 'basic'">
+                        <div class="filter-row">
+                            <!-- State Filter -->
+                            <div class="filter-group">
+                                <label>State</label>
+                                <div class="button-group">
+                                    <button
+                                        v-for="s in ['open', 'closed', 'merged', 'all']"
+                                        :key="s"
+                                        :class="{ active: filters.state === s }"
+                                        @click="filters.state = s"
+                                    >{{ s.charAt(0).toUpperCase() + s.slice(1) }}</button>
+                                </div>
+                            </div>
+
+                            <!-- Draft Filter -->
+                            <div class="filter-group">
+                                <label>Draft Status</label>
+                                <div class="button-group">
+                                    <button :class="{ active: filters.draft === '' }" @click="filters.draft = ''">Any</button>
+                                    <button :class="{ active: filters.draft === 'false' }" @click="filters.draft = 'false'">Ready</button>
+                                    <button :class="{ active: filters.draft === 'true' }" @click="filters.draft = 'true'">Draft</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="filter-row">
+                            <!-- Author Filter -->
+                            <div class="filter-group">
+                                <label>Author</label>
+                                <select v-model="filters.author">
+                                    <option value="">Any</option>
+                                    <option v-for="c in contributors" :key="c" :value="c">{{ c }}</option>
+                                </select>
+                            </div>
+
+                            <!-- Assignee Filter -->
+                            <div class="filter-group">
+                                <label>Assignee</label>
+                                <select v-model="filters.assignee">
+                                    <option value="">Any</option>
+                                    <option v-for="c in contributors" :key="c" :value="c">{{ c }}</option>
+                                </select>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" v-model="filters.noAssignee"> No assignee
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="filter-row">
+                            <!-- Base Branch Filter -->
+                            <div class="filter-group">
+                                <label>Base Branch</label>
+                                <select v-model="filters.base">
+                                    <option value="">Any</option>
+                                    <option v-for="b in branches" :key="b" :value="b">{{ b }}</option>
+                                </select>
+                            </div>
+
+                            <!-- Head Branch Filter -->
+                            <div class="filter-group">
+                                <label>Head Branch</label>
+                                <select v-model="filters.head">
+                                    <option value="">Any</option>
+                                    <option v-for="b in branches" :key="b" :value="b">{{ b }}</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="filter-row">
+                            <!-- Labels -->
+                            <div class="filter-group full-width">
+                                <label>Labels</label>
+                                <div class="label-chips">
+                                    <button
+                                        v-for="l in labels"
+                                        :key="l"
+                                        class="label-chip"
+                                        :class="{ selected: filters.labels.includes(l) }"
+                                        @click="toggleLabel(l)"
+                                    >{{ l }}</button>
+                                </div>
+                                <label class="checkbox-label" v-if="labels.length > 0">
+                                    <input type="checkbox" v-model="filters.noLabel"> No labels
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="filter-row">
+                            <!-- Milestone -->
+                            <div class="filter-group">
+                                <label>Milestone</label>
+                                <select v-model="filters.milestone">
+                                    <option value="">Any</option>
+                                    <option value="none">No milestone</option>
+                                    <option v-for="m in milestones" :key="m.title" :value="m.title">
+                                        {{ m.title }} ({{ m.state }})
+                                    </option>
+                                </select>
+                            </div>
+
+                            <!-- Linked to Issue -->
+                            <div class="filter-group">
+                                <label>Linked to Issue</label>
+                                <div class="button-group">
+                                    <button :class="{ active: filters.linked === '' }" @click="filters.linked = ''">Any</button>
+                                    <button :class="{ active: filters.linked === 'true' }" @click="filters.linked = 'true'">Linked</button>
+                                    <button :class="{ active: filters.linked === 'false' }" @click="filters.linked = 'false'">Not linked</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Review Filters Tab -->
+                    <div class="filter-tab-content" v-show="activeFilterTab === 'review'">
+                        <div class="filter-row">
+                            <!-- Review Status (Multi-select with OR logic) -->
+                            <div class="filter-group">
+                                <label>Review Status <span class="filter-hint-inline">(OR logic - select multiple)</span></label>
+                                <div class="multi-select-group">
+                                    <label class="checkbox-label compact">
+                                        <input type="checkbox" :checked="filters.review.includes('none')" @change="toggleReview('none')">
+                                        No reviews
+                                    </label>
+                                    <label class="checkbox-label compact">
+                                        <input type="checkbox" :checked="filters.review.includes('required')" @change="toggleReview('required')">
+                                        Review required
+                                    </label>
+                                    <label class="checkbox-label compact">
+                                        <input type="checkbox" :checked="filters.review.includes('approved')" @change="toggleReview('approved')">
+                                        <span class="status-indicator approved"></span> Approved
+                                    </label>
+                                    <label class="checkbox-label compact">
+                                        <input type="checkbox" :checked="filters.review.includes('changes_requested')" @change="toggleReview('changes_requested')">
+                                        <span class="status-indicator changes"></span> Changes requested
+                                    </label>
+                                </div>
+                                <span class="filter-hint" v-if="filters.review.length > 1">Showing PRs matching ANY of: {{ filters.review.join(', ') }}</span>
+                            </div>
+
+                            <!-- CI/Status (Multi-select with OR logic) -->
+                            <div class="filter-group">
+                                <label>CI Status <span class="filter-hint-inline">(OR logic - select multiple)</span></label>
+                                <div class="multi-select-group">
+                                    <label class="checkbox-label compact">
+                                        <input type="checkbox" :checked="filters.status.includes('pending')" @change="toggleStatus('pending')">
+                                        <span class="status-dot pending"></span> Pending
+                                    </label>
+                                    <label class="checkbox-label compact">
+                                        <input type="checkbox" :checked="filters.status.includes('success')" @change="toggleStatus('success')">
+                                        <span class="status-dot success"></span> Success
+                                    </label>
+                                    <label class="checkbox-label compact">
+                                        <input type="checkbox" :checked="filters.status.includes('failure')" @change="toggleStatus('failure')">
+                                        <span class="status-dot failure"></span> Failure
+                                    </label>
+                                </div>
+                                <span class="filter-hint" v-if="filters.status.length > 1">Showing PRs matching ANY of: {{ filters.status.join(', ') }}</span>
+                            </div>
+                        </div>
+
+                        <div class="filter-row">
+                            <!-- Reviewed By -->
+                            <div class="filter-group">
+                                <label>Reviewed By</label>
+                                <select v-model="filters.reviewedBy">
+                                    <option value="">Any</option>
+                                    <option v-for="c in contributors" :key="c" :value="c">{{ c }}</option>
+                                </select>
+                            </div>
+
+                            <!-- Review Requested -->
+                            <div class="filter-group">
+                                <label>Review Requested From</label>
+                                <select v-model="filters.reviewRequested">
+                                    <option value="">Any</option>
+                                    <option v-for="c in contributors" :key="c" :value="c">{{ c }}</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- People Filters Tab -->
+                    <div class="filter-tab-content" v-show="activeFilterTab === 'people'">
+                        <div class="filter-row">
+                            <!-- Involves -->
+                            <div class="filter-group">
+                                <label>Involves (author, assignee, mentions, commenter)</label>
+                                <select v-model="filters.involves">
+                                    <option value="">Any</option>
+                                    <option v-for="c in contributors" :key="c" :value="c">{{ c }}</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="filter-row">
+                            <!-- Mentions -->
+                            <div class="filter-group">
+                                <label>Mentions</label>
+                                <select v-model="filters.mentions">
+                                    <option value="">Any</option>
+                                    <option v-for="c in contributors" :key="c" :value="c">{{ c }}</option>
+                                </select>
+                            </div>
+
+                            <!-- Commenter -->
+                            <div class="filter-group">
+                                <label>Commenter</label>
+                                <select v-model="filters.commenter">
+                                    <option value="">Any</option>
+                                    <option v-for="c in contributors" :key="c" :value="c">{{ c }}</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Date Filters Tab -->
+                    <div class="filter-tab-content" v-show="activeFilterTab === 'dates'">
+                        <div class="filter-row">
+                            <!-- Created -->
+                            <div class="filter-group">
+                                <label>Created After</label>
+                                <input type="date" v-model="filters.createdAfter">
+                            </div>
+                            <div class="filter-group">
+                                <label>Created Before</label>
+                                <input type="date" v-model="filters.createdBefore">
+                            </div>
+                        </div>
+
+                        <div class="filter-row">
+                            <!-- Updated -->
+                            <div class="filter-group">
+                                <label>Updated After</label>
+                                <input type="date" v-model="filters.updatedAfter">
+                            </div>
+                            <div class="filter-group">
+                                <label>Updated Before</label>
+                                <input type="date" v-model="filters.updatedBefore">
+                            </div>
+                        </div>
+
+                        <div class="filter-row">
+                            <!-- Merged -->
+                            <div class="filter-group">
+                                <label>Merged After</label>
+                                <input type="date" v-model="filters.mergedAfter">
+                            </div>
+                            <div class="filter-group">
+                                <label>Merged Before</label>
+                                <input type="date" v-model="filters.mergedBefore">
+                            </div>
+                        </div>
+
+                        <div class="filter-row">
+                            <!-- Closed -->
+                            <div class="filter-group">
+                                <label>Closed After</label>
+                                <input type="date" v-model="filters.closedAfter">
+                            </div>
+                            <div class="filter-group">
+                                <label>Closed Before</label>
+                                <input type="date" v-model="filters.closedBefore">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Advanced Filters Tab -->
+                    <div class="filter-tab-content" v-show="activeFilterTab === 'advanced'">
+                        <div class="filter-row">
+                            <!-- Text Search -->
+                            <div class="filter-group full-width">
+                                <label>Text Search</label>
+                                <input type="text" v-model="filters.search" placeholder="Search keywords...">
+                                <div class="search-in-options">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" :checked="filters.searchIn.includes('title')" @change="toggleSearchIn('title')"> Title
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" :checked="filters.searchIn.includes('body')" @change="toggleSearchIn('body')"> Body
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" :checked="filters.searchIn.includes('comments')" @change="toggleSearchIn('comments')"> Comments
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="filter-row">
+                            <!-- Comments Count -->
+                            <div class="filter-group">
+                                <label>Comments Count</label>
+                                <input type="text" v-model="filters.comments" placeholder="e.g., >5, >=10, 0">
+                                <span class="filter-hint">Use: >n, >=n, &lt;n, &lt;=n, n</span>
+                            </div>
+
+                            <!-- Limit -->
+                            <div class="filter-group">
+                                <label>Results Limit</label>
+                                <select v-model="filters.limit">
+                                    <option :value="25">25</option>
+                                    <option :value="30">30</option>
+                                    <option :value="50">50</option>
+                                    <option :value="100">100</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Advanced Query Options Section -->
+                        <div class="advanced-options-section">
+                            <h4 class="section-title">Advanced Query Options</h4>
+                            <p class="section-description">Enable additional GitHub search qualifiers for more precise filtering.</p>
+
+                            <!-- Reactions Filter -->
+                            <div class="advanced-option">
+                                <div class="option-header">
+                                    <label class="toggle-label">
+                                        <input type="checkbox" v-model="filters.advancedEnabled.reactions">
+                                        <span class="toggle-text">Reactions Count</span>
+                                    </label>
+                                    <span class="option-hint">Filter by total reaction count on PR</span>
+                                </div>
+                                <div class="option-controls" v-if="filters.advancedEnabled.reactions">
+                                    <select v-model="filters.reactionsOp" class="operator-select">
+                                        <option value=">=">>=</option>
+                                        <option value=">">></option>
+                                        <option value="<="><=</option>
+                                        <option value="<"><</option>
+                                        <option value="=">=</option>
+                                    </select>
+                                    <input type="number" v-model="filters.reactionsCount" placeholder="0" min="0" class="number-input">
+                                </div>
+                            </div>
+
+                            <!-- Interactions Filter -->
+                            <div class="advanced-option">
+                                <div class="option-header">
+                                    <label class="toggle-label">
+                                        <input type="checkbox" v-model="filters.advancedEnabled.interactions">
+                                        <span class="toggle-text">Interactions Count</span>
+                                    </label>
+                                    <span class="option-hint">Filter by reactions + comments count</span>
+                                </div>
+                                <div class="option-controls" v-if="filters.advancedEnabled.interactions">
+                                    <select v-model="filters.interactionsOp" class="operator-select">
+                                        <option value=">=">>=</option>
+                                        <option value=">">></option>
+                                        <option value="<="><=</option>
+                                        <option value="<"><</option>
+                                        <option value="=">=</option>
+                                    </select>
+                                    <input type="number" v-model="filters.interactionsCount" placeholder="0" min="0" class="number-input">
+                                </div>
+                            </div>
+
+                            <!-- Team Review Requested -->
+                            <div class="advanced-option">
+                                <div class="option-header">
+                                    <label class="toggle-label">
+                                        <input type="checkbox" v-model="filters.advancedEnabled.teamReview">
+                                        <span class="toggle-text">Team Review Requested</span>
+                                    </label>
+                                    <span class="option-hint">Filter by team review request</span>
+                                </div>
+                                <div class="option-controls" v-if="filters.advancedEnabled.teamReview">
+                                    <select v-model="filters.teamReviewRequested">
+                                        <option value="">Select team...</option>
+                                        <option v-for="t in teams" :key="t.slug" :value="t.slug">{{ t.name }}</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Exclude Labels -->
+                            <div class="advanced-option">
+                                <div class="option-header">
+                                    <label class="toggle-label">
+                                        <input type="checkbox" v-model="filters.advancedEnabled.excludeLabels">
+                                        <span class="toggle-text">Exclude Labels</span>
+                                    </label>
+                                    <span class="option-hint">Hide PRs with specific labels (NOT logic)</span>
+                                </div>
+                                <div class="option-controls" v-if="filters.advancedEnabled.excludeLabels">
+                                    <div class="label-chips compact">
+                                        <button
+                                            v-for="l in labels"
+                                            :key="'exclude-' + l"
+                                            class="label-chip"
+                                            :class="{ selected: filters.excludeLabels.includes(l) }"
+                                            @click="toggleExcludeLabel(l)"
+                                        >{{ l }}</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Exclude Author -->
+                            <div class="advanced-option">
+                                <div class="option-header">
+                                    <label class="toggle-label">
+                                        <input type="checkbox" v-model="filters.advancedEnabled.excludeAuthors">
+                                        <span class="toggle-text">Exclude Author</span>
+                                    </label>
+                                    <span class="option-hint">Hide PRs from specific author</span>
+                                </div>
+                                <div class="option-controls" v-if="filters.advancedEnabled.excludeAuthors">
+                                    <select v-model="filters.excludeAuthor">
+                                        <option value="">Select author to exclude...</option>
+                                        <option v-for="c in contributors" :key="'exclude-' + c" :value="c">{{ c }}</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Exclude Milestone -->
+                            <div class="advanced-option">
+                                <div class="option-header">
+                                    <label class="toggle-label">
+                                        <input type="checkbox" v-model="filters.advancedEnabled.excludeMilestone">
+                                        <span class="toggle-text">Exclude Milestone</span>
+                                    </label>
+                                    <span class="option-hint">Hide PRs with specific milestone</span>
+                                </div>
+                                <div class="option-controls" v-if="filters.advancedEnabled.excludeMilestone">
+                                    <select v-model="filters.excludeMilestone">
+                                        <option value="">Select milestone to exclude...</option>
+                                        <option v-for="m in milestones" :key="'exclude-' + m.title" :value="m.title">{{ m.title }}</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Sort By -->
+                            <div class="advanced-option">
+                                <div class="option-header">
+                                    <label class="toggle-label">
+                                        <input type="checkbox" v-model="filters.advancedEnabled.sortBy">
+                                        <span class="toggle-text">Custom Sort</span>
+                                    </label>
+                                    <span class="option-hint">Sort results by specific criteria</span>
+                                </div>
+                                <div class="option-controls" v-if="filters.advancedEnabled.sortBy">
+                                    <select v-model="filters.sortBy">
+                                        <option value="">Default</option>
+                                        <option value="created">Created date</option>
+                                        <option value="updated">Updated date</option>
+                                        <option value="comments">Comments count</option>
+                                        <option value="reactions">Reactions count</option>
+                                        <option value="interactions">Interactions count</option>
+                                    </select>
+                                    <div class="button-group">
+                                        <button :class="{ active: filters.sortDirection === 'desc' }" @click="filters.sortDirection = 'desc'">Desc</button>
+                                        <button :class="{ active: filters.sortDirection === 'asc' }" @click="filters.sortDirection = 'asc'">Asc</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Apply Button -->
+                    <div class="filter-actions">
+                        <button class="btn-primary" @click="fetchPRs">
+                            Apply Filters
+                        </button>
+                        <button class="btn-secondary" @click="resetFilters">Reset All</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- PR List / Stats Section -->
+            <section class="pr-list" v-if="selectedRepo">
+                <div class="list-header">
+                    <div class="view-toggle">
+                        <button :class="{ active: activeView === 'prs' }" @click="setActiveView('prs')">
+                            Pull Requests
+                            <span class="count" v-if="prs.length">({{ prs.length }})</span>
+                        </button>
+                        <button :class="{ active: activeView === 'stats' }" @click="setActiveView('stats')">
+                            Stats
+                            <span class="count" v-if="developerStats.length">({{ developerStats.length }})</span>
+                        </button>
+                    </div>
+                    <button class="refresh-btn" @click="activeView === 'prs' ? fetchPRs() : fetchDeveloperStats()" :disabled="loading || statsLoading">
+                        <span :class="{ spinning: loading || statsLoading }">&#8635;</span>
+                    </button>
+                </div>
+
+                <!-- PR View -->
+                <div v-if="activeView === 'prs'">
+                    <div v-if="loading" class="loading-state">
+                        <div class="spinner"></div>
+                        <p>Loading pull requests...</p>
+                    </div>
+
+                    <div v-else-if="error" class="error-state">
+                        <p>{{ error }}</p>
+                        <button @click="fetchPRs">Retry</button>
+                    </div>
+
+                    <div v-else-if="prs.length === 0" class="empty-state">
+                        <p>No pull requests found matching your filters.</p>
+                    </div>
+
+                    <div v-else class="pr-cards">
+                        <div
+                            v-for="pr in prs"
+                            :key="pr.number"
+                            class="pr-card"
+                            :class="[getStateClass(pr), getReviewClass(pr)]"
+                        >
+                            <div class="pr-card-main">
+                                <div class="pr-card-content">
+                                    <div class="pr-header">
+                                        <span class="pr-number">#{{ pr.number }}</span>
+                                        <span class="pr-state-badge" :class="getStateClass(pr)">
+                                            <span class="state-icon">{{ getStateIcon(pr) }}</span>
+                                            {{ getStateLabel(pr) }}
+                                        </span>
+                                        <span v-if="pr.isDraft" class="draft-badge">Draft</span>
+                                    </div>
+                                    <a :href="pr.url" target="_blank" class="pr-title">{{ pr.title }}</a>
+                                    <div class="pr-meta">
+                                        <span class="pr-author">
+                                            <img v-if="pr.author?.avatarUrl" :src="pr.author.avatarUrl" :alt="pr.author.login" class="avatar">
+                                            {{ pr.author?.login || 'unknown' }}
+                                        </span>
+                                        <span class="pr-branch">{{ pr.headRefName }} &rarr; {{ pr.baseRefName }}</span>
+                                        <span class="pr-date">{{ formatDate(pr.updatedAt) }}</span>
+                                    </div>
+                                    <div class="pr-stats">
+                                        <span class="additions">+{{ pr.additions || 0 }}</span>
+                                        <span class="deletions">-{{ pr.deletions || 0 }}</span>
+                                        <span class="files">{{ pr.changedFiles || 0 }} files</span>
+                                    </div>
+                                    <div class="pr-labels" v-if="pr.labels && pr.labels.length">
+                                        <span v-for="label in pr.labels" :key="label.name" class="label" :style="{ backgroundColor: '#' + label.color }">
+                                            {{ label.name }}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="pr-card-actions">
+                                    <button
+                                        class="description-btn"
+                                        @click="openDescriptionModal(pr)"
+                                        :disabled="!pr.body"
+                                        :title="pr.body ? 'View description' : 'No description'"
+                                    >
+                                        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                                            <path d="M0 1.75A.75.75 0 0 1 .75 1h4.253c1.227 0 2.317.59 3 1.501A3.743 3.743 0 0 1 11.006 1h4.245a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75h-4.507a2.25 2.25 0 0 0-1.591.659l-.622.621a.75.75 0 0 1-1.06 0l-.622-.621A2.25 2.25 0 0 0 5.258 13H.75a.75.75 0 0 1-.75-.75Zm7.251 10.324.004-5.073-.002-2.253A2.25 2.25 0 0 0 5.003 2.5H1.5v9h3.757a3.75 3.75 0 0 1 1.994.574ZM8.755 4.75l-.004 7.322a3.752 3.752 0 0 1 1.992-.572H14.5v-9h-3.495a2.25 2.25 0 0 0-2.25 2.25Z"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stats View -->
+                <div v-else-if="activeView === 'stats'" class="stats-view">
+                    <div v-if="statsLoading" class="loading-state">
+                        <div class="spinner"></div>
+                        <p>Loading developer statistics...</p>
+                    </div>
+
+                    <div v-else-if="statsError" class="error-state">
+                        <p>{{ statsError }}</p>
+                        <button @click="fetchDeveloperStats">Retry</button>
+                    </div>
+
+                    <div v-else-if="sortedDeveloperStats.length === 0" class="empty-state">
+                        <p>No developer statistics found for this repository.</p>
+                    </div>
+
+                    <div v-else class="stats-table-wrapper">
+                        <table class="stats-table">
+                            <thead>
+                                <tr>
+                                    <th class="sticky-col">Developer</th>
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'commits', desc: statsSortDirection === 'desc' }" @click="sortStats('commits')">
+                                        Commits
+                                        <span class="sort-icon">{{ statsSortBy === 'commits' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                    </th>
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'prs_authored', desc: statsSortDirection === 'desc' }" @click="sortStats('prs_authored')">
+                                        PRs
+                                        <span class="sort-icon">{{ statsSortBy === 'prs_authored' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                    </th>
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'prs_merged', desc: statsSortDirection === 'desc' }" @click="sortStats('prs_merged')">
+                                        Merged
+                                        <span class="sort-icon">{{ statsSortBy === 'prs_merged' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                    </th>
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'prs_closed', desc: statsSortDirection === 'desc' }" @click="sortStats('prs_closed')">
+                                        Closed
+                                        <span class="sort-icon">{{ statsSortBy === 'prs_closed' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                    </th>
+                                    <th>Merge %</th>
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'reviews_given', desc: statsSortDirection === 'desc' }" @click="sortStats('reviews_given')">
+                                        Reviews
+                                        <span class="sort-icon">{{ statsSortBy === 'reviews_given' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                    </th>
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'approvals', desc: statsSortDirection === 'desc' }" @click="sortStats('approvals')">
+                                        Approvals
+                                        <span class="sort-icon">{{ statsSortBy === 'approvals' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                    </th>
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'changes_requested', desc: statsSortDirection === 'desc' }" @click="sortStats('changes_requested')">
+                                        Changes Req.
+                                        <span class="sort-icon">{{ statsSortBy === 'changes_requested' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                    </th>
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'lines_added', desc: statsSortDirection === 'desc' }" @click="sortStats('lines_added')">
+                                        Lines +
+                                        <span class="sort-icon">{{ statsSortBy === 'lines_added' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                    </th>
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'lines_deleted', desc: statsSortDirection === 'desc' }" @click="sortStats('lines_deleted')">
+                                        Lines -
+                                        <span class="sort-icon">{{ statsSortBy === 'lines_deleted' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="dev in sortedDeveloperStats" :key="dev.login">
+                                    <td class="sticky-col developer-cell">
+                                        <img v-if="dev.avatar_url" :src="dev.avatar_url" :alt="dev.login" class="avatar">
+                                        <span class="developer-name">{{ dev.login }}</span>
+                                    </td>
+                                    <td class="stat-value">{{ formatNumber(dev.commits) }}</td>
+                                    <td class="stat-value">{{ dev.prs_authored }}</td>
+                                    <td class="stat-value merged">{{ dev.prs_merged }}</td>
+                                    <td class="stat-value closed">{{ dev.prs_closed }}</td>
+                                    <td class="stat-value">
+                                        <span class="merge-rate" :class="{ high: getMergeRate(dev) >= 80, medium: getMergeRate(dev) >= 50 && getMergeRate(dev) < 80, low: getMergeRate(dev) < 50 && getMergeRate(dev) > 0 }">
+                                            {{ getMergeRate(dev) }}%
+                                        </span>
+                                    </td>
+                                    <td class="stat-value">{{ dev.reviews_given }}</td>
+                                    <td class="stat-value approved">{{ dev.approvals }}</td>
+                                    <td class="stat-value changes">{{ dev.changes_requested }}</td>
+                                    <td class="stat-value additions">{{ formatNumber(dev.lines_added) }}</td>
+                                    <td class="stat-value deletions">{{ formatNumber(dev.lines_deleted) }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Description Modal -->
+                <div class="modal-overlay" v-if="descriptionModal.show" @click="closeDescriptionModal">
+                    <div class="description-modal" @click.stop>
+                        <div class="modal-header">
+                            <h3>
+                                <span class="pr-number">#{{ descriptionModal.pr?.number }}</span>
+                                {{ descriptionModal.pr?.title }}
+                            </h3>
+                            <button class="modal-close-btn" @click="closeDescriptionModal">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="markdown-content" v-html="renderMarkdown(descriptionModal.pr?.body)"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Welcome Message -->
+            <section class="welcome" v-if="!selectedAccount">
+                <div class="welcome-content">
+                    <h2>Welcome to PR Explorer</h2>
+                    <p>Select an account or organization above to start exploring pull requests.</p>
+                    <p class="hint" v-if="accounts.length === 0 && !accountsLoading">
+                        No accounts found. Make sure you're authenticated with <code>gh auth login</code>.
+                    </p>
+                    <div v-if="accountsLoading" class="loading-state">
+                        <div class="spinner"></div>
+                        <p>Loading accounts...</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Select Repo Message -->
+            <section class="welcome" v-if="selectedAccount && !selectedRepo">
+                <div class="welcome-content">
+                    <h2>Select a Repository</h2>
+                    <p>Search and select a repository from <strong>{{ selectedAccount.login }}</strong> to view pull requests.</p>
+                </div>
+            </section>
+        </main>
+
+        <footer class="app-footer">
+            <p>Powered by GitHub CLI</p>
+        </footer>
+    </div>
+{% endraw %}
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://unpkg.com/marked@12.0.0/marked.min.js"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
