@@ -3,7 +3,7 @@
  * A lightweight web application to browse, filter, and explore GitHub Pull Requests
  */
 
-const { createApp, ref, reactive, computed, watch, onMounted } = Vue;
+const { createApp, ref, reactive, computed, watch, onMounted, nextTick } = Vue;
 
 createApp({
     setup() {
@@ -135,6 +135,28 @@ createApp({
             show: false,
             pr: null
         });
+
+        // Merge Queue
+        const mergeQueue = ref([]);
+        const showQueuePanel = ref(false);
+
+        // Code Reviews
+        const activeReviews = ref({});  // key: "owner/repo/pr_number", value: {status, startedAt, reviewFile}
+        const reviewPollingInterval = ref(null);
+
+        // Review History
+        const reviewHistory = ref([]);
+        const historyLoading = ref(false);
+        const historyFilters = reactive({
+            repo: '',
+            author: '',
+            search: ''
+        });
+        const selectedHistoryReview = ref(null);
+        const showHistoryPanel = ref(false);
+        const showReviewViewer = ref(false);
+        const reviewViewerContent = ref(null);
+        const prReviewCache = ref({});  // Cache: "owner/repo/pr_number" -> latest review info
 
         // Active filters count
         const activeFiltersCount = computed(() => {
@@ -422,6 +444,11 @@ createApp({
                 }
 
                 prs.value = data.prs || [];
+
+                // Fetch review info for all PRs in background
+                nextTick(() => {
+                    fetchReviewInfoForPRs();
+                });
             } catch (err) {
                 error.value = err.message || 'Failed to fetch pull requests';
                 console.error('Failed to fetch PRs:', err);
@@ -681,6 +708,525 @@ createApp({
             }
         };
 
+        // Merge Queue Methods
+        const fetchMergeQueue = async () => {
+            try {
+                const response = await fetch('/api/merge-queue');
+                const data = await response.json();
+                mergeQueue.value = data.queue || [];
+            } catch (err) {
+                console.error('Failed to fetch merge queue:', err);
+            }
+        };
+
+        const addToQueue = async (pr) => {
+            if (!selectedRepo.value) return;
+
+            const owner = selectedRepo.value.owner.login;
+            const repo = selectedRepo.value.name;
+
+            const queueItem = {
+                number: pr.number,
+                title: pr.title,
+                url: pr.url,
+                author: pr.author?.login || 'unknown',
+                additions: pr.additions || 0,
+                deletions: pr.deletions || 0,
+                repo: `${owner}/${repo}`
+            };
+
+            try {
+                const response = await fetch('/api/merge-queue', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(queueItem)
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    mergeQueue.value.push(data.item);
+                } else {
+                    const error = await response.json();
+                    console.error('Failed to add to queue:', error.error);
+                }
+            } catch (err) {
+                console.error('Failed to add to queue:', err);
+            }
+        };
+
+        const removeFromQueue = async (prNumber, repo) => {
+            try {
+                const response = await fetch(`/api/merge-queue/${prNumber}?repo=${encodeURIComponent(repo)}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    mergeQueue.value = mergeQueue.value.filter(
+                        item => !(item.number === prNumber && item.repo === repo)
+                    );
+                } else {
+                    const error = await response.json();
+                    console.error('Failed to remove from queue:', error.error);
+                }
+            } catch (err) {
+                console.error('Failed to remove from queue:', err);
+            }
+        };
+
+        const isInQueue = (prNumber) => {
+            if (!selectedRepo.value) return false;
+            const owner = selectedRepo.value.owner.login;
+            const repo = selectedRepo.value.name;
+            const fullRepo = `${owner}/${repo}`;
+            return mergeQueue.value.some(item => item.number === prNumber && item.repo === fullRepo);
+        };
+
+        const toggleQueuePanel = () => {
+            showQueuePanel.value = !showQueuePanel.value;
+            if (showQueuePanel.value) {
+                document.body.style.overflow = 'hidden';
+            } else {
+                document.body.style.overflow = '';
+            }
+        };
+
+        const closeQueuePanel = () => {
+            showQueuePanel.value = false;
+            document.body.style.overflow = '';
+        };
+
+        const moveQueueItem = async (index, direction) => {
+            const newIndex = index + direction;
+            if (newIndex < 0 || newIndex >= mergeQueue.value.length) return;
+
+            // Swap items locally first
+            const items = [...mergeQueue.value];
+            [items[index], items[newIndex]] = [items[newIndex], items[index]];
+            mergeQueue.value = items;
+
+            // Send reorder to backend
+            try {
+                const order = items.map(item => ({ number: item.number, repo: item.repo }));
+                await fetch('/api/merge-queue/reorder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ order })
+                });
+            } catch (err) {
+                console.error('Failed to reorder queue:', err);
+                // Reload queue to sync with backend
+                fetchMergeQueue();
+            }
+        };
+
+        const clearQueue = async () => {
+            // Remove all items one by one
+            const items = [...mergeQueue.value];
+            for (const item of items) {
+                await removeFromQueue(item.number, item.repo);
+            }
+        };
+
+        // Code Review Methods
+        // Review Error Modal
+        const reviewErrorModal = reactive({
+            show: false,
+            prNumber: null,
+            prTitle: '',
+            errorOutput: '',
+            exitCode: null
+        });
+
+        const openReviewErrorModal = (prNumber, prTitle, errorOutput, exitCode) => {
+            reviewErrorModal.prNumber = prNumber;
+            reviewErrorModal.prTitle = prTitle || `PR #${prNumber}`;
+            reviewErrorModal.errorOutput = errorOutput || 'No error details available.';
+            reviewErrorModal.exitCode = exitCode;
+            reviewErrorModal.show = true;
+            document.body.style.overflow = 'hidden';
+        };
+
+        const closeReviewErrorModal = () => {
+            reviewErrorModal.show = false;
+            reviewErrorModal.prNumber = null;
+            reviewErrorModal.prTitle = '';
+            reviewErrorModal.errorOutput = '';
+            reviewErrorModal.exitCode = null;
+            document.body.style.overflow = '';
+        };
+
+        const fetchReviews = async () => {
+            try {
+                const response = await fetch('/api/reviews');
+                const data = await response.json();
+                if (data.reviews) {
+                    // Update activeReviews from server state
+                    const newReviews = {};
+                    for (const review of data.reviews) {
+                        newReviews[review.key] = {
+                            status: review.status,
+                            startedAt: review.started_at,
+                            completedAt: review.completed_at,
+                            reviewFile: review.review_file,
+                            exitCode: review.exit_code,
+                            errorOutput: review.error_output
+                        };
+                    }
+                    activeReviews.value = newReviews;
+
+                    // Stop polling if no active reviews
+                    const hasRunning = data.reviews.some(r => r.status === 'running');
+                    if (!hasRunning && reviewPollingInterval.value) {
+                        clearInterval(reviewPollingInterval.value);
+                        reviewPollingInterval.value = null;
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to fetch reviews:', err);
+            }
+        };
+
+        const startReview = async (pr, isFollowup = false, previousReviewId = null) => {
+            if (!selectedRepo.value) return;
+
+            const owner = selectedRepo.value.owner.login;
+            const repo = selectedRepo.value.name;
+            const key = `${owner}/${repo}/${pr.number}`;
+
+            // Check if already running
+            if (activeReviews.value[key]?.status === 'running') {
+                console.log('Review already running for this PR');
+                return;
+            }
+
+            const reviewData = {
+                number: pr.number,
+                url: pr.url,
+                owner: owner,
+                repo: repo,
+                title: pr.title,
+                author: pr.user?.login,
+                is_followup: isFollowup,
+                previous_review_id: previousReviewId
+            };
+
+            try {
+                const response = await fetch('/api/reviews', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(reviewData)
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    activeReviews.value[key] = {
+                        status: 'running',
+                        startedAt: new Date().toISOString(),
+                        reviewFile: data.review_file,
+                        isFollowup: data.is_followup
+                    };
+
+                    // Start polling if not already polling
+                    if (!reviewPollingInterval.value) {
+                        reviewPollingInterval.value = setInterval(fetchReviews, 5000);
+                    }
+                } else {
+                    console.error('Failed to start review:', data.error);
+                    alert(`Failed to start review: ${data.error}`);
+                }
+            } catch (err) {
+                console.error('Failed to start review:', err);
+                alert('Failed to start review. Check console for details.');
+            }
+        };
+
+        // Start a follow-up review for a PR
+        const startFollowupReview = async (pr, previousReviewId = null) => {
+            await startReview(pr, true, previousReviewId);
+        };
+
+        const cancelReview = async (pr) => {
+            if (!selectedRepo.value) return;
+
+            const owner = selectedRepo.value.owner.login;
+            const repo = selectedRepo.value.name;
+            const key = `${owner}/${repo}/${pr.number}`;
+
+            try {
+                const response = await fetch(`/api/reviews/${owner}/${repo}/${pr.number}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    delete activeReviews.value[key];
+                } else {
+                    const error = await response.json();
+                    console.error('Failed to cancel review:', error.error);
+                }
+            } catch (err) {
+                console.error('Failed to cancel review:', err);
+            }
+        };
+
+        const getReviewStatus = (prNumber) => {
+            if (!selectedRepo.value) return null;
+            const owner = selectedRepo.value.owner.login;
+            const repo = selectedRepo.value.name;
+            const key = `${owner}/${repo}/${prNumber}`;
+            return activeReviews.value[key]?.status || null;
+        };
+
+        const getReviewError = (prNumber) => {
+            if (!selectedRepo.value) return null;
+            const owner = selectedRepo.value.owner.login;
+            const repo = selectedRepo.value.name;
+            const key = `${owner}/${repo}/${prNumber}`;
+            const review = activeReviews.value[key];
+            if (review) {
+                return {
+                    errorOutput: review.errorOutput,
+                    exitCode: review.exitCode
+                };
+            }
+            return null;
+        };
+
+        // Review History Methods
+        const fetchReviewHistory = async () => {
+            historyLoading.value = true;
+            try {
+                const params = new URLSearchParams();
+                if (historyFilters.repo) params.append('repo', historyFilters.repo);
+                if (historyFilters.author) params.append('author', historyFilters.author);
+                if (historyFilters.search) params.append('search', historyFilters.search);
+                params.append('limit', '50');
+
+                const response = await fetch(`/api/review-history?${params}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    reviewHistory.value = data.reviews || [];
+                }
+            } catch (err) {
+                console.error('Failed to fetch review history:', err);
+            } finally {
+                historyLoading.value = false;
+            }
+        };
+
+        const viewReviewDetail = async (reviewId) => {
+            try {
+                const response = await fetch(`/api/review-history/${reviewId}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    reviewViewerContent.value = data.review;
+                    showReviewViewer.value = true;
+                }
+            } catch (err) {
+                console.error('Failed to fetch review details:', err);
+            }
+        };
+
+        const closeReviewViewer = () => {
+            showReviewViewer.value = false;
+            reviewViewerContent.value = null;
+        };
+
+        const checkPrReviewExists = async (owner, repo, prNumber) => {
+            const key = `${owner}/${repo}/${prNumber}`;
+            if (prReviewCache.value[key]) {
+                return prReviewCache.value[key];
+            }
+
+            try {
+                const response = await fetch(`/api/review-history/check/${owner}/${repo}/${prNumber}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    prReviewCache.value[key] = data;
+                    return data;
+                }
+            } catch (err) {
+                console.error('Failed to check PR review:', err);
+            }
+            return { has_review: false };
+        };
+
+        const getPrReviewInfo = (prNumber) => {
+            if (!selectedRepo.value) return null;
+            const owner = selectedRepo.value.owner.login;
+            const repo = selectedRepo.value.name;
+            const key = `${owner}/${repo}/${prNumber}`;
+            return prReviewCache.value[key] || null;
+        };
+
+        const hasExistingReview = (prNumber) => {
+            const info = getPrReviewInfo(prNumber);
+            return info?.has_review || false;
+        };
+
+        const getExistingReviewScore = (prNumber) => {
+            const info = getPrReviewInfo(prNumber);
+            return info?.latest_review?.score || null;
+        };
+
+        // Fetch review info for all PRs in the current list
+        const fetchReviewInfoForPRs = async () => {
+            if (!selectedRepo.value || !prs.value.length) return;
+
+            const owner = selectedRepo.value.owner.login;
+            const repo = selectedRepo.value.name;
+
+            // Fetch in parallel for all PRs
+            const promises = prs.value.map(pr =>
+                checkPrReviewExists(owner, repo, pr.number)
+            );
+            await Promise.all(promises);
+        };
+
+        const formatReviewDate = (dateStr) => {
+            if (!dateStr) return '';
+            const date = new Date(dateStr);
+            return date.toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric'
+            });
+        };
+
+        const getScoreClass = (score) => {
+            if (score === null || score === undefined) return 'score-na';
+            if (score >= 7) return 'score-high';
+            if (score >= 4) return 'score-medium';
+            return 'score-low';
+        };
+
+        const isReviewRunning = (prNumber) => {
+            return getReviewStatus(prNumber) === 'running';
+        };
+
+        const showReviewError = (pr) => {
+            const error = getReviewError(pr.number);
+            if (error) {
+                openReviewErrorModal(pr.number, pr.title, error.errorOutput, error.exitCode);
+            }
+        };
+
+        const handleReviewClick = (pr) => {
+            const status = getReviewStatus(pr.number);
+            if (status === 'running') {
+                cancelReview(pr);
+            } else if (status === 'failed') {
+                showReviewError(pr);
+            } else {
+                startReview(pr);
+            }
+        };
+
+        // Handle review for queue items (different data structure)
+        const getQueueItemReviewStatus = (item) => {
+            // item.repo is "owner/repo" format
+            const key = `${item.repo}/${item.number}`;
+            return activeReviews.value[key]?.status || null;
+        };
+
+        const startQueueItemReview = async (item) => {
+            // item.repo is "owner/repo" format
+            const [owner, repo] = item.repo.split('/');
+            const key = `${owner}/${repo}/${item.number}`;
+
+            // Check if already running
+            if (activeReviews.value[key]?.status === 'running') {
+                console.log('Review already running for this PR');
+                return;
+            }
+
+            const reviewData = {
+                number: item.number,
+                url: item.url,
+                owner: owner,
+                repo: repo
+            };
+
+            try {
+                const response = await fetch('/api/reviews', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(reviewData)
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    activeReviews.value[key] = {
+                        status: 'running',
+                        startedAt: new Date().toISOString(),
+                        reviewFile: data.review_file
+                    };
+
+                    // Start polling if not already polling
+                    if (!reviewPollingInterval.value) {
+                        reviewPollingInterval.value = setInterval(fetchReviews, 5000);
+                    }
+                } else {
+                    console.error('Failed to start review:', data.error);
+                    alert(`Failed to start review: ${data.error}`);
+                }
+            } catch (err) {
+                console.error('Failed to start review:', err);
+                alert('Failed to start review. Check console for details.');
+            }
+        };
+
+        const cancelQueueItemReview = async (item) => {
+            const [owner, repo] = item.repo.split('/');
+            const key = `${owner}/${repo}/${item.number}`;
+
+            try {
+                const response = await fetch(`/api/reviews/${owner}/${repo}/${item.number}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    delete activeReviews.value[key];
+                } else {
+                    const error = await response.json();
+                    console.error('Failed to cancel review:', error.error);
+                }
+            } catch (err) {
+                console.error('Failed to cancel review:', err);
+            }
+        };
+
+        const getQueueItemReviewError = (item) => {
+            const key = `${item.repo}/${item.number}`;
+            const review = activeReviews.value[key];
+            if (review) {
+                return {
+                    errorOutput: review.errorOutput,
+                    exitCode: review.exitCode
+                };
+            }
+            return null;
+        };
+
+        const showQueueItemReviewError = (item) => {
+            const error = getQueueItemReviewError(item);
+            if (error) {
+                openReviewErrorModal(item.number, item.title, error.errorOutput, error.exitCode);
+            }
+        };
+
+        const handleQueueItemReviewClick = (item) => {
+            const status = getQueueItemReviewStatus(item);
+            if (status === 'running') {
+                cancelQueueItemReview(item);
+            } else if (status === 'failed') {
+                showQueueItemReviewError(item);
+            } else {
+                startQueueItemReview(item);
+            }
+        };
+
         // Initialize
         onMounted(() => {
             // Load theme preference
@@ -692,6 +1238,12 @@ createApp({
 
             // Fetch accounts
             fetchAccounts();
+
+            // Fetch merge queue
+            fetchMergeQueue();
+
+            // Fetch active reviews
+            fetchReviews();
 
             // Add click outside listener
             document.addEventListener('click', handleClickOutside);
@@ -774,7 +1326,56 @@ createApp({
             getStateLabel,
             getReviewClass,
             formatDate,
-            truncateBody
+            truncateBody,
+
+            // Merge Queue
+            mergeQueue,
+            showQueuePanel,
+            fetchMergeQueue,
+            addToQueue,
+            removeFromQueue,
+            isInQueue,
+            toggleQueuePanel,
+            closeQueuePanel,
+            moveQueueItem,
+            clearQueue,
+
+            // Code Reviews
+            activeReviews,
+            fetchReviews,
+            startReview,
+            startFollowupReview,
+            cancelReview,
+            getReviewStatus,
+            getReviewError,
+            isReviewRunning,
+            handleReviewClick,
+            showReviewError,
+            getQueueItemReviewStatus,
+            handleQueueItemReviewClick,
+            reviewErrorModal,
+            openReviewErrorModal,
+            closeReviewErrorModal,
+
+            // Review History
+            reviewHistory,
+            historyLoading,
+            historyFilters,
+            selectedHistoryReview,
+            showHistoryPanel,
+            showReviewViewer,
+            reviewViewerContent,
+            prReviewCache,
+            fetchReviewHistory,
+            viewReviewDetail,
+            closeReviewViewer,
+            checkPrReviewExists,
+            getPrReviewInfo,
+            hasExistingReview,
+            getExistingReviewScore,
+            fetchReviewInfoForPRs,
+            formatReviewDate,
+            getScoreClass
         };
     }
 }).mount('#app');

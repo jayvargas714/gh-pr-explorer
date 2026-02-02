@@ -19,10 +19,24 @@
                     </span>
                     PR Explorer
                 </h1>
-                <button class="theme-toggle" @click="toggleTheme" :title="darkMode ? 'Switch to light mode' : 'Switch to dark mode'">
-                    <span v-if="darkMode">&#9788;</span>
-                    <span v-else>&#9790;</span>
-                </button>
+                <div class="header-actions">
+                    <button class="queue-toggle" @click="toggleQueuePanel" title="Merge Queue">
+                        <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor">
+                            <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z"/>
+                        </svg>
+                        <span class="queue-badge" v-if="mergeQueue.length > 0">{{ mergeQueue.length }}</span>
+                    </button>
+                    <button class="history-toggle" @click="showHistoryPanel = true; fetchReviewHistory()" title="Review History">
+                        <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor">
+                            <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 0 1-.557 1.392l-2.5-1A.751.751 0 0 1 7 8.25v-3.5a.75.75 0 0 1 1.5 0Z"/>
+                        </svg>
+                        <span class="history-badge" v-if="reviewHistory.length > 0">{{ reviewHistory.length }}</span>
+                    </button>
+                    <button class="theme-toggle" @click="toggleTheme" :title="darkMode ? 'Switch to light mode' : 'Switch to dark mode'">
+                        <span v-if="darkMode">&#9788;</span>
+                        <span v-else>&#9790;</span>
+                    </button>
+                </div>
             </div>
         </header>
 
@@ -632,6 +646,18 @@
                                             {{ getStateLabel(pr) }}
                                         </span>
                                         <span v-if="pr.isDraft" class="draft-badge">Draft</span>
+                                        <!-- Review score badge -->
+                                        <span
+                                            v-if="hasExistingReview(pr.number)"
+                                            class="review-score-badge"
+                                            :class="getScoreClass(getExistingReviewScore(pr.number))"
+                                            :title="getExistingReviewScore(pr.number) !== null ? `Review Score: ${getExistingReviewScore(pr.number)}/10` : 'Reviewed (no score)'"
+                                        >
+                                            <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+                                                <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/>
+                                            </svg>
+                                            {{ getExistingReviewScore(pr.number) !== null ? getExistingReviewScore(pr.number) : 'N/A' }}
+                                        </span>
                                     </div>
                                     <a :href="pr.url" target="_blank" class="pr-title">{{ pr.title }}</a>
                                     <div class="pr-meta">
@@ -654,6 +680,60 @@
                                     </div>
                                 </div>
                                 <div class="pr-card-actions">
+                                    <button
+                                        class="queue-btn"
+                                        :class="{ 'in-queue': isInQueue(pr.number) }"
+                                        @click="isInQueue(pr.number) ? removeFromQueue(pr.number, selectedRepo.owner.login + '/' + selectedRepo.name) : addToQueue(pr)"
+                                        :title="isInQueue(pr.number) ? 'Remove from queue' : 'Add to merge queue'"
+                                    >
+                                        <svg v-if="!isInQueue(pr.number)" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                                            <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z"/>
+                                        </svg>
+                                        <svg v-else viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                                            <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/>
+                                        </svg>
+                                    </button>
+                                    <button
+                                        class="review-btn"
+                                        :class="{
+                                            'reviewing': getReviewStatus(pr.number) === 'running',
+                                            'reviewed': getReviewStatus(pr.number) === 'completed',
+                                            'review-failed': getReviewStatus(pr.number) === 'failed'
+                                        }"
+                                        @click="handleReviewClick(pr)"
+                                        :title="getReviewStatus(pr.number) === 'running' ? 'Cancel review' : (getReviewStatus(pr.number) === 'completed' ? 'Review completed' : 'Perform code review')"
+                                    >
+                                        <!-- Spinner when running -->
+                                        <svg v-if="getReviewStatus(pr.number) === 'running'" class="review-spinner" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                                            <path d="M8 0a8 8 0 1 0 8 8h-1.5a6.5 6.5 0 1 1-6.5-6.5V0Z"/>
+                                        </svg>
+                                        <!-- Checkmark when completed -->
+                                        <svg v-else-if="getReviewStatus(pr.number) === 'completed'" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                                            <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/>
+                                        </svg>
+                                        <!-- X mark when failed -->
+                                        <svg v-else-if="getReviewStatus(pr.number) === 'failed'" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                                            <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"/>
+                                        </svg>
+                                        <!-- Code review icon (default) -->
+                                        <svg v-else viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                                            <path d="M10.3 6.74a.75.75 0 0 1-.04 1.06l-2.908 2.646a.75.75 0 0 1-1.012 0L4.74 8.866a.75.75 0 1 1 1.02-1.102l1.09 1.008 2.4-2.182a.75.75 0 0 1 1.05.04Z"/>
+                                            <path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25ZM6.25 6.5a.75.75 0 0 0 0 1.5h6a.75.75 0 0 0 0-1.5Zm-.75 3.75a.75.75 0 0 0 .75.75h6a.75.75 0 0 0 0-1.5h-6a.75.75 0 0 0-.75.75ZM1.5 1.75v12.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25Z"/>
+                                        </svg>
+                                    </button>
+                                    <!-- Follow-up review button (only shown if PR has existing review) -->
+                                    <button
+                                        v-if="hasExistingReview(pr.number) && getReviewStatus(pr.number) !== 'running'"
+                                        class="followup-btn"
+                                        @click="startFollowupReview(pr)"
+                                        title="Start follow-up review"
+                                    >
+                                        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                                            <path d="M8 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 1.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z"/>
+                                            <path d="m14.95 4.636-1.414-1.414L12.121 4.636l1.414 1.414 1.415-1.414Z"/>
+                                            <path d="M13.536 6.05V8h2v2h-2v2h-2v-2h-2V8h2V6.05h2Z"/>
+                                        </svg>
+                                    </button>
                                     <button
                                         class="description-btn"
                                         @click="openDescriptionModal(pr)"
@@ -771,7 +851,217 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Review Error Modal -->
+                <div class="modal-overlay" v-if="reviewErrorModal.show" @click="closeReviewErrorModal">
+                    <div class="review-error-modal" @click.stop>
+                        <div class="modal-header error-header">
+                            <h3>
+                                <span class="error-icon">&#9888;</span>
+                                Review Failed
+                            </h3>
+                            <button class="modal-close-btn" @click="closeReviewErrorModal">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="error-details">
+                                <div class="error-pr-info">
+                                    <span class="pr-number">#{{ reviewErrorModal.prNumber }}</span>
+                                    <span class="pr-title">{{ reviewErrorModal.prTitle }}</span>
+                                </div>
+                                <div class="error-exit-code" v-if="reviewErrorModal.exitCode !== null">
+                                    Exit Code: <code>{{ reviewErrorModal.exitCode }}</code>
+                                </div>
+                                <div class="error-output-section">
+                                    <h4>Error Output</h4>
+                                    <pre class="error-output">{{ reviewErrorModal.errorOutput || 'No error details captured.' }}</pre>
+                                </div>
+                                <div class="error-actions">
+                                    <button class="btn-primary" @click="closeReviewErrorModal">Close</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </section>
+
+            <!-- Queue Panel -->
+            <div class="queue-panel-overlay" v-if="showQueuePanel" @click="closeQueuePanel">
+                <div class="queue-panel" @click.stop>
+                    <div class="queue-panel-header">
+                        <h3>
+                            Merge Queue
+                            <span class="queue-count" v-if="mergeQueue.length > 0">({{ mergeQueue.length }})</span>
+                        </h3>
+                        <div class="queue-panel-actions">
+                            <button class="btn-text" @click="clearQueue" v-if="mergeQueue.length > 0">Clear all</button>
+                            <button class="queue-close-btn" @click="closeQueuePanel">&times;</button>
+                        </div>
+                    </div>
+                    <div class="queue-panel-body">
+                        <div v-if="mergeQueue.length === 0" class="queue-empty">
+                            <p>No PRs in the queue.</p>
+                            <p class="queue-hint">Add PRs by clicking the queue button on any PR card.</p>
+                        </div>
+                        <div v-else class="queue-items">
+                            <div v-for="(item, index) in mergeQueue" :key="item.number + '-' + item.repo" class="queue-item">
+                                <div class="queue-item-position">{{ index + 1 }}</div>
+                                <div class="queue-item-content">
+                                    <a :href="item.url" target="_blank" class="queue-item-title">
+                                        <span class="queue-item-number">#{{ item.number }}</span>
+                                        {{ item.title }}
+                                    </a>
+                                    <div class="queue-item-meta">
+                                        <span class="queue-item-repo">{{ item.repo }}</span>
+                                        <span class="queue-item-author">by {{ item.author }}</span>
+                                        <span class="queue-item-stats">
+                                            <span class="additions">+{{ item.additions }}</span>
+                                            <span class="deletions">-{{ item.deletions }}</span>
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="queue-item-actions">
+                                    <button
+                                        class="queue-review-btn"
+                                        :class="{
+                                            'reviewing': getQueueItemReviewStatus(item) === 'running',
+                                            'reviewed': getQueueItemReviewStatus(item) === 'completed',
+                                            'review-failed': getQueueItemReviewStatus(item) === 'failed'
+                                        }"
+                                        @click="handleQueueItemReviewClick(item)"
+                                        :title="getQueueItemReviewStatus(item) === 'running' ? 'Cancel review' : (getQueueItemReviewStatus(item) === 'completed' ? 'Review completed' : 'Perform code review')"
+                                    >
+                                        <!-- Spinner when running -->
+                                        <svg v-if="getQueueItemReviewStatus(item) === 'running'" class="review-spinner" viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                                            <path d="M8 0a8 8 0 1 0 8 8h-1.5a6.5 6.5 0 1 1-6.5-6.5V0Z"/>
+                                        </svg>
+                                        <!-- Checkmark when completed -->
+                                        <svg v-else-if="getQueueItemReviewStatus(item) === 'completed'" viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                                            <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/>
+                                        </svg>
+                                        <!-- X mark when failed -->
+                                        <svg v-else-if="getQueueItemReviewStatus(item) === 'failed'" viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                                            <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"/>
+                                        </svg>
+                                        <!-- Code review icon (default) -->
+                                        <svg v-else viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                                            <path d="M10.3 6.74a.75.75 0 0 1-.04 1.06l-2.908 2.646a.75.75 0 0 1-1.012 0L4.74 8.866a.75.75 0 1 1 1.02-1.102l1.09 1.008 2.4-2.182a.75.75 0 0 1 1.05.04Z"/>
+                                            <path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25ZM6.25 6.5a.75.75 0 0 0 0 1.5h6a.75.75 0 0 0 0-1.5Zm-.75 3.75a.75.75 0 0 0 .75.75h6a.75.75 0 0 0 0-1.5h-6a.75.75 0 0 0-.75.75ZM1.5 1.75v12.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25Z"/>
+                                        </svg>
+                                    </button>
+                                    <button class="queue-move-btn" @click="moveQueueItem(index, -1)" :disabled="index === 0" title="Move up">
+                                        &#9650;
+                                    </button>
+                                    <button class="queue-move-btn" @click="moveQueueItem(index, 1)" :disabled="index === mergeQueue.length - 1" title="Move down">
+                                        &#9660;
+                                    </button>
+                                    <button class="queue-remove-btn" @click="removeFromQueue(item.number, item.repo)" title="Remove from queue">
+                                        &times;
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- History Panel -->
+            <div class="history-panel-overlay" v-if="showHistoryPanel" @click="showHistoryPanel = false">
+                <div class="history-panel" @click.stop>
+                    <div class="history-panel-header">
+                        <h3>
+                            Review History
+                            <span class="history-count" v-if="reviewHistory.length > 0">({{ reviewHistory.length }})</span>
+                        </h3>
+                        <div class="history-panel-actions">
+                            <button class="history-close-btn" @click="showHistoryPanel = false">&times;</button>
+                        </div>
+                    </div>
+                    <div class="history-filters">
+                        <input
+                            type="text"
+                            v-model="historyFilters.search"
+                            @input="fetchReviewHistory"
+                            placeholder="Search reviews..."
+                            class="history-search-input"
+                        >
+                        <input
+                            type="text"
+                            v-model="historyFilters.repo"
+                            @input="fetchReviewHistory"
+                            placeholder="Filter by repo..."
+                            class="history-filter-input"
+                        >
+                    </div>
+                    <div class="history-panel-body">
+                        <div v-if="historyLoading" class="loading-state">
+                            <div class="spinner"></div>
+                            <p>Loading reviews...</p>
+                        </div>
+                        <div v-else-if="reviewHistory.length === 0" class="history-empty">
+                            <p>No reviews found.</p>
+                            <p class="history-hint">Reviews you create will appear here.</p>
+                        </div>
+                        <div v-else class="history-items">
+                            <div v-for="review in reviewHistory" :key="review.id" class="history-item" @click="viewReviewDetail(review.id)">
+                                <div class="history-item-header">
+                                    <span class="history-item-number">#{{ review.pr_number }}</span>
+                                    <span
+                                        class="review-score-badge"
+                                        :class="getScoreClass(review.score)"
+                                    >
+                                        {{ review.score !== null ? review.score : 'N/A' }}
+                                    </span>
+                                    <span v-if="review.is_followup" class="followup-badge">Follow-up</span>
+                                </div>
+                                <div class="history-item-title">{{ review.pr_title || 'Untitled PR' }}</div>
+                                <div class="history-item-meta">
+                                    <span class="history-item-repo">{{ review.repo }}</span>
+                                    <span class="history-item-date">{{ formatReviewDate(review.review_timestamp) }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Review Viewer Modal -->
+            <div class="modal-overlay" v-if="showReviewViewer" @click="closeReviewViewer">
+                <div class="review-viewer-modal" @click.stop>
+                    <div class="modal-header">
+                        <h3>
+                            <span class="pr-number">#{{ reviewViewerContent?.pr_number }}</span>
+                            {{ reviewViewerContent?.pr_title || 'Code Review' }}
+                        </h3>
+                        <div class="modal-header-meta">
+                            <span
+                                class="review-score-badge large"
+                                :class="getScoreClass(reviewViewerContent?.score)"
+                                v-if="reviewViewerContent"
+                            >
+                                Score: {{ reviewViewerContent.score !== null ? reviewViewerContent.score + '/10' : 'N/A' }}
+                            </span>
+                            <span class="modal-date" v-if="reviewViewerContent">
+                                {{ formatReviewDate(reviewViewerContent.review_timestamp) }}
+                            </span>
+                        </div>
+                        <button class="modal-close-btn" @click="closeReviewViewer">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div v-if="reviewViewerContent" class="markdown-content" v-html="renderMarkdown(reviewViewerContent.content || '*No content available*')"></div>
+                    </div>
+                    <div class="modal-footer" v-if="reviewViewerContent">
+                        <a
+                            v-if="reviewViewerContent.pr_url"
+                            :href="reviewViewerContent.pr_url"
+                            target="_blank"
+                            class="btn-secondary"
+                        >
+                            View PR on GitHub
+                        </a>
+                        <button class="btn-primary" @click="closeReviewViewer">Close</button>
+                    </div>
+                </div>
+            </div>
 
             <!-- Welcome Message -->
             <section class="welcome" v-if="!selectedAccount">

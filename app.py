@@ -6,11 +6,25 @@ using the GitHub CLI (gh) for authentication and data fetching.
 """
 
 import json
+import logging
+import re
 import subprocess
 import time
+import threading
+from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 from flask import Flask, jsonify, render_template, request
+
+from database import get_database, get_reviews_db, get_queue_db
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -18,6 +32,20 @@ app = Flask(__name__)
 config_path = Path(__file__).parent / "config.json"
 with open(config_path) as f:
     config = json.load(f)
+
+# Code reviews directory
+REVIEWS_DIR = Path("/Users/jvargas714/Documents/code-reviews")
+
+# In-memory tracking of active review processes
+# key: "owner/repo/pr_number", value: {"process": Popen, "status": str, "started_at": str, "pr_url": str}
+active_reviews = {}
+reviews_lock = threading.Lock()
+
+
+# Initialize database
+db = get_database()
+reviews_db = get_reviews_db()
+queue_db = get_queue_db()
 
 # Simple in-memory cache
 cache = {}
@@ -766,6 +794,632 @@ def clear_cache():
     global cache
     cache = {}
     return jsonify({"message": "Cache cleared"})
+
+
+@app.route("/api/merge-queue", methods=["GET"])
+def get_merge_queue():
+    """Get all items in the merge queue."""
+    try:
+        queue_items = queue_db.get_queue()
+        # Convert to expected format
+        queue = []
+        for item in queue_items:
+            queue.append({
+                "number": item["pr_number"],
+                "title": item["pr_title"],
+                "url": item["pr_url"],
+                "author": item["pr_author"],
+                "additions": item["additions"],
+                "deletions": item["deletions"],
+                "repo": item["repo"],
+                "addedAt": item["added_at"]
+            })
+        return jsonify({"queue": queue})
+    except Exception as e:
+        logger.error(f"Error getting merge queue: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/merge-queue", methods=["POST"])
+def add_to_merge_queue():
+    """Add a PR to the merge queue."""
+    try:
+        pr_data = request.get_json()
+        if not pr_data:
+            return jsonify({"error": "No data provided"}), 400
+
+        required_fields = ["number", "title", "url", "author", "repo"]
+        for field in required_fields:
+            if field not in pr_data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+
+        # Add to database
+        item = queue_db.add_to_queue(
+            pr_number=pr_data["number"],
+            repo=pr_data["repo"],
+            pr_title=pr_data["title"],
+            pr_author=pr_data["author"],
+            pr_url=pr_data["url"],
+            additions=pr_data.get("additions", 0),
+            deletions=pr_data.get("deletions", 0)
+        )
+
+        # Convert to expected format
+        queue_item = {
+            "number": item["pr_number"],
+            "title": item["pr_title"],
+            "url": item["pr_url"],
+            "author": item["pr_author"],
+            "additions": item["additions"],
+            "deletions": item["deletions"],
+            "repo": item["repo"],
+            "addedAt": item["added_at"]
+        }
+
+        return jsonify({"message": "PR added to queue", "item": queue_item}), 201
+
+    except ValueError as e:
+        # PR already in queue
+        return jsonify({"error": str(e)}), 409
+    except Exception as e:
+        logger.error(f"Error adding to merge queue: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/merge-queue/<int:pr_number>", methods=["DELETE"])
+def remove_from_merge_queue(pr_number):
+    """Remove a PR from the merge queue."""
+    try:
+        repo = request.args.get("repo")
+        removed = queue_db.remove_from_queue(pr_number, repo)
+
+        if not removed:
+            return jsonify({"error": "PR not found in queue"}), 404
+
+        return jsonify({"message": "PR removed from queue"})
+
+    except Exception as e:
+        logger.error(f"Error removing from merge queue: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/merge-queue/reorder", methods=["POST"])
+def reorder_merge_queue():
+    """Reorder items in the merge queue."""
+    try:
+        order_data = request.get_json()
+        if not order_data or "order" not in order_data:
+            return jsonify({"error": "No order provided"}), 400
+
+        order = order_data["order"]  # List of {number, repo} objects
+        queue_items = queue_db.reorder_queue(order)
+
+        # Convert to expected format
+        new_queue = []
+        for item in queue_items:
+            new_queue.append({
+                "number": item["pr_number"],
+                "title": item["pr_title"],
+                "url": item["pr_url"],
+                "author": item["pr_author"],
+                "additions": item["additions"],
+                "deletions": item["deletions"],
+                "repo": item["repo"],
+                "addedAt": item["added_at"]
+            })
+
+        return jsonify({"message": "Queue reordered", "queue": new_queue})
+
+    except Exception as e:
+        logger.error(f"Error reordering merge queue: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# Review History Endpoints
+
+@app.route("/api/review-history", methods=["GET"])
+def get_review_history():
+    """List reviews with optional filtering."""
+    try:
+        repo = request.args.get("repo")
+        author = request.args.get("author")
+        pr_number = request.args.get("pr_number", type=int)
+        search = request.args.get("search")
+        limit = request.args.get("limit", 50, type=int)
+        offset = request.args.get("offset", 0, type=int)
+
+        if search:
+            reviews = reviews_db.search_reviews(search, limit=limit)
+        else:
+            reviews = reviews_db.list_reviews(
+                repo=repo,
+                author=author,
+                pr_number=pr_number,
+                limit=limit,
+                offset=offset
+            )
+
+        # Format for frontend
+        formatted = []
+        for review in reviews:
+            formatted.append({
+                "id": review["id"],
+                "pr_number": review["pr_number"],
+                "repo": review["repo"],
+                "pr_title": review["pr_title"],
+                "pr_author": review["pr_author"],
+                "pr_url": review["pr_url"],
+                "review_timestamp": review["review_timestamp"],
+                "status": review["status"],
+                "score": review["score"],
+                "is_followup": review["is_followup"],
+                "parent_review_id": review["parent_review_id"]
+            })
+
+        return jsonify({"reviews": formatted})
+
+    except Exception as e:
+        logger.error(f"Error getting review history: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/review-history/<int:review_id>", methods=["GET"])
+def get_review_detail(review_id):
+    """Get a single review with full content."""
+    try:
+        review = reviews_db.get_review(review_id)
+        if not review:
+            return jsonify({"error": "Review not found"}), 404
+
+        return jsonify({"review": dict(review)})
+
+    except Exception as e:
+        logger.error(f"Error getting review {review_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/review-history/pr/<owner>/<repo>/<int:pr_number>", methods=["GET"])
+def get_pr_reviews(owner, repo, pr_number):
+    """Get all reviews for a specific PR (review chain)."""
+    try:
+        full_repo = f"{owner}/{repo}"
+        reviews = reviews_db.get_reviews_for_pr(full_repo, pr_number)
+
+        # Format for frontend
+        formatted = []
+        for review in reviews:
+            formatted.append({
+                "id": review["id"],
+                "pr_number": review["pr_number"],
+                "repo": review["repo"],
+                "pr_title": review["pr_title"],
+                "pr_author": review["pr_author"],
+                "pr_url": review["pr_url"],
+                "review_timestamp": review["review_timestamp"],
+                "status": review["status"],
+                "score": review["score"],
+                "content": review["content"],
+                "is_followup": review["is_followup"],
+                "parent_review_id": review["parent_review_id"]
+            })
+
+        return jsonify({"reviews": formatted})
+
+    except Exception as e:
+        logger.error(f"Error getting reviews for PR #{pr_number}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/review-history/stats", methods=["GET"])
+def get_review_stats():
+    """Get review statistics."""
+    try:
+        stats = reviews_db.get_review_stats()
+        return jsonify({"stats": stats})
+
+    except Exception as e:
+        logger.error(f"Error getting review stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/review-history/check/<owner>/<repo>/<int:pr_number>", methods=["GET"])
+def check_pr_review_exists(owner, repo, pr_number):
+    """Check if a PR has been reviewed and get latest review info."""
+    try:
+        full_repo = f"{owner}/{repo}"
+        latest_review = reviews_db.get_latest_review_for_pr(full_repo, pr_number)
+
+        if latest_review:
+            return jsonify({
+                "has_review": True,
+                "latest_review": {
+                    "id": latest_review["id"],
+                    "score": latest_review["score"],
+                    "review_timestamp": latest_review["review_timestamp"],
+                    "is_followup": latest_review["is_followup"]
+                }
+            })
+        else:
+            return jsonify({"has_review": False})
+
+    except Exception as e:
+        logger.error(f"Error checking review for PR #{pr_number}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# Code Review Endpoints
+
+def _save_review_to_db(key, review, status):
+    """Save a completed/failed review to the database."""
+    try:
+        parts = key.split("/")
+        if len(parts) >= 3:
+            owner = parts[0]
+            repo = parts[1]
+            pr_number = int(parts[2])
+            full_repo = f"{owner}/{repo}"
+
+            # Read review content from file if completed
+            content = None
+            review_file = review.get("review_file")
+            if status == "completed" and review_file:
+                try:
+                    review_path = Path(review_file)
+                    if review_path.exists():
+                        content = review_path.read_text(encoding='utf-8')
+                except Exception as e:
+                    logger.warning(f"Could not read review file {review_file}: {e}")
+
+            # Get PR info from review data
+            pr_url = review.get("pr_url", "")
+            pr_title = review.get("pr_title")
+            pr_author = review.get("pr_author")
+            is_followup = review.get("is_followup", False)
+            parent_review_id = review.get("parent_review_id")
+
+            # Save to database
+            reviews_db.save_review(
+                pr_number=pr_number,
+                repo=full_repo,
+                pr_title=pr_title,
+                pr_author=pr_author,
+                pr_url=pr_url,
+                status=status,
+                review_file_path=review_file,
+                content=content,
+                is_followup=is_followup,
+                parent_review_id=parent_review_id
+            )
+            logger.info(f"Saved review to database for {key}")
+    except Exception as e:
+        logger.error(f"Failed to save review to database for {key}: {e}")
+
+
+def _check_review_status(key):
+    """Check and update the status of a review process."""
+    with reviews_lock:
+        if key not in active_reviews:
+            return None
+        review = active_reviews[key]
+        process = review.get("process")
+        if process and review["status"] == "running":
+            exit_code = process.poll()
+            if exit_code is not None:
+                # Capture any remaining output
+                try:
+                    stdout, stderr = process.communicate(timeout=1)
+                    if stderr:
+                        review["error_output"] = stderr.strip()[-2000:]  # Keep last 2000 chars
+                    if stdout:
+                        review["stdout"] = stdout.strip()[-500:]  # Keep last 500 chars
+                except subprocess.TimeoutExpired:
+                    pass
+                except Exception as e:
+                    logger.error(f"Error reading process output for {key}: {e}")
+
+                status = "completed" if exit_code == 0 else "failed"
+                review["status"] = status
+                review["exit_code"] = exit_code
+                review["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+                if exit_code == 0:
+                    logger.info(f"Review completed successfully: {key}")
+                else:
+                    error_msg = review.get("error_output", "Unknown error")
+                    logger.error(f"Review failed: {key} (exit code: {exit_code})\nError: {error_msg}")
+
+                # Save to database
+                _save_review_to_db(key, review, status)
+
+        return review
+
+
+def _start_review_process(pr_url, owner, repo, pr_number, is_followup=False, previous_review_content=None):
+    """Start a Claude CLI review process in the background.
+
+    Args:
+        pr_url: URL of the pull request
+        owner: Repository owner
+        repo: Repository name
+        pr_number: PR number
+        is_followup: Whether this is a follow-up review
+        previous_review_content: Content of previous review for follow-up context
+    """
+    # Ensure reviews directory exists
+    REVIEWS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Build review file path
+    repo_safe = repo.replace("/", "-")
+    suffix = "-followup" if is_followup else ""
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S") if is_followup else ""
+    if is_followup:
+        review_file = REVIEWS_DIR / f"{owner}-{repo_safe}-pr-{pr_number}{suffix}-{timestamp}.md"
+    else:
+        review_file = REVIEWS_DIR / f"{owner}-{repo_safe}-pr-{pr_number}.md"
+
+    # Build the prompt
+    if is_followup and previous_review_content:
+        prompt = (
+            f"Review PR #{pr_number} at {pr_url}. "
+            f"This is a FOLLOW-UP review. Here is the previous review for context:\n\n"
+            f"---PREVIOUS REVIEW---\n{previous_review_content[:8000]}\n---END PREVIOUS REVIEW---\n\n"
+            f"Focus on: changes since last review, whether previous issues were addressed. "
+            f"Use the code-reviewer agent. "
+            f"Write the review to {review_file} "
+            f"IMPORTANT: Include a final score from 0-10 in the review."
+        )
+    else:
+        prompt = (
+            f"Review PR #{pr_number} at {pr_url}. "
+            f"Use the code-reviewer agent. "
+            f"Write the review to {review_file} "
+            f"IMPORTANT: Include a final score from 0-10 in the review."
+        )
+
+    # Build the command
+    cmd = [
+        "claude",
+        "-p", prompt,
+        "--allowedTools", "Bash(git*),Bash(gh*),Read,Glob,Grep,Write,Task",
+        "--dangerously-skip-permissions"
+    ]
+
+    review_type = "follow-up " if is_followup else ""
+    logger.info(f"Starting {review_type}review for PR #{pr_number} ({owner}/{repo})")
+    logger.debug(f"Review command: {' '.join(cmd)}")
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        logger.info(f"Review process started with PID {process.pid} for {owner}/{repo}/#{pr_number}")
+        return process, str(review_file), is_followup
+    except FileNotFoundError:
+        error_msg = "Claude CLI not found. Please ensure 'claude' is installed and in PATH."
+        logger.error(f"Failed to start review: {error_msg}")
+        return None, error_msg, is_followup
+    except Exception as e:
+        logger.error(f"Failed to start review process: {e}")
+        return None, str(e), is_followup
+
+
+@app.route("/api/reviews", methods=["GET"])
+def get_reviews():
+    """Get all active/recent reviews with updated statuses."""
+    reviews_list = []
+    with reviews_lock:
+        for key, review in active_reviews.items():
+            # Check process status
+            process = review.get("process")
+            if process and review["status"] == "running":
+                exit_code = process.poll()
+                if exit_code is not None:
+                    # Capture any remaining output
+                    try:
+                        stdout, stderr = process.communicate(timeout=1)
+                        if stderr:
+                            review["error_output"] = stderr.strip()[-2000:]
+                        if stdout:
+                            review["stdout"] = stdout.strip()[-500:]
+                    except subprocess.TimeoutExpired:
+                        pass
+                    except Exception as e:
+                        logger.error(f"Error reading process output for {key}: {e}")
+
+                    status = "completed" if exit_code == 0 else "failed"
+                    review["status"] = status
+                    review["exit_code"] = exit_code
+                    review["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+                    if exit_code == 0:
+                        logger.info(f"Review completed successfully: {key}")
+                    else:
+                        error_msg = review.get("error_output", "Unknown error")
+                        logger.error(f"Review failed: {key} (exit code: {exit_code})\nError: {error_msg}")
+
+                    # Save to database
+                    _save_review_to_db(key, review, status)
+
+            # Build response (exclude process object)
+            parts = key.split("/")
+            reviews_list.append({
+                "key": key,
+                "owner": parts[0] if len(parts) >= 1 else "",
+                "repo": parts[1] if len(parts) >= 2 else "",
+                "pr_number": int(parts[2]) if len(parts) >= 3 else 0,
+                "status": review["status"],
+                "started_at": review.get("started_at", ""),
+                "completed_at": review.get("completed_at", ""),
+                "pr_url": review.get("pr_url", ""),
+                "review_file": review.get("review_file", ""),
+                "exit_code": review.get("exit_code"),
+                "error_output": review.get("error_output", ""),
+                "is_followup": review.get("is_followup", False)
+            })
+
+    return jsonify({"reviews": reviews_list})
+
+
+@app.route("/api/reviews", methods=["POST"])
+def start_review():
+    """Start a new code review for a PR.
+
+    Supports follow-up reviews with context from previous reviews.
+    Pass 'is_followup': true and optionally 'previous_review_id' to do a follow-up.
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            logger.warning("Review request received with no data")
+            return jsonify({"error": "No data provided"}), 400
+
+        required_fields = ["number", "url", "owner", "repo"]
+        for field in required_fields:
+            if field not in data:
+                logger.warning(f"Review request missing required field: {field}")
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+
+        pr_number = data["number"]
+        pr_url = data["url"]
+        owner = data["owner"]
+        repo = data["repo"]
+        key = f"{owner}/{repo}/{pr_number}"
+
+        # Check for follow-up review
+        is_followup = data.get("is_followup", False)
+        previous_review_id = data.get("previous_review_id")
+        pr_title = data.get("title")
+        pr_author = data.get("author")
+
+        logger.info(f"Received {'follow-up ' if is_followup else ''}review request for {key}")
+
+        # Check if review is already running
+        with reviews_lock:
+            if key in active_reviews:
+                existing = active_reviews[key]
+                if existing["status"] == "running":
+                    logger.warning(f"Review already in progress for {key}")
+                    return jsonify({"error": "Review already in progress for this PR"}), 409
+
+        # Get previous review content for follow-up
+        previous_review_content = None
+        parent_id = None
+        if is_followup:
+            full_repo = f"{owner}/{repo}"
+            if previous_review_id:
+                # Get specific review
+                prev_review = reviews_db.get_review(previous_review_id)
+                if prev_review:
+                    previous_review_content = prev_review.get("content")
+                    parent_id = previous_review_id
+            else:
+                # Get latest review for this PR
+                prev_review = reviews_db.get_latest_review_for_pr(full_repo, pr_number)
+                if prev_review:
+                    previous_review_content = prev_review.get("content")
+                    parent_id = prev_review.get("id")
+
+            if not previous_review_content:
+                logger.warning(f"No previous review found for follow-up, proceeding as normal review")
+                is_followup = False
+
+        # Start the review process
+        process, result, is_followup = _start_review_process(
+            pr_url, owner, repo, pr_number,
+            is_followup=is_followup,
+            previous_review_content=previous_review_content
+        )
+
+        if process is None:
+            logger.error(f"Failed to start review for {key}: {result}")
+            return jsonify({"error": result}), 500
+
+        # Store the review
+        with reviews_lock:
+            active_reviews[key] = {
+                "process": process,
+                "status": "running",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "pr_url": pr_url,
+                "review_file": result,
+                "is_followup": is_followup,
+                "parent_review_id": parent_id,
+                "pr_title": pr_title,
+                "pr_author": pr_author
+            }
+
+        return jsonify({
+            "message": "Review started",
+            "key": key,
+            "status": "running",
+            "review_file": result,
+            "is_followup": is_followup
+        }), 201
+
+    except Exception as e:
+        logger.exception(f"Unexpected error starting review: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/reviews/<owner>/<repo>/<int:pr_number>", methods=["DELETE"])
+def cancel_review(owner, repo, pr_number):
+    """Cancel/terminate a running review."""
+    key = f"{owner}/{repo}/{pr_number}"
+    logger.info(f"Received cancel request for review: {key}")
+
+    with reviews_lock:
+        if key not in active_reviews:
+            logger.warning(f"Cancel request for non-existent review: {key}")
+            return jsonify({"error": "Review not found"}), 404
+
+        review = active_reviews[key]
+        process = review.get("process")
+
+        if process and review["status"] == "running":
+            try:
+                logger.info(f"Terminating review process (PID {process.pid}) for {key}")
+                process.terminate()
+                # Give it a moment to terminate gracefully
+                try:
+                    process.wait(timeout=2)
+                    logger.info(f"Review process terminated gracefully for {key}")
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    logger.warning(f"Review process killed (did not terminate gracefully) for {key}")
+                review["status"] = "cancelled"
+            except Exception as e:
+                logger.error(f"Failed to terminate review process for {key}: {e}")
+                return jsonify({"error": f"Failed to terminate process: {e}"}), 500
+
+        # Remove from active reviews
+        del active_reviews[key]
+        logger.info(f"Review cancelled and removed: {key}")
+
+    return jsonify({"message": "Review cancelled", "key": key})
+
+
+@app.route("/api/reviews/<owner>/<repo>/<int:pr_number>/status", methods=["GET"])
+def get_review_status_endpoint(owner, repo, pr_number):
+    """Get the status of a specific review."""
+    key = f"{owner}/{repo}/{pr_number}"
+
+    review = _check_review_status(key)
+    if review is None:
+        return jsonify({"error": "Review not found"}), 404
+
+    return jsonify({
+        "key": key,
+        "status": review["status"],
+        "started_at": review.get("started_at", ""),
+        "completed_at": review.get("completed_at", ""),
+        "pr_url": review.get("pr_url", ""),
+        "review_file": review.get("review_file", ""),
+        "exit_code": review.get("exit_code"),
+        "error_output": review.get("error_output", "")
+    })
 
 
 if __name__ == "__main__":
