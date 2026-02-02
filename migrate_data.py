@@ -138,10 +138,14 @@ def parse_review_content(content: str) -> dict:
         if match:
             result["url"] = match.group(1)
 
-    # Extract title
-    match = re.search(r'\*\*Title\*\*[:\s]*(.+?)(?:\n|\*\*)', content, re.IGNORECASE)
-    if match:
-        result["title"] = match.group(1).strip()
+    # Extract title - first try H1 header, then **Title** field, then fallback
+    h1_match = re.search(r'^#\s+(.+?)$', content, re.MULTILINE)
+    if h1_match:
+        result["title"] = h1_match.group(1).strip()
+    else:
+        match = re.search(r'\*\*Title\*\*[:\s]*(.+?)(?:\n|\*\*)', content, re.IGNORECASE)
+        if match:
+            result["title"] = match.group(1).strip()
 
     # Extract score
     patterns = [

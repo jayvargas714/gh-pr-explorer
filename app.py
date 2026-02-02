@@ -1077,6 +1077,15 @@ def _save_review_to_db(key, review, status):
             is_followup = review.get("is_followup", False)
             parent_review_id = review.get("parent_review_id")
 
+            # Extract title from content H1 header if not already set
+            if not pr_title and content:
+                h1_match = re.search(r'^#\s+(.+?)$', content, re.MULTILINE)
+                if h1_match:
+                    pr_title = h1_match.group(1).strip()
+                else:
+                    # Fallback to generic title
+                    pr_title = f"PR #{pr_number} Review"
+
             # Save to database
             reviews_db.save_review(
                 pr_number=pr_number,
