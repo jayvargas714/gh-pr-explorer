@@ -16,7 +16,7 @@ from functools import wraps
 from pathlib import Path
 from flask import Flask, jsonify, render_template, request
 
-from database import get_database, get_reviews_db, get_queue_db
+from database import get_database, get_reviews_db, get_queue_db, get_settings_db, get_dev_stats_db
 
 # Configure logging
 logging.basicConfig(
@@ -46,6 +46,8 @@ reviews_lock = threading.Lock()
 db = get_database()
 reviews_db = get_reviews_db()
 queue_db = get_queue_db()
+settings_db = get_settings_db()
+dev_stats_db = get_dev_stats_db()
 
 # Simple in-memory cache
 cache = {}
@@ -100,6 +102,120 @@ def parse_json_output(output):
         return json.loads(output)
     except json.JSONDecodeError:
         return []
+
+
+def fetch_pr_state(owner, repo, pr_number):
+    """Fetch the current state of a PR from GitHub.
+
+    Returns:
+        str: PR state (OPEN, CLOSED, or MERGED), or None on error.
+    """
+    try:
+        output = run_gh_command([
+            "pr", "view", str(pr_number),
+            "-R", f"{owner}/{repo}",
+            "--json", "state",
+            "--jq", ".state"
+        ])
+        return output.strip().upper() if output else None
+    except RuntimeError as e:
+        logger.warning(f"Failed to fetch PR state for {owner}/{repo}#{pr_number}: {e}")
+        return None
+
+
+def fetch_pr_head_sha(owner, repo, pr_number):
+    """Fetch the current head commit SHA of a PR from GitHub.
+
+    Returns:
+        str: The head commit SHA, or None on error.
+    """
+    try:
+        output = run_gh_command([
+            "pr", "view", str(pr_number),
+            "-R", f"{owner}/{repo}",
+            "--json", "headRefOid",
+            "--jq", ".headRefOid"
+        ])
+        return output.strip() if output else None
+    except RuntimeError as e:
+        logger.warning(f"Failed to fetch PR head SHA for {owner}/{repo}#{pr_number}: {e}")
+        return None
+
+
+def parse_critical_issues(content):
+    """Parse critical issues from review markdown content.
+
+    Expected format:
+    **Critical Issues**
+    **1. Issue Title**
+    - Location: path/to/file.py:123-456 or path/to/file.py:123
+    - Problem: Description
+    - Fix: Solution
+
+    Returns:
+        List of dicts: [{ title, path, start_line, end_line, body }]
+    """
+    issues = []
+    if not content:
+        return issues
+
+    # Find the Critical Issues section
+    critical_match = re.search(
+        r'\*\*Critical Issues\*\*\s*(.*?)(?=\n---|\n\*\*[A-Z]|\Z)',
+        content,
+        re.DOTALL | re.IGNORECASE
+    )
+
+    if not critical_match:
+        return issues
+
+    critical_section = critical_match.group(1)
+
+    # Find individual issues
+    # Pattern: **N. Title** followed by Location, Problem, Fix
+    issue_pattern = re.compile(
+        r'\*\*(\d+)\.\s*(.+?)\*\*\s*'
+        r'(?:-\s*Location:\s*([^\n]+))?'
+        r'(?:-\s*Problem:\s*([^\n]+(?:\n(?!-).*?)*))?'
+        r'(?:-\s*Fix:\s*([^\n]+(?:\n(?!-).*?)*))?',
+        re.DOTALL
+    )
+
+    for match in issue_pattern.finditer(critical_section):
+        issue_num = match.group(1)
+        title = match.group(2).strip()
+        location = match.group(3).strip() if match.group(3) else None
+        problem = match.group(4).strip() if match.group(4) else None
+        fix = match.group(5).strip() if match.group(5) else None
+
+        if not location:
+            continue
+
+        # Parse location: file.py:123-456 or file.py:123
+        loc_match = re.match(r'([^:]+):(\d+)(?:-(\d+))?', location)
+        if not loc_match:
+            continue
+
+        file_path = loc_match.group(1).strip()
+        start_line = int(loc_match.group(2))
+        end_line = int(loc_match.group(3)) if loc_match.group(3) else start_line
+
+        # Build the comment body
+        body_parts = [f"**{title}**"]
+        if problem:
+            body_parts.append(f"\n**Problem:** {problem}")
+        if fix:
+            body_parts.append(f"\n**Fix:** {fix}")
+
+        issues.append({
+            "title": title,
+            "path": file_path,
+            "start_line": start_line,
+            "end_line": end_line,
+            "body": "\n".join(body_parts)
+        })
+
+    return issues
 
 
 # Routes
@@ -532,33 +648,213 @@ def get_teams(owner, repo):
         return jsonify({"teams": []})
 
 
+# Track which repos are currently being refreshed in background
+_stats_refresh_in_progress = set()
+_stats_refresh_lock = threading.Lock()
+
+
+def _background_refresh_stats(owner, repo, full_repo):
+    """Background task to refresh stats for a repository."""
+    try:
+        logger.info(f"Background refresh started for {full_repo}")
+        stats_list = _fetch_and_compute_stats(owner, repo)
+
+        # Cache the stats
+        cache_data = []
+        for stat in stats_list:
+            cache_data.append({
+                "username": stat.get("login", ""),
+                "total_prs": stat.get("prs_authored", 0),
+                "open_prs": stat.get("prs_open", 0),
+                "merged_prs": stat.get("prs_merged", 0),
+                "closed_prs": stat.get("prs_closed", 0),
+                "total_additions": stat.get("lines_added", 0),
+                "total_deletions": stat.get("lines_deleted", 0),
+            })
+        dev_stats_db.save_stats(full_repo, cache_data)
+        logger.info(f"Background refresh completed for {full_repo}")
+    except Exception as e:
+        logger.error(f"Background refresh failed for {full_repo}: {e}")
+    finally:
+        with _stats_refresh_lock:
+            _stats_refresh_in_progress.discard(full_repo)
+
+
 @app.route("/api/repos/<owner>/<repo>/stats")
 def get_developer_stats(owner, repo):
-    """Get aggregated developer statistics for a repository."""
+    """Get aggregated developer statistics for a repository.
+
+    Stats are cached in the database and refreshed every 4 hours.
+    - If cached stats exist (even if stale), return them immediately
+    - If stale, trigger a background refresh for next time
+    - If no cached data exists, fetch synchronously
+    - Use ?refresh=true to force synchronous refresh
+    """
+    full_repo = f"{owner}/{repo}"
+    force_refresh = request.args.get("refresh", "").lower() == "true"
+
     try:
-        # Fetch contributor commit stats
-        contributor_stats = fetch_contributor_stats(owner, repo)
+        is_stale = dev_stats_db.is_stale(full_repo)
+        last_updated = dev_stats_db.get_last_updated(full_repo)
+        cached_stats = dev_stats_db.get_stats(full_repo)
 
-        # Fetch all PRs and aggregate by author
-        pr_stats = fetch_pr_stats(owner, repo)
+        # Check if background refresh is in progress
+        with _stats_refresh_lock:
+            refreshing = full_repo in _stats_refresh_in_progress
 
-        # Fetch review stats
-        review_stats = fetch_review_stats(owner, repo)
+        # Force refresh: fetch synchronously and wait
+        if force_refresh:
+            stats_list = _fetch_and_compute_stats(owner, repo)
+            cache_data = []
+            for stat in stats_list:
+                cache_data.append({
+                    "username": stat.get("login", ""),
+                    "total_prs": stat.get("prs_authored", 0),
+                    "open_prs": stat.get("prs_open", 0),
+                    "merged_prs": stat.get("prs_merged", 0),
+                    "closed_prs": stat.get("prs_closed", 0),
+                    "total_additions": stat.get("lines_added", 0),
+                    "total_deletions": stat.get("lines_deleted", 0),
+                })
+            dev_stats_db.save_stats(full_repo, cache_data)
+            last_updated = dev_stats_db.get_last_updated(full_repo)
+            stats_with_scores = _add_avg_pr_scores(stats_list, full_repo)
+            return jsonify({
+                "stats": stats_with_scores,
+                "last_updated": last_updated.isoformat() if last_updated else None,
+                "cached": False,
+                "refreshing": False
+            })
 
-        # Combine all stats by developer
-        developers = {}
+        # If we have cached data, return it immediately
+        if cached_stats:
+            # If stale and not already refreshing, trigger background refresh
+            if is_stale and not refreshing:
+                with _stats_refresh_lock:
+                    if full_repo not in _stats_refresh_in_progress:
+                        _stats_refresh_in_progress.add(full_repo)
+                        thread = threading.Thread(
+                            target=_background_refresh_stats,
+                            args=(owner, repo, full_repo),
+                            daemon=True
+                        )
+                        thread.start()
+                        refreshing = True
 
-        # Add contributor stats (commits, lines added/deleted)
-        for contrib in contributor_stats:
-            login = contrib.get("login", "")
-            if not login:
-                continue
+            stats_with_scores = _add_avg_pr_scores(cached_stats, full_repo)
+            return jsonify({
+                "stats": stats_with_scores,
+                "last_updated": last_updated.isoformat() if last_updated else None,
+                "cached": True,
+                "stale": is_stale,
+                "refreshing": refreshing
+            })
+
+        # No cached data: fetch synchronously (first time)
+        stats_list = _fetch_and_compute_stats(owner, repo)
+        cache_data = []
+        for stat in stats_list:
+            cache_data.append({
+                "username": stat.get("login", ""),
+                "total_prs": stat.get("prs_authored", 0),
+                "open_prs": stat.get("prs_open", 0),
+                "merged_prs": stat.get("prs_merged", 0),
+                "closed_prs": stat.get("prs_closed", 0),
+                "total_additions": stat.get("lines_added", 0),
+                "total_deletions": stat.get("lines_deleted", 0),
+            })
+        dev_stats_db.save_stats(full_repo, cache_data)
+        last_updated = dev_stats_db.get_last_updated(full_repo)
+        stats_with_scores = _add_avg_pr_scores(stats_list, full_repo)
+
+        return jsonify({
+            "stats": stats_with_scores,
+            "last_updated": last_updated.isoformat() if last_updated else None,
+            "cached": False,
+            "refreshing": False
+        })
+
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def _add_avg_pr_scores(stats_list, full_repo):
+    """Add average PR scores from reviews database to stats list."""
+    # Get average scores per author from reviews
+    conn = reviews_db._get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT pr_author, AVG(score) as avg_score, COUNT(*) as review_count
+            FROM reviews
+            WHERE repo = ? AND score IS NOT NULL AND pr_author IS NOT NULL
+            GROUP BY pr_author
+        """, (full_repo,))
+
+        score_data = {row["pr_author"]: {
+            "avg_score": round(row["avg_score"], 1) if row["avg_score"] else None,
+            "review_count": row["review_count"]
+        } for row in cursor.fetchall()}
+    finally:
+        conn.close()
+
+    # Add scores to stats
+    for stat in stats_list:
+        login = stat.get("login") or stat.get("username")
+        if login and login in score_data:
+            stat["avg_pr_score"] = score_data[login]["avg_score"]
+            stat["reviewed_pr_count"] = score_data[login]["review_count"]
+        else:
+            stat["avg_pr_score"] = None
+            stat["reviewed_pr_count"] = 0
+
+    return stats_list
+
+
+def _fetch_and_compute_stats(owner, repo):
+    """Fetch fresh stats from GitHub and compute aggregated developer stats."""
+    # Fetch contributor commit stats
+    contributor_stats = fetch_contributor_stats(owner, repo)
+
+    # Fetch all PRs and aggregate by author
+    pr_stats = fetch_pr_stats(owner, repo)
+
+    # Fetch review stats
+    review_stats = fetch_review_stats(owner, repo)
+
+    # Combine all stats by developer
+    developers = {}
+
+    # Add contributor stats (commits, lines added/deleted)
+    for contrib in contributor_stats:
+        login = contrib.get("login", "")
+        if not login:
+            continue
+        developers[login] = {
+            "login": login,
+            "avatar_url": contrib.get("avatar_url", ""),
+            "commits": contrib.get("commits", 0),
+            "lines_added": contrib.get("lines_added", 0),
+            "lines_deleted": contrib.get("lines_deleted", 0),
+            "prs_authored": 0,
+            "prs_merged": 0,
+            "prs_closed": 0,
+            "prs_open": 0,
+            "reviews_given": 0,
+            "approvals": 0,
+            "changes_requested": 0,
+            "comments": 0,
+        }
+
+    # Add PR stats
+    for login, stats in pr_stats.items():
+        if login not in developers:
             developers[login] = {
                 "login": login,
-                "avatar_url": contrib.get("avatar_url", ""),
-                "commits": contrib.get("commits", 0),
-                "lines_added": contrib.get("lines_added", 0),
-                "lines_deleted": contrib.get("lines_deleted", 0),
+                "avatar_url": stats.get("avatar_url", ""),
+                "commits": 0,
+                "lines_added": 0,
+                "lines_deleted": 0,
                 "prs_authored": 0,
                 "prs_merged": 0,
                 "prs_closed": 0,
@@ -568,65 +864,43 @@ def get_developer_stats(owner, repo):
                 "changes_requested": 0,
                 "comments": 0,
             }
+        developers[login]["prs_authored"] = stats.get("authored", 0)
+        developers[login]["prs_merged"] = stats.get("merged", 0)
+        developers[login]["prs_closed"] = stats.get("closed", 0)
+        developers[login]["prs_open"] = stats.get("open", 0)
+        if not developers[login]["avatar_url"]:
+            developers[login]["avatar_url"] = stats.get("avatar_url", "")
 
-        # Add PR stats
-        for login, stats in pr_stats.items():
-            if login not in developers:
-                developers[login] = {
-                    "login": login,
-                    "avatar_url": stats.get("avatar_url", ""),
-                    "commits": 0,
-                    "lines_added": 0,
-                    "lines_deleted": 0,
-                    "prs_authored": 0,
-                    "prs_merged": 0,
-                    "prs_closed": 0,
-                    "prs_open": 0,
-                    "reviews_given": 0,
-                    "approvals": 0,
-                    "changes_requested": 0,
-                    "comments": 0,
-                }
-            developers[login]["prs_authored"] = stats.get("authored", 0)
-            developers[login]["prs_merged"] = stats.get("merged", 0)
-            developers[login]["prs_closed"] = stats.get("closed", 0)
-            developers[login]["prs_open"] = stats.get("open", 0)
-            if not developers[login]["avatar_url"]:
-                developers[login]["avatar_url"] = stats.get("avatar_url", "")
+    # Add review stats
+    for login, stats in review_stats.items():
+        if login not in developers:
+            developers[login] = {
+                "login": login,
+                "avatar_url": stats.get("avatar_url", ""),
+                "commits": 0,
+                "lines_added": 0,
+                "lines_deleted": 0,
+                "prs_authored": 0,
+                "prs_merged": 0,
+                "prs_closed": 0,
+                "prs_open": 0,
+                "reviews_given": 0,
+                "approvals": 0,
+                "changes_requested": 0,
+                "comments": 0,
+            }
+        developers[login]["reviews_given"] = stats.get("total", 0)
+        developers[login]["approvals"] = stats.get("approved", 0)
+        developers[login]["changes_requested"] = stats.get("changes_requested", 0)
+        developers[login]["comments"] = stats.get("commented", 0)
+        if not developers[login]["avatar_url"]:
+            developers[login]["avatar_url"] = stats.get("avatar_url", "")
 
-        # Add review stats
-        for login, stats in review_stats.items():
-            if login not in developers:
-                developers[login] = {
-                    "login": login,
-                    "avatar_url": stats.get("avatar_url", ""),
-                    "commits": 0,
-                    "lines_added": 0,
-                    "lines_deleted": 0,
-                    "prs_authored": 0,
-                    "prs_merged": 0,
-                    "prs_closed": 0,
-                    "prs_open": 0,
-                    "reviews_given": 0,
-                    "approvals": 0,
-                    "changes_requested": 0,
-                    "comments": 0,
-                }
-            developers[login]["reviews_given"] = stats.get("total", 0)
-            developers[login]["approvals"] = stats.get("approved", 0)
-            developers[login]["changes_requested"] = stats.get("changes_requested", 0)
-            developers[login]["comments"] = stats.get("commented", 0)
-            if not developers[login]["avatar_url"]:
-                developers[login]["avatar_url"] = stats.get("avatar_url", "")
+    # Convert to list and sort by commits (descending)
+    stats_list = list(developers.values())
+    stats_list.sort(key=lambda x: x.get("commits", 0), reverse=True)
 
-        # Convert to list and sort by commits (descending)
-        stats_list = list(developers.values())
-        stats_list.sort(key=lambda x: x.get("commits", 0), reverse=True)
-
-        return jsonify({"stats": stats_list})
-
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 500
+    return stats_list
 
 
 def fetch_contributor_stats(owner, repo):
@@ -798,13 +1072,43 @@ def clear_cache():
 
 @app.route("/api/merge-queue", methods=["GET"])
 def get_merge_queue():
-    """Get all items in the merge queue."""
+    """Get all items in the merge queue with fresh PR states and new commits info."""
     try:
         queue_items = queue_db.get_queue()
         # Convert to expected format
         queue = []
         for item in queue_items:
+            # Get note count for this item
+            notes_count = queue_db.get_notes_count(item["id"])
+
+            # Fetch fresh PR state from GitHub
+            repo_parts = item["repo"].split("/")
+            pr_state = None
+            has_new_commits = False
+            last_reviewed_sha = None
+            current_sha = None
+            review_score = None
+            has_review = False
+
+            if len(repo_parts) == 2:
+                owner, repo = repo_parts
+                pr_state = fetch_pr_state(owner, repo, item["pr_number"])
+
+                # Check for new commits since last review and get review score
+                latest_review = reviews_db.get_latest_review_for_pr(item["repo"], item["pr_number"])
+                if latest_review:
+                    has_review = True
+                    review_score = latest_review.get("score")
+                    if latest_review.get("head_commit_sha"):
+                        last_reviewed_sha = latest_review["head_commit_sha"]
+                        current_sha = fetch_pr_head_sha(owner, repo, item["pr_number"])
+                        if current_sha and last_reviewed_sha:
+                            has_new_commits = current_sha != last_reviewed_sha
+            else:
+                pr_state = item.get("pr_state")  # Fall back to stored state
+
             queue.append({
+                "id": item["id"],
                 "number": item["pr_number"],
                 "title": item["pr_title"],
                 "url": item["pr_url"],
@@ -812,7 +1116,14 @@ def get_merge_queue():
                 "additions": item["additions"],
                 "deletions": item["deletions"],
                 "repo": item["repo"],
-                "addedAt": item["added_at"]
+                "addedAt": item["added_at"],
+                "notesCount": notes_count,
+                "prState": pr_state or item.get("pr_state"),
+                "hasNewCommits": has_new_commits,
+                "lastReviewedSha": last_reviewed_sha,
+                "currentSha": current_sha,
+                "hasReview": has_review,
+                "reviewScore": review_score
             })
         return jsonify({"queue": queue})
     except Exception as e:
@@ -833,6 +1144,12 @@ def add_to_merge_queue():
             if field not in pr_data:
                 return jsonify({"error": f"Missing required field: {field}"}), 400
 
+        # Fetch current PR state
+        repo_parts = pr_data["repo"].split("/")
+        pr_state = None
+        if len(repo_parts) == 2:
+            pr_state = fetch_pr_state(repo_parts[0], repo_parts[1], pr_data["number"])
+
         # Add to database
         item = queue_db.add_to_queue(
             pr_number=pr_data["number"],
@@ -841,11 +1158,13 @@ def add_to_merge_queue():
             pr_author=pr_data["author"],
             pr_url=pr_data["url"],
             additions=pr_data.get("additions", 0),
-            deletions=pr_data.get("deletions", 0)
+            deletions=pr_data.get("deletions", 0),
+            pr_state=pr_state
         )
 
         # Convert to expected format
         queue_item = {
+            "id": item["id"],
             "number": item["pr_number"],
             "title": item["pr_title"],
             "url": item["pr_url"],
@@ -853,7 +1172,9 @@ def add_to_merge_queue():
             "additions": item["additions"],
             "deletions": item["deletions"],
             "repo": item["repo"],
-            "addedAt": item["added_at"]
+            "addedAt": item["added_at"],
+            "notesCount": 0,
+            "prState": pr_state
         }
 
         return jsonify({"message": "PR added to queue", "item": queue_item}), 201
@@ -915,6 +1236,93 @@ def reorder_merge_queue():
         return jsonify({"error": str(e)}), 500
 
 
+# Merge Queue Notes Endpoints
+
+@app.route("/api/merge-queue/<int:pr_number>/notes", methods=["GET"])
+def get_queue_notes(pr_number):
+    """Get all notes for a queue item."""
+    try:
+        repo = request.args.get("repo")
+        if not repo:
+            return jsonify({"error": "repo parameter required"}), 400
+
+        # Get queue item ID
+        queue_item_id = queue_db.get_queue_item_id(pr_number, repo)
+        if not queue_item_id:
+            return jsonify({"error": "PR not found in queue"}), 404
+
+        notes = queue_db.get_notes(queue_item_id)
+
+        # Format notes for response
+        formatted_notes = []
+        for note in notes:
+            formatted_notes.append({
+                "id": note["id"],
+                "content": note["content"],
+                "createdAt": note["created_at"]
+            })
+
+        return jsonify({"notes": formatted_notes})
+
+    except Exception as e:
+        logger.error(f"Error getting queue notes: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/merge-queue/<int:pr_number>/notes", methods=["POST"])
+def add_queue_note(pr_number):
+    """Add a note to a queue item."""
+    try:
+        repo = request.args.get("repo")
+        if not repo:
+            return jsonify({"error": "repo parameter required"}), 400
+
+        data = request.get_json()
+        if not data or "content" not in data:
+            return jsonify({"error": "content is required"}), 400
+
+        content = data["content"].strip()
+        if not content:
+            return jsonify({"error": "content cannot be empty"}), 400
+
+        # Get queue item ID
+        queue_item_id = queue_db.get_queue_item_id(pr_number, repo)
+        if not queue_item_id:
+            return jsonify({"error": "PR not found in queue"}), 404
+
+        note = queue_db.add_note(queue_item_id, content)
+
+        return jsonify({
+            "message": "Note added",
+            "note": {
+                "id": note["id"],
+                "content": note["content"],
+                "createdAt": note["created_at"]
+            }
+        }), 201
+
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        logger.error(f"Error adding queue note: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/merge-queue/notes/<int:note_id>", methods=["DELETE"])
+def delete_queue_note(note_id):
+    """Delete a note from a queue item."""
+    try:
+        deleted = queue_db.delete_note(note_id)
+        if not deleted:
+            return jsonify({"error": "Note not found"}), 404
+
+        return jsonify({"message": "Note deleted"})
+
+    except Exception as e:
+        logger.error(f"Error deleting queue note: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 # Review History Endpoints
 
 @app.route("/api/review-history", methods=["GET"])
@@ -939,7 +1347,7 @@ def get_review_history():
                 offset=offset
             )
 
-        # Format for frontend
+        # Format for frontend - use stored pr_state_at_review to avoid slow API calls
         formatted = []
         for review in reviews:
             formatted.append({
@@ -953,7 +1361,10 @@ def get_review_history():
                 "status": review["status"],
                 "score": review["score"],
                 "is_followup": review["is_followup"],
-                "parent_review_id": review["parent_review_id"]
+                "parent_review_id": review["parent_review_id"],
+                "head_commit_sha": review.get("head_commit_sha"),
+                "inline_comments_posted": review.get("inline_comments_posted", False),
+                "pr_state": review.get("pr_state_at_review")
             })
 
         return jsonify({"reviews": formatted})
@@ -1036,7 +1447,9 @@ def check_pr_review_exists(owner, repo, pr_number):
                     "id": latest_review["id"],
                     "score": latest_review["score"],
                     "review_timestamp": latest_review["review_timestamp"],
-                    "is_followup": latest_review["is_followup"]
+                    "is_followup": latest_review["is_followup"],
+                    "head_commit_sha": latest_review.get("head_commit_sha"),
+                    "inline_comments_posted": latest_review.get("inline_comments_posted", False)
                 }
             })
         else:
@@ -1044,6 +1457,204 @@ def check_pr_review_exists(owner, repo, pr_number):
 
     except Exception as e:
         logger.error(f"Error checking review for PR #{pr_number}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/reviews/check-new-commits/<owner>/<repo>/<int:pr_number>", methods=["GET"])
+def check_new_commits(owner, repo, pr_number):
+    """Check if a PR has new commits since the last review.
+
+    Returns:
+        has_new_commits: bool
+        last_reviewed_sha: str (or null if no review found)
+        current_sha: str (or null if PR not found)
+    """
+    try:
+        full_repo = f"{owner}/{repo}"
+        latest_review = reviews_db.get_latest_review_for_pr(full_repo, pr_number)
+
+        last_reviewed_sha = None
+        if latest_review:
+            last_reviewed_sha = latest_review.get("head_commit_sha")
+
+        # Fetch current PR head SHA
+        current_sha = fetch_pr_head_sha(owner, repo, pr_number)
+
+        # Determine if there are new commits
+        has_new_commits = False
+        if last_reviewed_sha and current_sha:
+            has_new_commits = last_reviewed_sha != current_sha
+        elif current_sha and not last_reviewed_sha:
+            # No previous review or SHA not tracked - assume new
+            has_new_commits = True if latest_review else False
+
+        return jsonify({
+            "has_new_commits": has_new_commits,
+            "last_reviewed_sha": last_reviewed_sha,
+            "current_sha": current_sha
+        })
+
+    except Exception as e:
+        logger.error(f"Error checking new commits for PR #{pr_number}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/reviews/<int:review_id>/post-inline-comments", methods=["POST"])
+def post_inline_comments(review_id):
+    """Post critical issues from a review as inline PR comments.
+
+    Parses critical issues from the review content and posts them as
+    inline comments on the PR using the GitHub API.
+    """
+    try:
+        # Get the review from database
+        review = reviews_db.get_review(review_id)
+        if not review:
+            return jsonify({"error": "Review not found"}), 404
+
+        # Check if already posted
+        if review.get("inline_comments_posted"):
+            return jsonify({"error": "Inline comments have already been posted for this review"}), 409
+
+        content = review.get("content")
+        if not content:
+            return jsonify({"error": "Review has no content to parse"}), 400
+
+        # Parse critical issues from content
+        issues = parse_critical_issues(content)
+        if not issues:
+            return jsonify({"error": "No critical issues found in review content", "issues_found": 0}), 400
+
+        # Get PR info
+        repo = review.get("repo")
+        pr_number = review.get("pr_number")
+
+        if not repo or not pr_number:
+            return jsonify({"error": "Review is missing repo or PR number"}), 400
+
+        repo_parts = repo.split("/")
+        if len(repo_parts) != 2:
+            return jsonify({"error": f"Invalid repo format: {repo}"}), 400
+
+        owner, repo_name = repo_parts
+
+        # Fetch current PR head SHA (required for posting review)
+        current_sha = fetch_pr_head_sha(owner, repo_name, pr_number)
+        if not current_sha:
+            return jsonify({"error": "Could not fetch PR head commit SHA"}), 500
+
+        # Build the review comments
+        comments = []
+        for issue in issues:
+            comment = {
+                "path": issue["path"],
+                "body": issue["body"]
+            }
+            # Use single line if start == end, otherwise use multi-line
+            if issue["start_line"] == issue["end_line"]:
+                comment["line"] = issue["end_line"]
+            else:
+                comment["start_line"] = issue["start_line"]
+                comment["line"] = issue["end_line"]
+
+            comments.append(comment)
+
+        # Post the review with inline comments using gh api
+        # Build the request body
+        review_body = {
+            "commit_id": current_sha,
+            "event": "COMMENT",
+            "body": f"**Code Review Critical Issues** ({len(issues)} issue(s) flagged)",
+            "comments": comments
+        }
+
+        try:
+            # Use gh api to post the review
+            result = subprocess.run(
+                [
+                    "gh", "api",
+                    f"repos/{owner}/{repo_name}/pulls/{pr_number}/reviews",
+                    "--method", "POST",
+                    "--input", "-"
+                ],
+                input=json.dumps(review_body),
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            logger.info(f"Posted inline comments for review {review_id}: {result.stdout[:200]}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to post inline comments: {e.stderr}")
+            return jsonify({
+                "error": f"Failed to post comments to GitHub: {e.stderr}",
+                "issues_parsed": len(issues)
+            }), 500
+
+        # Update the review in database
+        reviews_db.update_inline_comments_posted(review_id, True)
+
+        return jsonify({
+            "message": "Inline comments posted successfully",
+            "issues_posted": len(issues),
+            "comments": [{"path": c["path"], "line": c.get("line")} for c in comments]
+        })
+
+    except Exception as e:
+        logger.error(f"Error posting inline comments for review {review_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# User Settings Endpoints
+
+@app.route("/api/settings", methods=["GET"])
+def get_all_settings():
+    """Get all user settings."""
+    try:
+        settings = settings_db.get_all_settings()
+        return jsonify({"settings": settings})
+    except Exception as e:
+        logger.error(f"Error getting settings: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/settings/<key>", methods=["GET"])
+def get_setting(key):
+    """Get a specific setting by key."""
+    try:
+        value = settings_db.get_setting(key)
+        if value is None:
+            return jsonify({"error": "Setting not found"}), 404
+        return jsonify({"key": key, "value": value})
+    except Exception as e:
+        logger.error(f"Error getting setting {key}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/settings/<key>", methods=["PUT", "POST"])
+def set_setting(key):
+    """Set a setting value."""
+    try:
+        data = request.get_json()
+        if data is None or "value" not in data:
+            return jsonify({"error": "Missing 'value' in request body"}), 400
+
+        settings_db.set_setting(key, data["value"])
+        return jsonify({"key": key, "value": data["value"], "message": "Setting saved"})
+    except Exception as e:
+        logger.error(f"Error setting {key}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/settings/<key>", methods=["DELETE"])
+def delete_setting(key):
+    """Delete a setting."""
+    try:
+        deleted = settings_db.delete_setting(key)
+        if not deleted:
+            return jsonify({"error": "Setting not found"}), 404
+        return jsonify({"message": "Setting deleted"})
+    except Exception as e:
+        logger.error(f"Error deleting setting {key}: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -1086,6 +1697,10 @@ def _save_review_to_db(key, review, status):
                     # Fallback to generic title
                     pr_title = f"PR #{pr_number} Review"
 
+            # Fetch current head commit SHA and PR state
+            head_commit_sha = fetch_pr_head_sha(owner, repo, pr_number)
+            pr_state_at_review = fetch_pr_state(owner, repo, pr_number)
+
             # Save to database
             reviews_db.save_review(
                 pr_number=pr_number,
@@ -1097,7 +1712,9 @@ def _save_review_to_db(key, review, status):
                 review_file_path=review_file,
                 content=content,
                 is_followup=is_followup,
-                parent_review_id=parent_review_id
+                parent_review_id=parent_review_id,
+                head_commit_sha=head_commit_sha,
+                pr_state_at_review=pr_state_at_review
             )
             logger.info(f"Saved review to database for {key}")
     except Exception as e:

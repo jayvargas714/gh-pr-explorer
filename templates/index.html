@@ -658,6 +658,28 @@
                                             </svg>
                                             {{ getExistingReviewScore(pr.number) !== null ? getExistingReviewScore(pr.number) : 'N/A' }}
                                         </span>
+                                        <!-- New Commits badge -->
+                                        <span
+                                            v-if="hasNewCommits(pr.number)"
+                                            class="new-commits-badge"
+                                            title="New commits since last review"
+                                        >
+                                            <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+                                                <path d="M11.93 8.5a4.002 4.002 0 0 1-7.86 0H.75a.75.75 0 0 1 0-1.5h3.32a4.002 4.002 0 0 1 7.86 0h3.32a.75.75 0 0 1 0 1.5Zm-1.43-.75a2.5 2.5 0 1 0-5 0 2.5 2.5 0 0 0 5 0Z"/>
+                                            </svg>
+                                            New Commits
+                                        </span>
+                                        <!-- Inline comments posted badge -->
+                                        <span
+                                            v-if="hasExistingReview(pr.number) && !canPostInlineComments(pr.number)"
+                                            class="inline-posted-badge"
+                                            title="Inline comments posted to GitHub"
+                                        >
+                                            <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+                                                <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/>
+                                            </svg>
+                                            Posted
+                                        </span>
                                     </div>
                                     <a :href="pr.url" target="_blank" class="pr-title">{{ pr.title }}</a>
                                     <div class="pr-meta">
@@ -721,17 +743,34 @@
                                             <path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25ZM6.25 6.5a.75.75 0 0 0 0 1.5h6a.75.75 0 0 0 0-1.5Zm-.75 3.75a.75.75 0 0 0 .75.75h6a.75.75 0 0 0 0-1.5h-6a.75.75 0 0 0-.75.75ZM1.5 1.75v12.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25Z"/>
                                         </svg>
                                     </button>
-                                    <!-- Follow-up review button (only shown if PR has existing review) -->
+                                    <!-- Follow-up review button (only shown if PR has existing review and new commits) -->
                                     <button
-                                        v-if="hasExistingReview(pr.number) && getReviewStatus(pr.number) !== 'running'"
+                                        v-if="hasExistingReview(pr.number) && hasNewCommits(pr.number) && getReviewStatus(pr.number) !== 'running'"
                                         class="followup-btn"
                                         @click="startFollowupReview(pr)"
-                                        title="Start follow-up review"
+                                        title="Start follow-up review (new commits detected)"
                                     >
                                         <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
                                             <path d="M8 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 1.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z"/>
                                             <path d="m14.95 4.636-1.414-1.414L12.121 4.636l1.414 1.414 1.415-1.414Z"/>
                                             <path d="M13.536 6.05V8h2v2h-2v2h-2v-2h-2V8h2V6.05h2Z"/>
+                                        </svg>
+                                    </button>
+                                    <!-- Post Inline Comments button (only shown if PR has review and comments not yet posted) -->
+                                    <button
+                                        v-if="hasExistingReview(pr.number) && canPostInlineComments(pr.number)"
+                                        class="post-inline-btn"
+                                        :class="{ 'posting': isPostingInlineComments(getLatestReviewId(pr.number)) }"
+                                        @click="postInlineComments(getLatestReviewId(pr.number))"
+                                        :disabled="isPostingInlineComments(getLatestReviewId(pr.number))"
+                                        title="Post critical issues as inline comments on GitHub"
+                                    >
+                                        <svg v-if="!isPostingInlineComments(getLatestReviewId(pr.number))" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                                            <path d="M1 2.75C1 1.784 1.784 1 2.75 1h10.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 13.25 12H9.06l-2.573 2.573A1.458 1.458 0 0 1 4 13.543V12H2.75A1.75 1.75 0 0 1 1 10.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h2a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h4.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/>
+                                            <path d="M7.75 5.25a.75.75 0 0 1 .75.75v1h1a.75.75 0 0 1 0 1.5h-1v1a.75.75 0 0 1-1.5 0v-1h-1a.75.75 0 0 1 0-1.5h1V6a.75.75 0 0 1 .75-.75Z"/>
+                                        </svg>
+                                        <svg v-else class="review-spinner" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                                            <path d="M8 0a8 8 0 1 0 8 8h-1.5a6.5 6.5 0 1 1-6.5-6.5V0Z"/>
                                         </svg>
                                     </button>
                                     <button
@@ -752,6 +791,33 @@
 
                 <!-- Stats View -->
                 <div v-else-if="activeView === 'stats'" class="stats-view">
+                    <!-- Stats Header with Last Updated -->
+                    <div class="stats-header">
+                        <div class="stats-info">
+                            <span class="stats-updated" v-if="statsLastUpdated">
+                                Last updated: {{ formatStatsLastUpdated() }}
+                                <span v-if="statsStale && !statsRefreshing" class="stale-badge">Stale</span>
+                                <span v-if="statsRefreshing" class="refreshing-badge">
+                                    <svg class="spinning" viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+                                        <path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/>
+                                    </svg>
+                                    Updating...
+                                </span>
+                            </span>
+                        </div>
+                        <button
+                            class="btn-icon stats-refresh-btn"
+                            @click="refreshDeveloperStats"
+                            :disabled="statsLoading || statsRefreshing"
+                            title="Refresh stats (fetch fresh data)"
+                        >
+                            <svg :class="{ 'spinning': statsLoading }" viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                                <path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/>
+                            </svg>
+                            Refresh
+                        </button>
+                    </div>
+
                     <div v-if="statsLoading" class="loading-state">
                         <div class="spinner"></div>
                         <p>Loading developer statistics...</p>
@@ -808,6 +874,10 @@
                                         Lines -
                                         <span class="sort-icon">{{ statsSortBy === 'lines_deleted' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
                                     </th>
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'avg_pr_score', desc: statsSortDirection === 'desc' }" @click="sortStats('avg_pr_score')">
+                                        Avg Score
+                                        <span class="sort-icon">{{ statsSortBy === 'avg_pr_score' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                    </th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -830,6 +900,17 @@
                                     <td class="stat-value changes">{{ dev.changes_requested }}</td>
                                     <td class="stat-value additions">{{ formatNumber(dev.lines_added) }}</td>
                                     <td class="stat-value deletions">{{ formatNumber(dev.lines_deleted) }}</td>
+                                    <td class="stat-value">
+                                        <span
+                                            v-if="dev.avg_pr_score !== null && dev.avg_pr_score !== undefined"
+                                            class="avg-score-badge"
+                                            :class="getScoreClass(dev.avg_pr_score)"
+                                            :title="`Based on ${dev.reviewed_pr_count || 0} reviewed PR(s)`"
+                                        >
+                                            {{ dev.avg_pr_score }}
+                                        </span>
+                                        <span v-else class="no-score">-</span>
+                                    </td>
                                 </tr>
                             </tbody>
                         </table>
@@ -893,6 +974,11 @@
                             <span class="queue-count" v-if="mergeQueue.length > 0">({{ mergeQueue.length }})</span>
                         </h3>
                         <div class="queue-panel-actions">
+                            <button class="btn-icon queue-refresh-btn" @click="refreshMergeQueue" :disabled="queueRefreshing" title="Refresh queue">
+                                <svg :class="{ 'spinning': queueRefreshing }" viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                                    <path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/>
+                                </svg>
+                            </button>
                             <button class="btn-text" @click="clearQueue" v-if="mergeQueue.length > 0">Clear all</button>
                             <button class="queue-close-btn" @click="closeQueuePanel">&times;</button>
                         </div>
@@ -906,10 +992,29 @@
                             <div v-for="(item, index) in mergeQueue" :key="item.number + '-' + item.repo" class="queue-item">
                                 <div class="queue-item-position">{{ index + 1 }}</div>
                                 <div class="queue-item-content">
-                                    <a :href="item.url" target="_blank" class="queue-item-title">
-                                        <span class="queue-item-number">#{{ item.number }}</span>
-                                        {{ item.title }}
-                                    </a>
+                                    <div class="queue-item-header">
+                                        <a :href="item.url" target="_blank" class="queue-item-title">
+                                            <span class="queue-item-number">#{{ item.number }}</span>
+                                            {{ item.title }}
+                                        </a>
+                                        <span class="pr-state-badge-small" :class="getPrStateClass(item.prState)">
+                                            {{ getPrStateLabel(item.prState) }}
+                                        </span>
+                                        <span
+                                            v-if="item.hasReview"
+                                            class="review-score-badge-small"
+                                            :class="getScoreClass(item.reviewScore)"
+                                            :title="item.reviewScore !== null ? `Review Score: ${item.reviewScore}/10` : 'Reviewed (no score)'"
+                                        >
+                                            <svg viewBox="0 0 16 16" width="10" height="10" fill="currentColor">
+                                                <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/>
+                                            </svg>
+                                            {{ item.reviewScore !== null ? item.reviewScore : 'N/A' }}
+                                        </span>
+                                        <span v-if="item.hasNewCommits" class="new-commits-badge-small" title="New commits since last review">
+                                            New Commits
+                                        </span>
+                                    </div>
                                     <div class="queue-item-meta">
                                         <span class="queue-item-repo">{{ item.repo }}</span>
                                         <span class="queue-item-author">by {{ item.author }}</span>
@@ -917,6 +1022,54 @@
                                             <span class="additions">+{{ item.additions }}</span>
                                             <span class="deletions">-{{ item.deletions }}</span>
                                         </span>
+                                    </div>
+                                    <!-- Notes Section -->
+                                    <div class="queue-item-notes">
+                                        <button
+                                            class="notes-toggle-btn"
+                                            :class="{ 'has-notes': getNotesCount(item) > 0 }"
+                                            @click="toggleNotesDropdown(item)"
+                                        >
+                                            <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                                                <path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v9.5A1.75 1.75 0 0 1 14.25 13H8.06l-2.573 2.573A1.458 1.458 0 0 1 3 14.543V13H1.75A1.75 1.75 0 0 1 0 11.25Zm1.75-.25a.25.25 0 0 0-.25.25v9.5c0 .138.112.25.25.25h2a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h6.5a.25.25 0 0 0 .25-.25v-9.5a.25.25 0 0 0-.25-.25Zm7 2.25v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 9a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/>
+                                            </svg>
+                                            Notes
+                                            <span v-if="getNotesCount(item) > 0" class="notes-count-badge">{{ getNotesCount(item) }}</span>
+                                        </button>
+                                        <button class="add-note-btn" @click="openNotesModal(item, 'add')" title="Add note">
+                                            <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                                                <path d="M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z"/>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                    <!-- Notes Dropdown -->
+                                    <div v-if="isNotesDropdownOpen(item)" class="notes-dropdown">
+                                        <div v-if="notesLoading[getQueueKey(item)]" class="notes-loading">
+                                            <div class="spinner-small"></div>
+                                            Loading notes...
+                                        </div>
+                                        <div v-else-if="getItemNotes(item).length === 0" class="notes-empty">
+                                            No notes yet. Click + to add one.
+                                        </div>
+                                        <div v-else class="notes-list">
+                                            <div
+                                                v-for="(note, noteIndex) in getItemNotes(item)"
+                                                :key="note.id"
+                                                class="note-item"
+                                                :class="{ selected: selectedNoteIndex[getQueueKey(item)] === noteIndex }"
+                                                @click="selectNote(item, noteIndex)"
+                                            >
+                                                <span class="note-preview">{{ truncateNote(note.content) }}</span>
+                                                <span class="note-date">{{ formatNoteDate(note.createdAt) }}</span>
+                                                <button class="note-delete-btn" @click.stop="deleteNote(note.id, item)" title="Delete note">
+                                                    &times;
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <!-- Selected Note Content -->
+                                        <div v-if="getSelectedNote(item)" class="note-content-preview">
+                                            <div class="markdown-content" v-html="renderMarkdown(getSelectedNote(item).content)"></div>
+                                        </div>
                                     </div>
                                 </div>
                                 <div class="queue-item-actions">
@@ -964,6 +1117,46 @@
                 </div>
             </div>
 
+            <!-- Notes Modal -->
+            <div class="modal-overlay" v-if="notesModal.show" @click="closeNotesModal">
+                <div class="notes-modal" @click.stop>
+                    <div class="modal-header">
+                        <h3>
+                            <span class="pr-number">#{{ notesModal.queueItem?.number }}</span>
+                            {{ notesModal.mode === 'add' ? 'Add Note' : 'View Notes' }}
+                        </h3>
+                        <button class="modal-close-btn" @click="closeNotesModal">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <!-- Add Note Mode -->
+                        <div v-if="notesModal.mode === 'add'" class="add-note-form">
+                            <label for="note-content">Note Content (Markdown supported)</label>
+                            <textarea
+                                id="note-content"
+                                v-model="notesModal.newNoteContent"
+                                placeholder="Enter your note here... Markdown is supported."
+                                rows="8"
+                            ></textarea>
+                            <div class="note-preview-section" v-if="notesModal.newNoteContent.trim()">
+                                <h4>Preview</h4>
+                                <div class="markdown-content note-preview-content" v-html="renderMarkdown(notesModal.newNoteContent)"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn-secondary" @click="closeNotesModal">Cancel</button>
+                        <button
+                            v-if="notesModal.mode === 'add'"
+                            class="btn-primary"
+                            @click="saveNote"
+                            :disabled="!notesModal.newNoteContent.trim()"
+                        >
+                            Save Note
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <!-- History Panel -->
             <div class="history-panel-overlay" v-if="showHistoryPanel" @click="showHistoryPanel = false">
                 <div class="history-panel" @click.stop>
@@ -1005,6 +1198,9 @@
                             <div v-for="review in reviewHistory" :key="review.id" class="history-item" @click="viewReviewDetail(review.id)">
                                 <div class="history-item-header">
                                     <span class="history-item-number">#{{ review.pr_number }}</span>
+                                    <span class="pr-state-badge-small" :class="getPrStateClass(review.pr_state)">
+                                        {{ getPrStateLabel(review.pr_state) }}
+                                    </span>
                                     <span
                                         class="review-score-badge"
                                         :class="getScoreClass(review.score)"
@@ -1012,6 +1208,11 @@
                                         {{ review.score !== null ? review.score : 'N/A' }}
                                     </span>
                                     <span v-if="review.is_followup" class="followup-badge">Follow-up</span>
+                                    <span v-if="review.inline_comments_posted" class="inline-posted-badge-small" title="Inline comments posted">
+                                        <svg viewBox="0 0 16 16" width="10" height="10" fill="currentColor">
+                                            <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/>
+                                        </svg>
+                                    </span>
                                 </div>
                                 <div class="history-item-title">{{ review.pr_title || 'Untitled PR' }}</div>
                                 <div class="history-item-meta">

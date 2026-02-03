@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import os
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -147,15 +148,16 @@ def parse_review_content(content: str) -> dict:
         if match:
             result["title"] = match.group(1).strip()
 
-    # Extract score
+    # Extract score (supports decimals like 8.5 or 7.25)
     patterns = [
-        r'(?:\*\*)?(?:Overall\s+)?(?:Score|Rating)(?:\*\*)?[:\s]*(\d+)\s*/?\s*10',
-        r'(\d+)\s*/\s*10\s*(?:score|rating)',
+        # Matches: **Review Score: 8.5/10**, ## Overall Score: 7/10, Score: 8/10, etc.
+        r'(?:#*\s*)?(?:\*\*)?(?:\w+\s+)?(?:Score|Rating)\s*[:\s]*(\d+(?:\.\d{1,2})?)\s*/?\s*10',
+        r'(\d+(?:\.\d{1,2})?)\s*/\s*10\s*(?:score|rating)',
     ]
     for pattern in patterns:
         match = re.search(pattern, content, re.IGNORECASE)
         if match:
-            score = int(match.group(1))
+            score = float(match.group(1))
             if 0 <= score <= 10:
                 result["score"] = score
                 break
@@ -339,6 +341,197 @@ def migrate_merge_queue(db: Database, dry_run: bool = False) -> dict:
     return stats
 
 
+def run_schema_migration(db: Database, dry_run: bool = False):
+    """Run schema migrations to add new columns.
+
+    Args:
+        db: Database instance
+        dry_run: If True, don't actually modify schema
+    """
+    migration_name = "schema_v2_new_columns"
+
+    if db.is_migration_done(migration_name):
+        logger.info("Schema migration v2 already completed.")
+        return
+
+    logger.info("-" * 40)
+    logger.info("Running Schema Migration v2")
+    logger.info("-" * 40)
+
+    conn = db._get_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Check existing columns in reviews table
+        cursor.execute("PRAGMA table_info(reviews)")
+        reviews_columns = {row['name'] for row in cursor.fetchall()}
+
+        # Add new columns to reviews table if they don't exist
+        new_reviews_columns = [
+            ("head_commit_sha", "TEXT"),
+            ("inline_comments_posted", "BOOLEAN DEFAULT FALSE"),
+            ("pr_state_at_review", "TEXT")
+        ]
+
+        for col_name, col_type in new_reviews_columns:
+            if col_name not in reviews_columns:
+                if dry_run:
+                    logger.info(f"[DRY RUN] Would add column {col_name} to reviews")
+                else:
+                    cursor.execute(f"ALTER TABLE reviews ADD COLUMN {col_name} {col_type}")
+                    logger.info(f"Added column {col_name} to reviews table")
+
+        # Check existing columns in merge_queue table
+        cursor.execute("PRAGMA table_info(merge_queue)")
+        queue_columns = {row['name'] for row in cursor.fetchall()}
+
+        # Add new columns to merge_queue table if they don't exist
+        new_queue_columns = [
+            ("pr_state", "TEXT"),
+            ("state_updated_at", "DATETIME")
+        ]
+
+        for col_name, col_type in new_queue_columns:
+            if col_name not in queue_columns:
+                if dry_run:
+                    logger.info(f"[DRY RUN] Would add column {col_name} to merge_queue")
+                else:
+                    cursor.execute(f"ALTER TABLE merge_queue ADD COLUMN {col_name} {col_type}")
+                    logger.info(f"Added column {col_name} to merge_queue table")
+
+        if not dry_run:
+            conn.commit()
+            db.mark_migration_done(migration_name)
+            logger.info("Schema migration v2 completed successfully")
+
+    finally:
+        conn.close()
+
+
+def fetch_pr_head_sha(owner: str, repo: str, pr_number: int) -> str:
+    """Fetch the current head commit SHA for a PR using gh CLI.
+
+    Args:
+        owner: Repository owner
+        repo: Repository name
+        pr_number: PR number
+
+    Returns:
+        The head commit SHA or None if fetch fails
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "view", str(pr_number),
+             "--repo", f"{owner}/{repo}",
+             "--json", "headRefOid",
+             "--jq", ".headRefOid"],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Timeout fetching head SHA for {owner}/{repo}#{pr_number}")
+    except Exception as e:
+        logger.warning(f"Error fetching head SHA for {owner}/{repo}#{pr_number}: {e}")
+    return None
+
+
+def backfill_head_commit_shas(db: Database, dry_run: bool = False) -> dict:
+    """Backfill head_commit_sha for existing reviews that don't have one.
+
+    This migration fetches the current head commit SHA for each PR that has
+    been reviewed but doesn't have a stored head_commit_sha. This prevents
+    all reviewed PRs from showing "New Commits" badges on first load.
+
+    Args:
+        db: Database instance
+        dry_run: If True, don't actually write to database
+
+    Returns:
+        Migration statistics
+    """
+    migration_name = "backfill_head_commit_shas_v1"
+
+    if db.is_migration_done(migration_name):
+        logger.info("Head commit SHA backfill already completed.")
+        return {"skipped": True}
+
+    stats = {
+        "total_reviews": 0,
+        "unique_prs": 0,
+        "updated": 0,
+        "errors": 0,
+        "skipped": 0
+    }
+
+    logger.info("-" * 40)
+    logger.info("Backfilling head_commit_sha for existing reviews")
+    logger.info("-" * 40)
+
+    conn = db._get_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Find all reviews without head_commit_sha, grouped by unique PR
+        cursor.execute("""
+            SELECT DISTINCT repo, pr_number
+            FROM reviews
+            WHERE head_commit_sha IS NULL OR head_commit_sha = ''
+        """)
+        prs_to_update = cursor.fetchall()
+
+        stats["unique_prs"] = len(prs_to_update)
+        logger.info(f"Found {len(prs_to_update)} unique PRs needing head_commit_sha backfill")
+
+        for pr in prs_to_update:
+            repo_str = pr["repo"]
+            pr_number = pr["pr_number"]
+
+            if not repo_str or "/" not in repo_str:
+                logger.warning(f"Invalid repo format for PR #{pr_number}: {repo_str}")
+                stats["skipped"] += 1
+                continue
+
+            owner, repo = repo_str.split("/", 1)
+
+            if dry_run:
+                logger.info(f"[DRY RUN] Would fetch head SHA for {owner}/{repo}#{pr_number}")
+                stats["updated"] += 1
+                continue
+
+            # Fetch current head SHA from GitHub
+            head_sha = fetch_pr_head_sha(owner, repo, pr_number)
+
+            if head_sha:
+                # Update all reviews for this PR with the head SHA
+                cursor.execute("""
+                    UPDATE reviews
+                    SET head_commit_sha = ?
+                    WHERE repo = ? AND pr_number = ?
+                    AND (head_commit_sha IS NULL OR head_commit_sha = '')
+                """, (head_sha, repo_str, pr_number))
+
+                rows_updated = cursor.rowcount
+                stats["total_reviews"] += rows_updated
+                stats["updated"] += 1
+                logger.info(f"Updated {rows_updated} review(s) for {repo_str}#{pr_number} with SHA {head_sha[:8]}...")
+            else:
+                logger.warning(f"Could not fetch head SHA for {repo_str}#{pr_number} (PR may be closed/merged)")
+                stats["errors"] += 1
+
+        if not dry_run:
+            conn.commit()
+            db.mark_migration_done(migration_name)
+            logger.info("Head commit SHA backfill completed successfully")
+
+    finally:
+        conn.close()
+
+    return stats
+
+
 def run_migration(dry_run: bool = False, backup: bool = True):
     """Run the full migration.
 
@@ -356,10 +549,13 @@ def run_migration(dry_run: bool = False, backup: bool = True):
     # Initialize database
     db = Database()
 
-    # Check if migration already done
+    # Run schema migration first (for existing databases)
+    run_schema_migration(db, dry_run)
+
+    # Check if data migration already done
     migration_name = "initial_data_migration_v1"
     if db.is_migration_done(migration_name):
-        logger.info("Migration already completed. Use --force to re-run.")
+        logger.info("Data migration already completed. Use --force to re-run.")
         return
 
     # Migrate reviews
@@ -421,22 +617,56 @@ if __name__ == "__main__":
         action="store_true",
         help="Don't backup the old JSON file"
     )
+    parser.add_argument(
+        "--backfill-shas",
+        action="store_true",
+        help="Backfill head_commit_sha for existing reviews (run this to prevent false 'New Commits' badges)"
+    )
 
     args = parser.parse_args()
 
-    # Handle force flag
-    if args.force:
+    # Run backfill-shas migration if requested
+    if args.backfill_shas:
         db = Database()
-        conn = db._get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM migrations WHERE name = 'initial_data_migration_v1'")
-            conn.commit()
-            logger.info("Cleared previous migration marker")
-        finally:
-            conn.close()
 
-    run_migration(
-        dry_run=args.dry_run,
-        backup=not args.no_backup
-    )
+        # Handle force flag for backfill
+        if args.force:
+            conn = db._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM migrations WHERE name = 'backfill_head_commit_shas_v1'")
+                conn.commit()
+                logger.info("Cleared backfill migration marker")
+            finally:
+                conn.close()
+
+        stats = backfill_head_commit_shas(db, dry_run=args.dry_run)
+        if not stats.get("skipped"):
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info("Backfill Complete!")
+            logger.info("=" * 60)
+            logger.info(f"Unique PRs processed: {stats['unique_prs']}")
+            logger.info(f"Reviews updated: {stats['total_reviews']}")
+            logger.info(f"PRs updated: {stats['updated']}")
+            if stats['errors'] > 0:
+                logger.warning(f"Errors: {stats['errors']}")
+            if stats['skipped'] > 0:
+                logger.info(f"Skipped (invalid repo): {stats['skipped']}")
+    else:
+        # Handle force flag for main migration
+        if args.force:
+            db = Database()
+            conn = db._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM migrations WHERE name = 'initial_data_migration_v1'")
+                conn.commit()
+                logger.info("Cleared previous migration marker")
+            finally:
+                conn.close()
+
+        run_migration(
+            dry_run=args.dry_run,
+            backup=not args.no_backup
+        )

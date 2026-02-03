@@ -129,6 +129,10 @@ createApp({
         const statsError = ref(null);
         const statsSortBy = ref('commits');
         const statsSortDirection = ref('desc');
+        const statsLastUpdated = ref(null);
+        const statsFromCache = ref(false);
+        const statsRefreshing = ref(false);  // Background refresh in progress
+        const statsStale = ref(false);
 
         // Description Modal
         const descriptionModal = reactive({
@@ -139,6 +143,19 @@ createApp({
         // Merge Queue
         const mergeQueue = ref([]);
         const showQueuePanel = ref(false);
+        const queueRefreshing = ref(false);
+
+        // Queue Notes
+        const queueNotes = ref({});  // { "pr_number:repo": [notes] }
+        const notesLoading = ref({});  // { "pr_number:repo": boolean }
+        const openNotesDropdowns = ref({});  // { "pr_number:repo": boolean }
+        const selectedNoteIndex = ref({});  // { "pr_number:repo": number }
+        const notesModal = reactive({
+            show: false,
+            queueItem: null,
+            mode: 'add',  // 'add' | 'view'
+            newNoteContent: ''
+        });
 
         // Code Reviews
         const activeReviews = ref({});  // key: "owner/repo/pr_number", value: {status, startedAt, reviewFile}
@@ -157,6 +174,12 @@ createApp({
         const showReviewViewer = ref(false);
         const reviewViewerContent = ref(null);
         const prReviewCache = ref({});  // Cache: "owner/repo/pr_number" -> latest review info
+
+        // New Commits Detection
+        const newCommitsInfo = ref({});  // Cache: "owner/repo/pr_number" -> { has_new_commits, last_reviewed_sha, current_sha }
+
+        // Inline Comments Posting
+        const postingInlineComments = ref({});  // key: review_id, value: boolean (loading state)
 
         // Active filters count
         const activeFiltersCount = computed(() => {
@@ -445,9 +468,10 @@ createApp({
 
                 prs.value = data.prs || [];
 
-                // Fetch review info for all PRs in background
+                // Fetch review info for all PRs and refresh merge queue in background
                 nextTick(() => {
                     fetchReviewInfoForPRs();
+                    fetchMergeQueue();  // Sync merge queue with latest PR states
                 });
             } catch (err) {
                 error.value = err.message || 'Failed to fetch pull requests';
@@ -457,17 +481,23 @@ createApp({
             }
         };
 
-        const fetchDeveloperStats = async () => {
+        const fetchDeveloperStats = async (forceRefresh = false) => {
             if (!selectedRepo.value) return;
 
-            statsLoading.value = true;
+            // Only show loading spinner on initial load or force refresh
+            if (!developerStats.value.length || forceRefresh) {
+                statsLoading.value = true;
+            }
             statsError.value = null;
 
             const owner = selectedRepo.value.owner.login;
             const repo = selectedRepo.value.name;
 
             try {
-                const response = await fetch(`/api/repos/${owner}/${repo}/stats`);
+                const url = forceRefresh
+                    ? `/api/repos/${owner}/${repo}/stats?refresh=true`
+                    : `/api/repos/${owner}/${repo}/stats`;
+                const response = await fetch(url);
                 const data = await response.json();
 
                 if (data.error) {
@@ -475,12 +505,46 @@ createApp({
                 }
 
                 developerStats.value = data.stats || [];
+                statsLastUpdated.value = data.last_updated ? new Date(data.last_updated) : null;
+                statsFromCache.value = data.cached || false;
+                statsRefreshing.value = data.refreshing || false;
+                statsStale.value = data.stale || false;
+
+                // If refreshing in background, poll for completion
+                if (data.refreshing && !forceRefresh) {
+                    setTimeout(() => {
+                        // Check again in 5 seconds to see if refresh completed
+                        fetchDeveloperStats(false);
+                    }, 5000);
+                }
             } catch (err) {
                 statsError.value = err.message || 'Failed to fetch developer stats';
                 console.error('Failed to fetch stats:', err);
             } finally {
                 statsLoading.value = false;
             }
+        };
+
+        const refreshDeveloperStats = () => {
+            fetchDeveloperStats(true);
+        };
+
+        const formatStatsLastUpdated = () => {
+            if (!statsLastUpdated.value) return 'Never';
+            const now = new Date();
+            const diff = now - statsLastUpdated.value;
+            const minutes = Math.floor(diff / 60000);
+            const hours = Math.floor(minutes / 60);
+
+            if (minutes < 1) return 'Just now';
+            if (minutes < 60) return `${minutes} minute${minutes !== 1 ? 's' : ''} ago`;
+            if (hours < 24) return `${hours} hour${hours !== 1 ? 's' : ''} ago`;
+            return statsLastUpdated.value.toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit'
+            });
         };
 
         const setActiveView = (view) => {
@@ -719,6 +783,15 @@ createApp({
             }
         };
 
+        const refreshMergeQueue = async () => {
+            queueRefreshing.value = true;
+            try {
+                await fetchMergeQueue();
+            } finally {
+                queueRefreshing.value = false;
+            }
+        };
+
         const addToQueue = async (pr) => {
             if (!selectedRepo.value) return;
 
@@ -825,6 +898,209 @@ createApp({
             for (const item of items) {
                 await removeFromQueue(item.number, item.repo);
             }
+        };
+
+        // Queue Notes Methods
+        const getQueueKey = (item) => {
+            return `${item.number}:${item.repo}`;
+        };
+
+        const getNotesCount = (item) => {
+            return item.notesCount || 0;
+        };
+
+        const getItemNotes = (item) => {
+            const key = getQueueKey(item);
+            return queueNotes.value[key] || [];
+        };
+
+        const fetchNotesForQueueItem = async (item) => {
+            const key = getQueueKey(item);
+            notesLoading.value[key] = true;
+
+            try {
+                const response = await fetch(
+                    `/api/merge-queue/${item.number}/notes?repo=${encodeURIComponent(item.repo)}`
+                );
+                const data = await response.json();
+
+                if (response.ok) {
+                    queueNotes.value[key] = data.notes || [];
+                    // Select first note by default
+                    if (data.notes && data.notes.length > 0) {
+                        selectedNoteIndex.value[key] = 0;
+                    }
+                } else {
+                    console.error('Failed to fetch notes:', data.error);
+                }
+            } catch (err) {
+                console.error('Failed to fetch notes:', err);
+            } finally {
+                notesLoading.value[key] = false;
+            }
+        };
+
+        const toggleNotesDropdown = async (item) => {
+            const key = getQueueKey(item);
+
+            if (openNotesDropdowns.value[key]) {
+                // Close dropdown
+                openNotesDropdowns.value[key] = false;
+            } else {
+                // Close all other dropdowns
+                Object.keys(openNotesDropdowns.value).forEach(k => {
+                    openNotesDropdowns.value[k] = false;
+                });
+
+                // Open this dropdown
+                openNotesDropdowns.value[key] = true;
+
+                // Fetch notes if not already loaded
+                if (!queueNotes.value[key]) {
+                    await fetchNotesForQueueItem(item);
+                }
+            }
+        };
+
+        const isNotesDropdownOpen = (item) => {
+            const key = getQueueKey(item);
+            return openNotesDropdowns.value[key] || false;
+        };
+
+        const selectNote = (item, index) => {
+            const key = getQueueKey(item);
+            selectedNoteIndex.value[key] = index;
+        };
+
+        const getSelectedNote = (item) => {
+            const key = getQueueKey(item);
+            const notes = queueNotes.value[key] || [];
+            const index = selectedNoteIndex.value[key] || 0;
+            return notes[index] || null;
+        };
+
+        const openNotesModal = (item, mode = 'add') => {
+            notesModal.queueItem = item;
+            notesModal.mode = mode;
+            notesModal.newNoteContent = '';
+            notesModal.show = true;
+            document.body.style.overflow = 'hidden';
+        };
+
+        const closeNotesModal = () => {
+            notesModal.show = false;
+            notesModal.queueItem = null;
+            notesModal.newNoteContent = '';
+            document.body.style.overflow = '';
+        };
+
+        const saveNote = async () => {
+            if (!notesModal.queueItem || !notesModal.newNoteContent.trim()) return;
+
+            const item = notesModal.queueItem;
+            const content = notesModal.newNoteContent.trim();
+
+            try {
+                const response = await fetch(
+                    `/api/merge-queue/${item.number}/notes?repo=${encodeURIComponent(item.repo)}`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content })
+                    }
+                );
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // Add note to local state
+                    const key = getQueueKey(item);
+                    if (!queueNotes.value[key]) {
+                        queueNotes.value[key] = [];
+                    }
+                    // Add to beginning since newest first
+                    queueNotes.value[key].unshift(data.note);
+
+                    // Update notes count in queue item
+                    const queueItem = mergeQueue.value.find(
+                        q => q.number === item.number && q.repo === item.repo
+                    );
+                    if (queueItem) {
+                        queueItem.notesCount = (queueItem.notesCount || 0) + 1;
+                    }
+
+                    // Select the new note
+                    selectedNoteIndex.value[key] = 0;
+
+                    // Close modal
+                    closeNotesModal();
+                } else {
+                    console.error('Failed to save note:', data.error);
+                    alert('Failed to save note: ' + data.error);
+                }
+            } catch (err) {
+                console.error('Failed to save note:', err);
+                alert('Failed to save note. Check console for details.');
+            }
+        };
+
+        const deleteNote = async (noteId, item) => {
+            if (!confirm('Delete this note?')) return;
+
+            try {
+                const response = await fetch(`/api/merge-queue/notes/${noteId}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    // Remove note from local state
+                    const key = getQueueKey(item);
+                    if (queueNotes.value[key]) {
+                        queueNotes.value[key] = queueNotes.value[key].filter(n => n.id !== noteId);
+
+                        // Update selected index if needed
+                        const notes = queueNotes.value[key];
+                        if (notes.length === 0) {
+                            delete selectedNoteIndex.value[key];
+                        } else if (selectedNoteIndex.value[key] >= notes.length) {
+                            selectedNoteIndex.value[key] = notes.length - 1;
+                        }
+                    }
+
+                    // Update notes count in queue item
+                    const queueItem = mergeQueue.value.find(
+                        q => q.number === item.number && q.repo === item.repo
+                    );
+                    if (queueItem && queueItem.notesCount > 0) {
+                        queueItem.notesCount -= 1;
+                    }
+                } else {
+                    const error = await response.json();
+                    console.error('Failed to delete note:', error.error);
+                }
+            } catch (err) {
+                console.error('Failed to delete note:', err);
+            }
+        };
+
+        const truncateNote = (content) => {
+            if (!content) return '';
+            const firstLine = content.split('\n')[0];
+            if (firstLine.length > 40) {
+                return firstLine.substring(0, 40) + '...';
+            }
+            return firstLine;
+        };
+
+        const formatNoteDate = (dateStr) => {
+            if (!dateStr) return '';
+            const date = new Date(dateStr);
+            return date.toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit'
+            });
         };
 
         // Code Review Methods
@@ -1076,11 +1352,20 @@ createApp({
             const owner = selectedRepo.value.owner.login;
             const repo = selectedRepo.value.name;
 
-            // Fetch in parallel for all PRs
-            const promises = prs.value.map(pr =>
+            // Fetch review info in parallel for all PRs
+            const reviewPromises = prs.value.map(pr =>
                 checkPrReviewExists(owner, repo, pr.number)
             );
-            await Promise.all(promises);
+            await Promise.all(reviewPromises);
+
+            // Then check for new commits only for PRs that have reviews
+            const newCommitsPromises = prs.value
+                .filter(pr => {
+                    const info = prReviewCache.value[`${owner}/${repo}/${pr.number}`];
+                    return info?.has_review;
+                })
+                .map(pr => checkNewCommits(owner, repo, pr.number));
+            await Promise.all(newCommitsPromises);
         };
 
         const formatReviewDate = (dateStr) => {
@@ -1098,6 +1383,103 @@ createApp({
             if (score >= 7) return 'score-high';
             if (score >= 4) return 'score-medium';
             return 'score-low';
+        };
+
+        // PR State Display Helpers
+        const getPrStateClass = (state) => {
+            if (!state) return 'pr-state-unknown';
+            const s = state.toUpperCase();
+            if (s === 'MERGED') return 'pr-state-merged';
+            if (s === 'CLOSED') return 'pr-state-closed';
+            if (s === 'OPEN') return 'pr-state-open';
+            return 'pr-state-unknown';
+        };
+
+        const getPrStateLabel = (state) => {
+            if (!state) return 'Unknown';
+            const s = state.toUpperCase();
+            if (s === 'MERGED') return 'Merged';
+            if (s === 'CLOSED') return 'Closed';
+            if (s === 'OPEN') return 'Open';
+            return state;
+        };
+
+        // New Commits Detection Methods
+        const checkNewCommits = async (owner, repo, prNumber) => {
+            const key = `${owner}/${repo}/${prNumber}`;
+            try {
+                const response = await fetch(`/api/reviews/check-new-commits/${owner}/${repo}/${prNumber}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    newCommitsInfo.value[key] = data;
+                    return data;
+                }
+            } catch (err) {
+                console.error('Failed to check new commits:', err);
+            }
+            return { has_new_commits: false };
+        };
+
+        const getNewCommitsInfo = (prNumber) => {
+            if (!selectedRepo.value) return null;
+            const owner = selectedRepo.value.owner.login;
+            const repo = selectedRepo.value.name;
+            const key = `${owner}/${repo}/${prNumber}`;
+            return newCommitsInfo.value[key] || null;
+        };
+
+        const hasNewCommits = (prNumber) => {
+            const info = getNewCommitsInfo(prNumber);
+            return info?.has_new_commits || false;
+        };
+
+        // Inline Comments Posting Methods
+        const postInlineComments = async (reviewId) => {
+            if (postingInlineComments.value[reviewId]) return;
+
+            postingInlineComments.value[reviewId] = true;
+            try {
+                const response = await fetch(`/api/reviews/${reviewId}/post-inline-comments`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // Update the cache to reflect posted status
+                    Object.keys(prReviewCache.value).forEach(key => {
+                        const cached = prReviewCache.value[key];
+                        if (cached?.latest_review?.id === reviewId) {
+                            cached.latest_review.inline_comments_posted = true;
+                        }
+                    });
+                    alert(`Posted ${data.issues_posted} inline comment(s) to GitHub`);
+                } else {
+                    alert(`Failed to post inline comments: ${data.error}`);
+                }
+            } catch (err) {
+                console.error('Failed to post inline comments:', err);
+                alert('Failed to post inline comments. Check console for details.');
+            } finally {
+                postingInlineComments.value[reviewId] = false;
+            }
+        };
+
+        const isPostingInlineComments = (reviewId) => {
+            return postingInlineComments.value[reviewId] || false;
+        };
+
+        const canPostInlineComments = (prNumber) => {
+            const info = getPrReviewInfo(prNumber);
+            if (!info?.has_review) return false;
+            // Can post if there's a review and inline comments haven't been posted yet
+            return !info.latest_review?.inline_comments_posted;
+        };
+
+        const getLatestReviewId = (prNumber) => {
+            const info = getPrReviewInfo(prNumber);
+            return info?.latest_review?.id || null;
         };
 
         const isReviewRunning = (prNumber) => {
@@ -1227,6 +1609,96 @@ createApp({
             }
         };
 
+        // Settings Persistence
+        let saveSettingsTimeout = null;
+
+        const loadSettings = async () => {
+            try {
+                const response = await fetch('/api/settings/filter_settings');
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.value) {
+                        // Restore filter settings
+                        const saved = data.value;
+                        if (saved.filters) {
+                            Object.keys(saved.filters).forEach(key => {
+                                if (key in filters) {
+                                    filters[key] = saved.filters[key];
+                                }
+                            });
+                        }
+                        // Restore selected account and repo
+                        if (saved.selectedAccountLogin) {
+                            // Wait for accounts to load, then select
+                            const checkAccounts = setInterval(() => {
+                                if (!accountsLoading.value && accounts.value.length > 0) {
+                                    clearInterval(checkAccounts);
+                                    const account = accounts.value.find(a => a.login === saved.selectedAccountLogin);
+                                    if (account) {
+                                        selectAccount(account);
+                                        // Wait for repos to load, then select
+                                        if (saved.selectedRepoFullName) {
+                                            const checkRepos = setInterval(() => {
+                                                if (!reposLoading.value && repos.value.length > 0) {
+                                                    clearInterval(checkRepos);
+                                                    const repo = repos.value.find(r => r.full_name === saved.selectedRepoFullName);
+                                                    if (repo) {
+                                                        selectRepo(repo);
+                                                    }
+                                                }
+                                            }, 100);
+                                            // Clear after 10 seconds to prevent infinite loop
+                                            setTimeout(() => clearInterval(checkRepos), 10000);
+                                        }
+                                    }
+                                }
+                            }, 100);
+                            // Clear after 10 seconds to prevent infinite loop
+                            setTimeout(() => clearInterval(checkAccounts), 10000);
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to load settings:', err);
+            }
+        };
+
+        const saveSettings = async () => {
+            try {
+                const settings = {
+                    filters: { ...filters },
+                    selectedAccountLogin: selectedAccount.value?.login || null,
+                    selectedRepoFullName: selectedRepo.value?.full_name || null
+                };
+                await fetch('/api/settings/filter_settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ value: settings })
+                });
+            } catch (err) {
+                console.error('Failed to save settings:', err);
+            }
+        };
+
+        const debouncedSaveSettings = () => {
+            if (saveSettingsTimeout) {
+                clearTimeout(saveSettingsTimeout);
+            }
+            saveSettingsTimeout = setTimeout(() => {
+                saveSettings();
+            }, 1000);  // Save after 1 second of inactivity
+        };
+
+        // Watch filters for changes and save
+        watch(filters, () => {
+            debouncedSaveSettings();
+        }, { deep: true });
+
+        // Watch selected account and repo changes
+        watch([selectedAccount, selectedRepo], () => {
+            debouncedSaveSettings();
+        });
+
         // Initialize
         onMounted(() => {
             // Load theme preference
@@ -1235,6 +1707,9 @@ createApp({
                 darkMode.value = savedDarkMode === 'true';
             }
             document.body.classList.toggle('dark-mode', darkMode.value);
+
+            // Load saved filter settings
+            loadSettings();
 
             // Fetch accounts
             fetchAccounts();
@@ -1308,8 +1783,14 @@ createApp({
             statsError,
             statsSortBy,
             statsSortDirection,
+            statsLastUpdated,
+            statsFromCache,
+            statsRefreshing,
+            statsStale,
             sortedDeveloperStats,
             fetchDeveloperStats,
+            refreshDeveloperStats,
+            formatStatsLastUpdated,
             sortStats,
             getMergeRate,
             formatNumber,
@@ -1331,7 +1812,9 @@ createApp({
             // Merge Queue
             mergeQueue,
             showQueuePanel,
+            queueRefreshing,
             fetchMergeQueue,
+            refreshMergeQueue,
             addToQueue,
             removeFromQueue,
             isInQueue,
@@ -1339,6 +1822,27 @@ createApp({
             closeQueuePanel,
             moveQueueItem,
             clearQueue,
+
+            // Queue Notes
+            queueNotes,
+            notesLoading,
+            openNotesDropdowns,
+            selectedNoteIndex,
+            notesModal,
+            getQueueKey,
+            getNotesCount,
+            getItemNotes,
+            fetchNotesForQueueItem,
+            toggleNotesDropdown,
+            isNotesDropdownOpen,
+            selectNote,
+            getSelectedNote,
+            openNotesModal,
+            closeNotesModal,
+            saveNote,
+            deleteNote,
+            truncateNote,
+            formatNoteDate,
 
             // Code Reviews
             activeReviews,
@@ -1375,7 +1879,28 @@ createApp({
             getExistingReviewScore,
             fetchReviewInfoForPRs,
             formatReviewDate,
-            getScoreClass
+            getScoreClass,
+
+            // PR State Display
+            getPrStateClass,
+            getPrStateLabel,
+
+            // New Commits Detection
+            newCommitsInfo,
+            checkNewCommits,
+            getNewCommitsInfo,
+            hasNewCommits,
+
+            // Inline Comments Posting
+            postingInlineComments,
+            postInlineComments,
+            isPostingInlineComments,
+            canPostInlineComments,
+            getLatestReviewId,
+
+            // Settings Persistence
+            loadSettings,
+            saveSettings
         };
     }
 }).mount('#app');
