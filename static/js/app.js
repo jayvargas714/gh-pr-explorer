@@ -1764,15 +1764,19 @@ createApp({
                 if (response.ok) {
                     const data = await response.json();
                     if (data.value) {
-                        // Restore filter settings
                         const saved = data.value;
-                        if (saved.filters) {
-                            Object.keys(saved.filters).forEach(key => {
-                                if (key in filters) {
-                                    filters[key] = saved.filters[key];
-                                }
-                            });
-                        }
+
+                        // Helper to restore filters after selections complete
+                        const restoreFilters = () => {
+                            if (saved.filters) {
+                                Object.keys(saved.filters).forEach(key => {
+                                    if (key in filters) {
+                                        filters[key] = saved.filters[key];
+                                    }
+                                });
+                            }
+                        };
+
                         // Restore selected account and repo
                         if (saved.selectedAccountLogin) {
                             // Wait for accounts to load, then select
@@ -1793,17 +1797,30 @@ createApp({
                                                     );
                                                     if (repo) {
                                                         selectRepo(repo);
+                                                        // Restore filters AFTER repo selection (which triggers fetchPRs)
+                                                        // Use nextTick to ensure it happens after Vue updates
+                                                        nextTick(() => {
+                                                            restoreFilters();
+                                                            // Re-fetch PRs with restored filters
+                                                            fetchPRs();
+                                                        });
                                                     }
                                                 }
                                             }, 100);
                                             // Clear after 10 seconds to prevent infinite loop
                                             setTimeout(() => clearInterval(checkRepos), 10000);
+                                        } else {
+                                            // No repo saved, just restore filters
+                                            restoreFilters();
                                         }
                                     }
                                 }
                             }, 100);
                             // Clear after 10 seconds to prevent infinite loop
                             setTimeout(() => clearInterval(checkAccounts), 10000);
+                        } else {
+                            // No account saved, just restore filters
+                            restoreFilters();
                         }
                     }
                 }
