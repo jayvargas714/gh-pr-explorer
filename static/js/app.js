@@ -1787,7 +1787,10 @@ createApp({
                                             const checkRepos = setInterval(() => {
                                                 if (!reposLoading.value && repos.value.length > 0) {
                                                     clearInterval(checkRepos);
-                                                    const repo = repos.value.find(r => r.full_name === saved.selectedRepoFullName);
+                                                    // Find repo by constructing full name from owner.login and name
+                                                    const repo = repos.value.find(r =>
+                                                        `${r.owner.login}/${r.name}` === saved.selectedRepoFullName
+                                                    );
                                                     if (repo) {
                                                         selectRepo(repo);
                                                     }
@@ -1811,10 +1814,14 @@ createApp({
 
         const saveSettings = async () => {
             try {
+                // Construct full repo name from owner.login and name
+                const repoFullName = selectedRepo.value
+                    ? `${selectedRepo.value.owner.login}/${selectedRepo.value.name}`
+                    : null;
                 const settings = {
                     filters: { ...filters },
                     selectedAccountLogin: selectedAccount.value?.login || null,
-                    selectedRepoFullName: selectedRepo.value?.full_name || null
+                    selectedRepoFullName: repoFullName
                 };
                 await fetch('/api/settings/filter_settings', {
                     method: 'PUT',
