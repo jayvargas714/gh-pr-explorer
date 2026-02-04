@@ -173,6 +173,7 @@ createApp({
         const showHistoryPanel = ref(false);
         const showReviewViewer = ref(false);
         const reviewViewerContent = ref(null);
+        const copySuccess = ref(false);  // For copy button feedback
         const prReviewCache = ref({});  // Cache: "owner/repo/pr_number" -> latest review info
 
         // New Commits Detection
@@ -1136,9 +1137,20 @@ createApp({
                 const response = await fetch('/api/reviews');
                 const data = await response.json();
                 if (data.reviews) {
+                    // Track reviews that just completed to refresh their cache
+                    const completedReviews = [];
+
                     // Update activeReviews from server state
                     const newReviews = {};
                     for (const review of data.reviews) {
+                        const oldStatus = activeReviews.value[review.key]?.status;
+                        const newStatus = review.status;
+
+                        // Track if this review just completed
+                        if (oldStatus === 'running' && newStatus === 'completed') {
+                            completedReviews.push(review);
+                        }
+
                         newReviews[review.key] = {
                             status: review.status,
                             startedAt: review.started_at,
@@ -1149,6 +1161,18 @@ createApp({
                         };
                     }
                     activeReviews.value = newReviews;
+
+                    // Refresh PR review cache for completed reviews
+                    for (const review of completedReviews) {
+                        // Invalidate cache entry so it gets re-fetched
+                        delete prReviewCache.value[review.key];
+                        // Re-fetch the review info
+                        const parts = review.key.split('/');
+                        if (parts.length === 3) {
+                            const [owner, repo, prNumber] = parts;
+                            checkPrReviewExists(owner, repo, parseInt(prNumber));
+                        }
+                    }
 
                     // Stop polling if no active reviews
                     const hasRunning = data.reviews.some(r => r.status === 'running');
@@ -1306,6 +1330,40 @@ createApp({
         const closeReviewViewer = () => {
             showReviewViewer.value = false;
             reviewViewerContent.value = null;
+            copySuccess.value = false;
+        };
+
+        const copyReviewContent = async () => {
+            if (!reviewViewerContent.value?.content) return;
+
+            try {
+                await navigator.clipboard.writeText(reviewViewerContent.value.content);
+                copySuccess.value = true;
+                // Reset after 2 seconds
+                setTimeout(() => {
+                    copySuccess.value = false;
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to copy to clipboard:', err);
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = reviewViewerContent.value.content;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-999999px';
+                document.body.appendChild(textArea);
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    copySuccess.value = true;
+                    setTimeout(() => {
+                        copySuccess.value = false;
+                    }, 2000);
+                } catch (e) {
+                    console.error('Fallback copy failed:', e);
+                    alert('Failed to copy to clipboard');
+                }
+                document.body.removeChild(textArea);
+            }
         };
 
         const checkPrReviewExists = async (owner, repo, prNumber) => {
@@ -1480,6 +1538,39 @@ createApp({
         const getLatestReviewId = (prNumber) => {
             const info = getPrReviewInfo(prNumber);
             return info?.latest_review?.id || null;
+        };
+
+        // Post inline comments for a merge queue item
+        const postQueueItemInlineComments = async (item) => {
+            if (!item.reviewId || postingInlineComments.value[item.reviewId]) return;
+
+            postingInlineComments.value[item.reviewId] = true;
+            try {
+                const response = await fetch(`/api/reviews/${item.reviewId}/post-inline-comments`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // Update the queue item to reflect posted status
+                    const queueItem = mergeQueue.value.find(
+                        q => q.number === item.number && q.repo === item.repo
+                    );
+                    if (queueItem) {
+                        queueItem.inlineCommentsPosted = true;
+                    }
+                    alert(`Posted ${data.issues_posted} inline comment(s) to GitHub`);
+                } else {
+                    alert(`Failed to post inline comments: ${data.error}`);
+                }
+            } catch (err) {
+                console.error('Failed to post inline comments:', err);
+                alert('Failed to post inline comments. Check console for details.');
+            } finally {
+                postingInlineComments.value[item.reviewId] = false;
+            }
         };
 
         const isReviewRunning = (prNumber) => {
@@ -1869,10 +1960,12 @@ createApp({
             showHistoryPanel,
             showReviewViewer,
             reviewViewerContent,
+            copySuccess,
             prReviewCache,
             fetchReviewHistory,
             viewReviewDetail,
             closeReviewViewer,
+            copyReviewContent,
             checkPrReviewExists,
             getPrReviewInfo,
             hasExistingReview,
@@ -1894,6 +1987,7 @@ createApp({
             // Inline Comments Posting
             postingInlineComments,
             postInlineComments,
+            postQueueItemInlineComments,
             isPostingInlineComments,
             canPostInlineComments,
             getLatestReviewId,

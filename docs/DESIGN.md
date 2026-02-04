@@ -169,6 +169,8 @@ CREATE TABLE reviews (
     content TEXT,
     is_followup BOOLEAN DEFAULT FALSE,
     parent_review_id INTEGER,
+    head_commit_sha TEXT,
+    inline_comments_posted BOOLEAN DEFAULT FALSE,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (parent_review_id) REFERENCES reviews(id)
 );
@@ -188,6 +190,15 @@ CREATE TABLE merge_queue (
     UNIQUE(pr_number, repo)
 );
 
+-- Queue notes table: Stores notes attached to merge queue items
+CREATE TABLE queue_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    queue_item_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (queue_item_id) REFERENCES merge_queue(id) ON DELETE CASCADE
+);
+
 -- Migrations table: Tracks executed database migrations
 CREATE TABLE migrations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -203,10 +214,12 @@ CREATE TABLE migrations (
 | `add_review()` | Creates a new review record with optional follow-up linking |
 | `get_review()` | Retrieves a single review by ID |
 | `get_reviews_for_pr()` | Gets all reviews for a specific PR |
+| `get_latest_review_for_pr()` | Gets the most recent review for a specific PR |
 | `search_reviews()` | Searches reviews with filters (repo, author, date range) |
 | `get_stats()` | Returns aggregate review statistics |
 | `check_pr_reviewed()` | Checks if a PR has existing reviews |
 | `extract_score()` | Extracts numerical score from review content using regex |
+| `update_review()` | Updates review fields (e.g., marking inline comments as posted) |
 
 #### MergeQueueDB Methods
 
@@ -301,6 +314,15 @@ reviewErrorModal: reactive({
     errorOutput: '',
     exitCode: null
 })
+
+// Review Viewer
+showReviewViewer: ref(false)
+reviewViewerContent: ref(null)
+copySuccess: ref(false)  // Feedback for copy button
+prReviewCache: ref({})   // Cache: "owner/repo/pr_number" -> review info
+
+// Inline Comments
+postingInlineComments: ref({})  // key: review_id, value: boolean (loading state)
 ```
 
 #### Computed Properties
@@ -342,6 +364,24 @@ reviewErrorModal: reactive({
 | `getReviewStatus(prNumber)` | Gets current status of a review |
 | `handleReviewClick(pr)` | Click handler for review button (start/cancel/show error) |
 | `showReviewError(pr)` | Opens modal displaying review error details |
+
+**Review Viewer Methods**:
+
+| Method | Description |
+|--------|-------------|
+| `viewReviewDetail(reviewId)` | Opens review viewer modal with full content |
+| `closeReviewViewer()` | Closes the review viewer modal |
+| `copyReviewContent()` | Copies raw markdown content to clipboard |
+
+**Inline Comments Methods**:
+
+| Method | Description |
+|--------|-------------|
+| `postInlineComments(reviewId)` | Posts critical issues as inline comments on GitHub |
+| `postQueueItemInlineComments(item)` | Posts inline comments for a merge queue item |
+| `isPostingInlineComments(reviewId)` | Checks if inline comments are being posted |
+| `canPostInlineComments(prNumber)` | Checks if inline comments can be posted for a PR |
+| `getLatestReviewId(prNumber)` | Gets the review ID for the latest review of a PR |
 
 ### UI Template
 
@@ -531,6 +571,7 @@ The modal displays full review content with:
 - Score display with color indicator
 - Follow-up indicator for chained reviews
 - Link to original review file
+- **Copy Markdown Button**: Copies raw review content to clipboard for easy sharing
 
 ### Merge Queue
 
@@ -549,6 +590,7 @@ The Merge Queue feature allows users to organize PRs they intend to review or me
 
 ```json
 {
+  "id": 1,
   "number": 123,
   "title": "PR Title",
   "url": "https://github.com/owner/repo/pull/123",
@@ -556,10 +598,39 @@ The Merge Queue feature allows users to organize PRs they intend to review or me
   "author": "username",
   "additions": 150,
   "deletions": 50,
-  "position": 1,
-  "added_at": "2024-01-15T10:30:00Z"
+  "addedAt": "2024-01-15T10:30:00Z",
+  "notesCount": 0,
+  "prState": "OPEN",
+  "hasNewCommits": false,
+  "lastReviewedSha": "abc123def456",
+  "currentSha": "abc123def456",
+  "hasReview": true,
+  "reviewScore": 8,
+  "reviewId": 42,
+  "inlineCommentsPosted": false
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | integer | Database ID of the queue item |
+| `number` | integer | PR number |
+| `title` | string | PR title |
+| `url` | string | GitHub PR URL |
+| `repo` | string | Repository in `owner/repo` format |
+| `author` | string | PR author username |
+| `additions` | integer | Lines added |
+| `deletions` | integer | Lines deleted |
+| `addedAt` | string | ISO timestamp when added to queue |
+| `notesCount` | integer | Number of notes attached to this queue item |
+| `prState` | string | Current PR state (OPEN, CLOSED, MERGED) |
+| `hasNewCommits` | boolean | True if new commits since last review |
+| `lastReviewedSha` | string | Commit SHA of last review |
+| `currentSha` | string | Current HEAD commit SHA |
+| `hasReview` | boolean | True if PR has been reviewed |
+| `reviewScore` | integer | Latest review score (0-10) |
+| `reviewId` | integer | Database ID of latest review |
+| `inlineCommentsPosted` | boolean | True if inline comments have been posted |
 
 #### UI Components
 
@@ -569,6 +640,13 @@ The Merge Queue feature allows users to organize PRs they intend to review or me
 | Queue Button | PR Card | Add/remove PR from queue |
 | Queue Panel | Slide-out | Full queue management interface |
 | Queue Item | Panel | Individual PR with reorder and remove controls |
+| Review Button | Queue Item | Start code review for queued PR |
+| Post Inline Comments | Queue Item | Post critical issues to GitHub (appears when review exists) |
+| Notes Toggle | Queue Item | Expand/collapse notes for the PR |
+| Add Note Button | Queue Item | Add a new note to the PR |
+| PR State Badge | Queue Item | Shows current PR state (open/closed/merged) |
+| Review Score Badge | Queue Item | Shows review score if PR has been reviewed |
+| New Commits Badge | Queue Item | Indicates new commits since last review |
 
 ### Code Review System (Claude CLI Integration)
 
@@ -658,6 +736,54 @@ When a review fails:
 - Process status checked via `poll()` method
 - Safe concurrent access from multiple requests
 - Database connections are thread-local for safety
+
+### Inline Comments Posting
+
+The Inline Comments feature allows users to post critical issues from code reviews directly as inline comments on GitHub PRs.
+
+#### How It Works
+
+1. After a review completes, the "Post Inline Comments" button appears on the PR card
+2. User clicks the button to parse critical issues from the review content
+3. Backend extracts file paths, line numbers, and issue descriptions
+4. Comments are posted to GitHub via the `gh` CLI
+5. The button disappears after comments are posted (tracked in database)
+
+#### Critical Issues Parsing
+
+The system extracts critical issues from review content using pattern matching:
+
+```python
+# Matches patterns like:
+# - Location: path/to/file.rs:123-456
+# - Problem: Description of the issue
+# - Fix: Recommended solution
+
+patterns = [
+    r'Location:\s*`?([^`\n:]+):(\d+)(?:-(\d+))?`?',  # File path and line numbers
+    r'Problem:\s*(.+?)(?=\n-|\n\n|\Z)',                # Issue description
+    r'Fix:\s*(.+?)(?=\n-|\n\n|\Z)'                     # Recommended fix
+]
+```
+
+#### UI Components
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| Post Inline Comments Button | PR Card | Appears when review exists and comments not yet posted |
+| Post Inline Comments Button | Merge Queue | Same functionality for queued PRs |
+| Loading Spinner | Button | Shows while posting in progress |
+
+#### Button Visibility Logic
+
+The button appears when all conditions are met:
+- PR has an existing review (`hasReview: true`)
+- Inline comments have not been posted (`inlineCommentsPosted: false`)
+- Review ID is available (`reviewId` is not null)
+
+#### Cache Refresh
+
+When a review completes, the PR review cache is automatically invalidated and refreshed to ensure the button appears immediately without requiring a page reload.
 
 ---
 
@@ -928,13 +1054,24 @@ Returns the current merge queue.
 {
   "queue": [
     {
+      "id": 1,
       "number": 123,
       "title": "Add new feature",
       "url": "https://github.com/owner/repo/pull/123",
       "repo": "owner/repo",
       "author": "developer",
       "additions": 150,
-      "deletions": 50
+      "deletions": 50,
+      "addedAt": "2024-01-15T10:30:00Z",
+      "notesCount": 2,
+      "prState": "OPEN",
+      "hasNewCommits": false,
+      "lastReviewedSha": "abc123",
+      "currentSha": "abc123",
+      "hasReview": true,
+      "reviewScore": 8,
+      "reviewId": 42,
+      "inlineCommentsPosted": false
     }
   ]
 }
@@ -1007,6 +1144,72 @@ Reorders items in the merge queue.
 {
   "message": "Queue reordered",
   "queue": [...]
+}
+```
+
+---
+
+### Queue Notes
+
+**GET** `/api/merge-queue/<pr_number>/notes`
+
+Gets all notes for a queue item.
+
+**Query Parameters**:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `repo` | string | Repository in `owner/repo` format |
+
+**Response**:
+```json
+{
+  "notes": [
+    {
+      "id": 1,
+      "content": "Need to verify database migrations before merge",
+      "createdAt": "2024-01-15T10:30:00Z"
+    }
+  ]
+}
+```
+
+---
+
+**POST** `/api/merge-queue/<pr_number>/notes`
+
+Adds a note to a queue item.
+
+**Request Body**:
+```json
+{
+  "repo": "owner/repo",
+  "content": "Remember to update the changelog"
+}
+```
+
+**Response**:
+```json
+{
+  "message": "Note added",
+  "note": {
+    "id": 5,
+    "content": "Remember to update the changelog",
+    "createdAt": "2024-01-15T14:00:00Z"
+  }
+}
+```
+
+---
+
+**DELETE** `/api/merge-queue/notes/<note_id>`
+
+Deletes a note from a queue item.
+
+**Response**:
+```json
+{
+  "message": "Note deleted"
 }
 ```
 
@@ -1103,6 +1306,35 @@ Gets the status of a specific review.
   "error_output": ""
 }
 ```
+
+---
+
+**POST** `/api/reviews/<review_id>/post-inline-comments`
+
+Posts critical issues from a review as inline comments on the GitHub PR.
+
+**Response** (Success):
+```json
+{
+  "message": "Posted inline comments",
+  "issues_posted": 3,
+  "issues_found": 3
+}
+```
+
+**Response** (No Issues Found):
+```json
+{
+  "message": "No critical issues found to post",
+  "issues_posted": 0,
+  "issues_found": 0
+}
+```
+
+**Error Responses**:
+- `404`: Review not found
+- `400`: Review has no content or missing PR information
+- `500`: Failed to post comments to GitHub
 
 ---
 

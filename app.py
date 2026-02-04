@@ -1090,6 +1090,9 @@ def get_merge_queue():
             review_score = None
             has_review = False
 
+            review_id = None
+            inline_comments_posted = False
+
             if len(repo_parts) == 2:
                 owner, repo = repo_parts
                 pr_state = fetch_pr_state(owner, repo, item["pr_number"])
@@ -1099,6 +1102,8 @@ def get_merge_queue():
                 if latest_review:
                     has_review = True
                     review_score = latest_review.get("score")
+                    review_id = latest_review.get("id")
+                    inline_comments_posted = latest_review.get("inline_comments_posted", False)
                     if latest_review.get("head_commit_sha"):
                         last_reviewed_sha = latest_review["head_commit_sha"]
                         current_sha = fetch_pr_head_sha(owner, repo, item["pr_number"])
@@ -1123,7 +1128,9 @@ def get_merge_queue():
                 "lastReviewedSha": last_reviewed_sha,
                 "currentSha": current_sha,
                 "hasReview": has_review,
-                "reviewScore": review_score
+                "reviewScore": review_score,
+                "reviewId": review_id,
+                "inlineCommentsPosted": inline_comments_posted
             })
         return jsonify({"queue": queue})
     except Exception as e:

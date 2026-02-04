@@ -3417,6 +3417,12 @@ input, select {
     color: #d29922;
 }
 
+/* Queue Inline Button - smaller size for queue items */
+.post-inline-btn.queue-inline-btn {
+    width: 28px;
+    height: 28px;
+}
+
 /* Queue Item Header */
 .queue-item-header {
     display: flex;
