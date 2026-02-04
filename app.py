@@ -538,15 +538,16 @@ def get_prs(owner, repo):
             "number,title,author,state,isDraft,createdAt,updatedAt,closedAt,"
             "mergedAt,url,body,headRefName,baseRefName,labels,assignees,"
             "reviewRequests,reviewDecision,mergeable,additions,deletions,changedFiles,"
-            "milestone"
+            "milestone,statusCheckRollup"
         ])
 
         output = run_gh_command(args)
         prs = parse_json_output(output)
 
-        # Post-process: add review status summary from reviewDecision field
+        # Post-process: add review status and CI status summaries
         for pr in prs:
             pr["reviewStatus"] = get_review_status(pr.get("reviewDecision"))
+            pr["ciStatus"] = get_ci_status(pr.get("statusCheckRollup"))
 
         return jsonify({"prs": prs})
 
@@ -568,6 +569,65 @@ def get_review_status(review_decision):
     if decision == "REVIEW_REQUIRED":
         return "review_required"
     return "pending"
+
+
+def get_ci_status(status_check_rollup):
+    """Determine CI status from statusCheckRollup field.
+
+    Returns: 'success', 'failure', 'pending', 'neutral', or None if no checks
+    """
+    if not status_check_rollup:
+        return None
+
+    # Handle both list format and object with contexts key
+    if isinstance(status_check_rollup, list):
+        contexts = status_check_rollup
+    else:
+        contexts = status_check_rollup.get("contexts", [])
+
+    if not contexts:
+        return None
+
+    # Count statuses
+    has_failure = False
+    has_pending = False
+    has_success = False
+
+    for check in contexts:
+        # Handle both check runs and status contexts
+        state = check.get("state", "").upper()
+        conclusion = check.get("conclusion", "").upper() if check.get("conclusion") else None
+        status = check.get("status", "").upper()
+
+        # Check runs use conclusion, status contexts use state
+        if conclusion:
+            if conclusion in ("FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"):
+                has_failure = True
+            elif conclusion == "SUCCESS":
+                has_success = True
+            elif conclusion in ("NEUTRAL", "SKIPPED"):
+                pass  # Neutral/skipped don't affect overall status
+            else:
+                has_pending = True
+        elif state:
+            if state == "FAILURE" or state == "ERROR":
+                has_failure = True
+            elif state == "SUCCESS":
+                has_success = True
+            elif state == "PENDING":
+                has_pending = True
+        elif status:
+            if status in ("IN_PROGRESS", "QUEUED", "WAITING", "PENDING"):
+                has_pending = True
+
+    # Determine overall status (failure takes priority, then pending)
+    if has_failure:
+        return "failure"
+    if has_pending:
+        return "pending"
+    if has_success:
+        return "success"
+    return "neutral"
 
 
 @app.route("/api/repos/<owner>/<repo>/contributors")

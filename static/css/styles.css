@@ -783,6 +783,101 @@ input, select {
     font-weight: 500;
 }
 
+/* GitHub Review Status Badge */
+.gh-review-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    font-size: var(--font-size-xs);
+    font-weight: 500;
+}
+
+.gh-review-badge svg {
+    flex-shrink: 0;
+}
+
+.gh-review-approved {
+    background-color: #dafbe1;
+    color: #1a7f37;
+}
+
+.dark-mode .gh-review-approved {
+    background-color: #1c4428;
+    color: #3fb950;
+}
+
+.gh-review-changes_requested {
+    background-color: #ffebe9;
+    color: #cf222e;
+}
+
+.dark-mode .gh-review-changes_requested {
+    background-color: #4c1a1d;
+    color: #f85149;
+}
+
+.gh-review-review_required {
+    background-color: #fff8c5;
+    color: #9a6700;
+}
+
+.dark-mode .gh-review-review_required {
+    background-color: #3d2e00;
+    color: #d29922;
+}
+
+/* CI Status Badge */
+.ci-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    font-size: var(--font-size-xs);
+    font-weight: 500;
+}
+
+.ci-status-badge svg {
+    flex-shrink: 0;
+}
+
+.ci-success {
+    background-color: #dafbe1;
+    color: #1a7f37;
+}
+
+.dark-mode .ci-success {
+    background-color: #1c4428;
+    color: #3fb950;
+}
+
+.ci-failure {
+    background-color: #ffebe9;
+    color: #cf222e;
+}
+
+.dark-mode .ci-failure {
+    background-color: #4c1a1d;
+    color: #f85149;
+}
+
+.ci-pending {
+    background-color: #fff8c5;
+    color: #9a6700;
+}
+
+.dark-mode .ci-pending {
+    background-color: #3d2e00;
+    color: #d29922;
+}
+
+.ci-neutral {
+    background-color: var(--bg-secondary);
+    color: var(--text-secondary);
+}
+
 .pr-title {
     display: block;
     font-size: var(--font-size-md);

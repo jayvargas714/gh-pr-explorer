@@ -701,6 +701,46 @@ createApp({
             return 'review-pending';
         };
 
+        // GitHub review status helpers
+        const getGhReviewLabel = (status) => {
+            const labels = {
+                'approved': 'Approved',
+                'changes_requested': 'Changes',
+                'review_required': 'Review needed'
+            };
+            return labels[status] || status;
+        };
+
+        const getGhReviewTitle = (status) => {
+            const titles = {
+                'approved': 'Changes approved',
+                'changes_requested': 'Changes requested',
+                'review_required': 'Review required'
+            };
+            return titles[status] || status;
+        };
+
+        // CI status helpers
+        const getCiStatusLabel = (status) => {
+            const labels = {
+                'success': 'CI passed',
+                'failure': 'CI failed',
+                'pending': 'CI running',
+                'neutral': 'CI skipped'
+            };
+            return labels[status] || status;
+        };
+
+        const getCiStatusTitle = (status) => {
+            const titles = {
+                'success': 'All checks passed',
+                'failure': 'Some checks failed',
+                'pending': 'Checks in progress',
+                'neutral': 'Checks skipped or neutral'
+            };
+            return titles[status] || status;
+        };
+
         const formatDate = (dateString) => {
             if (!dateString) return '';
             const date = new Date(dateString);
@@ -708,19 +748,32 @@ createApp({
             const diffMs = now - date;
             const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
+            // Format local time as HH:MM
+            const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            // For today, show relative time + actual time
             if (diffDays === 0) {
                 const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
                 if (diffHours === 0) {
                     const diffMins = Math.floor(diffMs / (1000 * 60));
-                    return `${diffMins}m ago`;
+                    return `${diffMins}m ago (${timeStr})`;
                 }
-                return `${diffHours}h ago`;
+                return `${diffHours}h ago (${timeStr})`;
             }
-            if (diffDays === 1) return 'yesterday';
-            if (diffDays < 7) return `${diffDays}d ago`;
-            if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
-            if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
-            return `${Math.floor(diffDays / 365)}y ago`;
+
+            // For yesterday, show "yesterday" + time
+            if (diffDays === 1) return `yesterday ${timeStr}`;
+
+            // For this week, show day + time
+            if (diffDays < 7) return `${diffDays}d ago ${timeStr}`;
+
+            // For older dates, show date + time
+            const dateStr = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+            if (diffDays < 365) return `${dateStr} ${timeStr}`;
+
+            // For dates over a year, include the year
+            const fullDateStr = date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+            return `${fullDateStr} ${timeStr}`;
         };
 
         const truncateBody = (body) => {
@@ -1432,7 +1485,9 @@ createApp({
             return date.toLocaleDateString('en-US', {
                 year: 'numeric',
                 month: 'short',
-                day: 'numeric'
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit'
             });
         };
 
@@ -1897,6 +1952,10 @@ createApp({
             getStateIcon,
             getStateLabel,
             getReviewClass,
+            getGhReviewLabel,
+            getGhReviewTitle,
+            getCiStatusLabel,
+            getCiStatusTitle,
             formatDate,
             truncateBody,
 
