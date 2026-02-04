@@ -529,6 +529,60 @@ The Stats view provides aggregated metrics for all contributors to a repository.
 - Full CSS variable system for seamless switching
 - Respects system preference on first load
 
+### PR Card Status Badges
+
+PR cards display multiple status badges to provide at-a-glance information about each pull request.
+
+#### GitHub Review Status Badge
+
+Shows the current review status from GitHub's review system:
+
+| Status | Color | Description |
+|--------|-------|-------------|
+| Approved | Green | Changes have been approved by reviewers |
+| Changes Requested | Red | Reviewers have requested changes |
+| Review Required | Yellow | PR requires review before merging |
+
+#### CI Status Badge
+
+Shows the status of CI/CD checks (GitHub Actions, etc.):
+
+| Status | Color | Description |
+|--------|-------|-------------|
+| CI passed | Green | All checks have passed |
+| CI failed | Red | One or more checks failed |
+| CI running | Yellow | Checks are in progress |
+| CI skipped | Gray | Checks were skipped or neutral |
+
+The CI status is derived from the `statusCheckRollup` field which aggregates all check runs and status contexts for the PR.
+
+#### Other PR Card Badges
+
+| Badge | Description |
+|-------|-------------|
+| Draft | Orange badge for draft PRs |
+| Review Score | Color-coded score from Claude code review (0-10) |
+| New Commits | Indicates commits added since last review |
+| Posted | Shows inline comments have been posted to GitHub |
+
+### Settings Persistence
+
+User settings are automatically saved to the SQLite database and restored on page load:
+
+#### Persisted Settings
+
+- **Selected Account**: Last selected GitHub account/organization
+- **Selected Repository**: Last selected repository
+- **All Filter Settings**: State, draft status, review filters, people filters, date filters, advanced filters
+
+#### How It Works
+
+1. Settings are saved with a 1-second debounce after any change
+2. On page load, settings are fetched from `/api/settings/filter_settings`
+3. Account and repository selections are restored first
+4. Filter settings are restored after selections complete (to avoid reset conflicts)
+5. PRs are re-fetched with the restored filter configuration
+
 ### Review History
 
 The Review History feature provides access to all past code reviews, enabling users to search, filter, and view historical review content.
@@ -933,6 +987,8 @@ Fetches PRs with advanced filtering.
       "reviewRequests": [],
       "reviewDecision": "APPROVED",
       "reviewStatus": "approved",
+      "ciStatus": "success",
+      "statusCheckRollup": [...],
       "mergeable": "MERGEABLE",
       "additions": 150,
       "deletions": 50,
@@ -942,6 +998,13 @@ Fetches PRs with advanced filtering.
   ]
 }
 ```
+
+**Computed Fields**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `reviewStatus` | string | Computed from `reviewDecision`: "approved", "changes_requested", "review_required", or "pending" |
+| `ciStatus` | string | Computed from `statusCheckRollup`: "success", "failure", "pending", "neutral", or null |
 
 ### Repository Metadata
 
