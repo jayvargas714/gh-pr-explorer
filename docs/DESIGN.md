@@ -23,6 +23,9 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
 - **Unified PR View**: Browse PRs across personal accounts and organizations from a single interface
 - **Advanced Filtering**: Comprehensive filter system supporting GitHub's full search syntax
 - **Developer Analytics**: Aggregated statistics showing contribution patterns and review activity
+- **CI/Workflow Monitoring**: View workflow runs, pass rates, and failure trends
+- **PR Lifecycle Insights**: Track time-to-merge, time-to-first-review, and stale PR detection
+- **Code Activity Visualization**: Weekly commit frequency, code churn, and owner vs. community participation
 - **Zero Authentication Setup**: Leverages existing GitHub CLI (`gh`) authentication
 - **Lightweight Deployment**: Single-file Flask backend with CDN-loaded frontend dependencies
 
@@ -64,6 +67,7 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
         |                 |   (database.py)   |<----|   (code reviews)  |
         |                 |   - reviews       |     |                   |
         |                 |   - merge_queue   |     |                   |
+        |                 |   - lifecycle_cache|    |                   |
         |                 |   - migrations    |     |                   |
         +---------------->+-------------------+     +-------------------+
                                   |
@@ -126,6 +130,7 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
 | `run_gh_command()` | Executes GitHub CLI commands via subprocess |
 | `parse_json_output()` | Parses JSON output from gh CLI |
 | `get_review_status()` | Maps GitHub review decision to human-readable status |
+| `fetch_github_stats_api()` | Reusable helper for GitHub stats endpoints with 202-retry logic |
 
 **Helper Functions**:
 
@@ -134,6 +139,8 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
 | `fetch_contributor_stats()` | Retrieves commit statistics with retry logic for 202 responses |
 | `fetch_pr_stats()` | Aggregates PR counts by author |
 | `fetch_review_stats()` | Collects review activity across PRs |
+| `fetch_github_stats_api()` | Generic GitHub stats API fetcher with 202-retry pattern and configurable retries |
+| `fetch_pr_review_times()` | Enriches PRs with review timing data using ThreadPoolExecutor; cached in SQLite with 2-hour TTL |
 | `_check_review_status()` | Checks and updates status of a review subprocess |
 | `_start_review_process()` | Spawns Claude CLI subprocess for code review |
 
@@ -150,6 +157,8 @@ The database module provides SQLite-based persistence for reviews and merge queu
 | `Database` | Base class managing SQLite connection and schema initialization |
 | `ReviewsDB` | Handles review storage, retrieval, and search operations |
 | `MergeQueueDB` | Manages merge queue persistence and ordering |
+| `DevStatsDB` | Caches developer statistics with 4-hour TTL for improved performance |
+| `LifecycleCacheDB` | Caches PR lifecycle and review timing data with 2-hour TTL |
 
 #### Database Schema
 
@@ -205,6 +214,43 @@ CREATE TABLE migrations (
     name TEXT NOT NULL UNIQUE,
     executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Developer stats table: Caches contributor statistics
+CREATE TABLE developer_stats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL,
+    username TEXT NOT NULL,
+    total_prs INTEGER DEFAULT 0,
+    open_prs INTEGER DEFAULT 0,
+    merged_prs INTEGER DEFAULT 0,
+    closed_prs INTEGER DEFAULT 0,
+    total_additions INTEGER DEFAULT 0,
+    total_deletions INTEGER DEFAULT 0,
+    avg_pr_score REAL,
+    reviewed_pr_count INTEGER DEFAULT 0,
+    commits INTEGER DEFAULT 0,
+    avatar_url TEXT,
+    reviews_given INTEGER DEFAULT 0,
+    approvals INTEGER DEFAULT 0,
+    changes_requested INTEGER DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(repo, username)
+);
+
+-- Stats metadata table: Tracks last update times for stats cache
+CREATE TABLE stats_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL UNIQUE,
+    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- PR lifecycle cache table: Caches enriched PR data for lifecycle/review metrics
+CREATE TABLE pr_lifecycle_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL UNIQUE,
+    data TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
 #### ReviewsDB Methods
@@ -230,6 +276,29 @@ CREATE TABLE migrations (
 | `remove_from_queue()` | Removes a PR from the queue |
 | `reorder_queue()` | Moves an item from one position to another |
 | `is_in_queue()` | Checks if a PR is already in the queue |
+
+#### DevStatsDB Methods
+
+| Method | Description |
+|--------|-------------|
+| `get_stats()` | Returns cached stats for a repository |
+| `save_stats()` | Saves developer stats with timestamp |
+| `get_last_updated()` | Gets the last update timestamp for a repo |
+| `is_stale()` | Checks if cached stats are older than TTL (4 hours) |
+
+#### LifecycleCacheDB Methods
+
+| Method | Description |
+|--------|-------------|
+| `get_cached()` | Returns cached lifecycle data (JSON blob) for a repository |
+| `save_cache()` | Saves enriched PR lifecycle data with upsert (INSERT ON CONFLICT UPDATE) |
+| `is_stale()` | Checks if cached data is older than TTL (default 2 hours) |
+
+**Note**: When returning cached stats, the backend transforms field names to match the frontend expectations:
+- `username` → `login`
+- `total_prs` → `prs_authored`
+- `total_additions` → `lines_added`
+- `total_deletions` → `lines_deleted`
 
 #### Score Extraction
 
@@ -295,10 +364,50 @@ prs: ref([])
 loading: ref(false)
 error: ref(null)
 
+// Pagination
+currentPage: ref(1)
+prsPerPage: 20  // constant
+
+// View Toggle
+activeView: ref('prs')          // 'prs', 'analytics', 'workflows'
+activeAnalyticsTab: ref('stats') // 'stats', 'lifecycle', 'activity', 'responsiveness'
+
 // Developer Statistics
 developerStats: ref([])
 statsLoading: ref(false)
 statsSortBy: ref('commits')
+
+// Branch Divergence
+prDivergence: ref({})            // key: PR number, value: {status, ahead_by, behind_by}
+divergenceLoading: ref(false)
+
+// CI/Workflows
+workflowRuns: ref([])
+workflowsLoading: ref(false)
+workflowsError: ref(null)
+workflowsList: ref([])
+workflowStats: ref(null)
+workflowFilters: reactive({ workflow: '', branch: '', event: '', conclusion: '' })
+workflowSortBy: ref('created_at')
+workflowSortDirection: ref('desc')
+workflowPage: ref(1)
+workflowsPerPage: 25  // constant
+
+// Code Activity
+codeActivity: ref(null)
+activityLoading: ref(false)
+activityError: ref(null)
+activityTimeframe: ref(52)       // weeks: 4, 13, 26, 52
+
+// PR Lifecycle Metrics
+lifecycleMetrics: ref(null)
+lifecycleLoading: ref(false)
+lifecycleError: ref(null)
+
+// Review Responsiveness
+reviewResponsiveness: ref(null)
+responsivenessLoading: ref(false)
+responsivenessError: ref(null)
 
 // Merge Queue
 mergeQueue: ref([])
@@ -331,7 +440,14 @@ postingInlineComments: ref({})  // key: review_id, value: boolean (loading state
 |----------|-------------|
 | `activeFiltersCount` | Count of non-default filter values |
 | `sortedDeveloperStats` | Developer stats sorted by selected column |
+| `sortedLifecyclePRs` | Lifecycle PRs sorted by selected column, null values pushed to bottom |
+| `sortedReviewerLeaderboard` | Reviewer leaderboard sorted by selected column |
+| `sortedWorkflowRuns` | Workflow runs sorted by selected column |
+| `paginatedWorkflowRuns` | Slice of sorted workflow runs for current page (25 per page) |
+| `totalWorkflowPages` | Total pages for workflow runs pagination |
 | `filteredRepos` | Repository list filtered by search term |
+| `totalPages` | Total number of pages based on PR count and page size |
+| `paginatedPRs` | Slice of PRs array for current page |
 
 #### Key Methods
 
@@ -343,6 +459,39 @@ postingInlineComments: ref({})  // key: review_id, value: boolean (loading state
 | `fetchDeveloperStats()` | Loads aggregated developer statistics |
 | `fetchRepoMetadata()` | Parallel fetch of contributors, labels, branches, milestones, teams |
 | `resetFilters()` | Resets all filters to default values |
+| `setActiveView(view)` | Switches main tab (prs, analytics, workflows); lazy-loads data |
+| `setAnalyticsTab(tab)` | Switches analytics sub-tab; lazy-loads data for each sub-tab |
+| `refreshCurrentView()` | Re-fetches data for the currently active view/tab |
+
+**Branch Divergence Methods**:
+
+| Method | Description |
+|--------|-------------|
+| `fetchDivergenceForPRs()` | Batch-fetches ahead/behind data for all open PRs |
+| `getDivergenceInfo(prNumber)` | Returns divergence data for a specific PR |
+| `getDivergenceClass(prNumber)` | Returns CSS class based on behind count (current/slightly-behind/far-behind) |
+
+**CI/Workflow Methods**:
+
+| Method | Description |
+|--------|-------------|
+| `fetchWorkflowRuns()` | Loads workflow runs with current filters |
+| `resetWorkflowFilters()` | Resets workflow filters and re-fetches |
+| `sortWorkflows(column)` | Sorts workflow runs table by column |
+| `formatDuration(seconds)` | Formats seconds into human-readable duration (e.g., "3m 45s") |
+| `getWorkflowConclusionClass(conclusion)` | Returns CSS class for workflow run conclusion |
+
+**Analytics Methods**:
+
+| Method | Description |
+|--------|-------------|
+| `fetchCodeActivity()` | Loads code activity data with timeframe parameter |
+| `fetchLifecycleMetrics()` | Loads PR lifecycle metrics (time-to-merge, stale PRs) |
+| `fetchReviewResponsiveness()` | Loads per-reviewer responsiveness metrics |
+| `formatHours(hours)` | Formats hours into human-readable string (e.g., "2d 5h") |
+| `getBarHeight(value, maxValue)` | Computes CSS bar height for chart visualizations |
+| `sortLifecyclePRs(column)` | Sorts lifecycle PR table by column |
+| `sortResponsiveness(column)` | Sorts responsiveness leaderboard by column |
 
 **Merge Queue Methods**:
 
@@ -391,16 +540,39 @@ The template is a Jinja2 file containing the Vue.js single-file component struct
 
 | Section | Description |
 |---------|-------------|
-| Header | Logo, title, merge queue toggle, theme toggle button |
+| Header | Logo, title, merge queue toggle, history toggle, theme toggle button |
 | Account Selector | Buttons for personal account and organizations |
 | Repository Selector | Searchable dropdown with repo list |
 | Filter Panel | Tabbed interface with 5 filter categories |
-| PR List / Stats View | Toggle between PR cards and developer stats table |
+| Main View Toggle | 3-tab switcher: Pull Requests, Analytics, CI/Workflows |
+| PR View | PR cards with badges, pagination, divergence indicators |
+| Analytics View | 4 sub-tabs: Stats, Lifecycle, Activity, Reviews |
+| CI/Workflows View | Workflow filter bar, stat cards, and runs table |
 | PR Card Actions | Queue button, review button, description button per PR |
 | Description Modal | Markdown-rendered PR description popup |
 | Review Error Modal | Error details when a code review fails |
 | Queue Panel | Slide-out panel for managing merge queue |
+| History Panel | Slide-out panel for review history browsing |
 | Welcome Section | Onboarding message for unauthenticated users |
+
+#### Main Tab Architecture
+
+The application uses a 3-tab layout as the primary navigation:
+
+| Tab | View Key | Description |
+|-----|----------|-------------|
+| Pull Requests | `prs` | PR list with filters, pagination, and action buttons |
+| Analytics | `analytics` | 4 sub-tabs for developer and repository analytics |
+| CI/Workflows | `workflows` | Workflow run history with filters and aggregate stats |
+
+#### Analytics Sub-tabs
+
+| Sub-tab | Tab Key | Description |
+|---------|---------|-------------|
+| Stats | `stats` | Developer contribution statistics table |
+| Lifecycle | `lifecycle` | PR lifecycle metrics, merge time distribution, stale PR detection |
+| Activity | `activity` | Code activity charts: commits, code changes, participation |
+| Reviews | `responsiveness` | Per-reviewer response times, leaderboard, bottleneck detection |
 
 ### Styling
 
@@ -412,6 +584,11 @@ The CSS uses a modern design system with:
 - **Dark/Light Mode**: Full theme support via `.dark-mode` class
 - **Responsive Design**: Mobile-first with breakpoint at 768px
 - **Component Styles**: Modular styling for cards, buttons, tables, modals
+- **CSS-only Charts**: Bar charts and stacked charts using pure CSS (no chart library) with native tooltips
+- **Column Tooltips**: `th[title]` cursor set to `help` for non-sortable headers; sortable headers use `pointer` cursor
+- **Reusable `.stat-cards` Grid**: 4-column responsive grid for summary stat cards
+- **Divergence Badges**: Color-coded branch behind indicators (green/yellow/red)
+- **Workflow Status Classes**: `.wf-success`, `.wf-failure`, `.wf-cancelled`, `.wf-in-progress`
 
 ---
 
@@ -433,6 +610,32 @@ Selection triggers a repository list refresh for the chosen context.
 - **Visibility Indicator**: Public/Private badge for each repo
 - **Lazy Loading**: Repositories loaded on-demand per account
 - **Limit**: Fetches up to 200 repositories per account
+
+### PR List Pagination
+
+The PR list implements client-side pagination for improved performance and navigation:
+
+- **Page Size**: 20 PRs displayed per page
+- **Fetch Size**: Always fetches 100 PRs from the API for client-side pagination
+- **Navigation**: Previous/Next buttons with disabled states at boundaries
+- **Page Info**: "Page X of Y (Z PRs)" display showing current position
+- **Auto-reset**: Pagination resets to page 1 when filters change
+- **Smooth Scroll**: Page changes scroll to top of PR list section
+
+#### UI Components
+
+| Component | Description |
+|-----------|-------------|
+| Previous Button | Navigate to previous page (disabled on page 1) |
+| Next Button | Navigate to next page (disabled on last page) |
+| Page Info | Shows current page, total pages, and total PR count |
+
+#### Implementation Details
+
+- **Client-side**: Pagination is handled entirely in the browser using Vue.js computed properties
+- **paginatedPRs**: Computed property that slices the full PR array for current page
+- **Performance**: Avoids additional API calls when navigating pages
+- **State Reset**: `currentPage` resets to 1 when `fetchPRs()` is called
 
 ### PR Filtering System
 
@@ -495,7 +698,11 @@ The filter panel is organized into five tabs:
 | Exclude Milestone | Toggle + select | Hide PRs with specific milestone |
 | Custom Sort | Toggle + select + direction | Sort by created, updated, comments, reactions, interactions |
 
-### Developer Stats Tab
+### Analytics Tab
+
+The Analytics tab provides four sub-views for repository and team analytics. Data is lazy-loaded when each sub-tab is first selected.
+
+### Developer Stats (Analytics > Stats)
 
 The Stats view provides aggregated metrics for all contributors to a repository.
 
@@ -516,11 +723,174 @@ The Stats view provides aggregated metrics for all contributors to a repository.
 
 #### Features
 
-- **Sortable Columns**: Click any column header to sort ascending/descending
+- **Sortable Columns**: Click any column header to sort ascending/descending with visual indicators (▼/▲/⇅)
+- **Column Tooltips**: Hover any column header for a description of the metric
 - **Sticky Developer Column**: First column stays visible while scrolling horizontally
 - **Formatted Numbers**: Large numbers displayed with K/M suffixes
 - **Color-coded Values**: Merge rate and stat types use semantic colors
 - **Avatar Display**: Developer avatars shown inline
+
+### PR Lifecycle Metrics (Analytics > Lifecycle)
+
+The Lifecycle sub-tab shows how long PRs take to move through the review and merge pipeline.
+
+#### Summary Cards
+
+| Metric | Description |
+|--------|-------------|
+| Median Time to Merge | Median hours from PR creation to merge |
+| Avg Time to Merge | Average hours from PR creation to merge |
+| Median Time to First Review | Median hours from PR creation to first review |
+| Avg Time to First Review | Average hours from PR creation to first review |
+
+#### Merge Time Distribution
+
+A bucket-based histogram showing the distribution of time-to-merge values:
+
+| Bucket | Range |
+|--------|-------|
+| < 1h | Merged within 1 hour |
+| 1-4h | Merged within 1-4 hours |
+| 4-24h | Merged within 4-24 hours |
+| 1-3d | Merged within 1-3 days |
+| 3-7d | Merged within 3-7 days |
+| > 7d | Merged after more than 7 days |
+
+#### Stale PR Detection
+
+Identifies open PRs with no activity in the last 14 days. Displays a warning list with PR number, title, author, and age in days.
+
+#### PR Lifecycle Table
+
+Fully sortable table of all analyzed PRs. All six columns (PR#, Author, State, Time to Review, Time to Merge, First Reviewer) support click-to-sort with ascending/descending toggle and visual sort indicators. Column headers include tooltips describing each metric. Null values are pushed to the bottom of sorted results. Sorting is performed client-side via the `sortedLifecyclePRs` computed property.
+
+### Code Activity (Analytics > Activity)
+
+The Activity sub-tab visualizes repository code activity over a configurable timeframe using CSS-only bar charts.
+
+#### Timeframe Toggle
+
+Users can select the analysis window: 1 month (4 weeks), 3 months (13 weeks), 6 months (26 weeks), or 1 year (52 weeks).
+
+#### Summary Cards
+
+| Metric | Description |
+|--------|-------------|
+| Total Commits | Total commits in the selected timeframe |
+| Avg Weekly Commits | Average commits per week |
+| Lines Added | Total lines added across all weeks |
+| Lines Deleted | Total lines deleted across all weeks |
+| Peak Week | Week with the highest commit count |
+| Owner % | Percentage of commits from repository owner |
+
+#### Visualizations
+
+| Chart | Type | Description |
+|-------|------|-------------|
+| Weekly Commits | Bar chart | Vertical bars showing commit count per week |
+| Code Changes | Stacked bar chart | Additions (green) and deletions (red) per week |
+| Participation | Grouped bars | Owner commits vs. community commits per week |
+
+All charts are implemented with pure CSS (no JavaScript chart libraries). Bar heights are computed as percentages of the maximum value in each dataset.
+
+#### Data Sources
+
+Uses three GitHub Stats API endpoints fetched via the `fetch_github_stats_api()` helper:
+
+| Endpoint | Data Provided |
+|----------|---------------|
+| `stats/code_frequency` | Weekly additions and deletions |
+| `stats/commit_activity` | Weekly commit totals and per-day breakdowns |
+| `stats/participation` | Owner vs. all-contributor weekly commit counts |
+
+Data is cached in-memory with a 10-minute TTL (via the `@cached(ttl_seconds=600)` decorator).
+
+### Review Responsiveness (Analytics > Reviews)
+
+The Reviews sub-tab shows per-reviewer response times and identifies review bottlenecks.
+
+#### Team Summary
+
+| Metric | Description |
+|--------|-------------|
+| Avg Team Response | Average response time across all reviewers |
+| Fastest Reviewer | Reviewer with the lowest average response time |
+| PRs Awaiting Review | Count of open PRs with no reviews |
+
+#### Reviewer Leaderboard
+
+Fully sortable table of all reviewers. All columns support click-to-sort with ascending/descending toggle, visual sort indicators (▼/▲/⇅), and active column highlighting. Column headers include tooltips. Sorting is performed client-side via the `sortedReviewerLeaderboard` computed property. Columns:
+
+| Column | Description |
+|--------|-------------|
+| Reviewer | GitHub username |
+| Avg Response Time | Average hours from PR creation to review submission |
+| Median Response Time | Median hours from PR creation to review submission |
+| Total Reviews | Number of reviews given |
+| Approvals | Number of approval reviews |
+| Changes Requested | Number of "changes requested" reviews |
+| Approval Rate | Percentage of reviews that are approvals |
+
+#### Bottleneck Detection
+
+Lists the top 10 open PRs that have been waiting longest for a review, sorted by wait time in descending order. Each bottleneck entry shows PR number, title, author, and hours waiting.
+
+### CI/Workflows Tab
+
+The CI/Workflows tab provides visibility into GitHub Actions workflow runs for the selected repository.
+
+#### Workflow Filters
+
+| Filter | Type | Description |
+|--------|------|-------------|
+| Workflow | Select dropdown | Filter by specific workflow |
+| Branch | Select dropdown | Filter by branch |
+| Event | Select dropdown | Filter by trigger event (push, pull_request, schedule, etc.) |
+| Conclusion | Select dropdown | Filter by outcome (success, failure, cancelled, skipped) |
+
+#### Aggregate Stats Cards
+
+| Metric | Description |
+|--------|-------------|
+| Total Runs | Number of workflow runs in the result set |
+| Pass Rate | Percentage of completed runs that succeeded |
+| Avg Duration | Average duration of completed runs |
+| Failures | Total number of failed runs |
+
+#### Workflow Runs Table
+
+All columns are sortable with click-to-sort, ascending/descending toggle, and visual sort indicators. Column headers include tooltips. Default sort is by Started (descending).
+
+| Column | Description |
+|--------|-------------|
+| Workflow | Workflow name and display title |
+| Status/Conclusion | Run outcome with color-coded badge |
+| Branch | Head branch that triggered the run |
+| Event | Trigger event type |
+| Actor | User who triggered the run |
+| Duration | Computed from created_at to updated_at |
+| Started | Timestamp of run creation |
+
+#### Workflow Pagination
+
+The workflow runs table implements client-side pagination over server-fetched data:
+
+- **Page Size**: 25 runs per page
+- **Fetch Size**: Backend fetches up to 3 pages from GitHub API (300 runs max)
+- **Navigation**: Previous/Next buttons with disabled states at boundaries
+- **Page Info**: "Page X of Y (Z runs)" display
+- **Auto-reset**: Page resets to 1 when filters change or new data is fetched
+- **Sorting**: Pagination operates on the sorted result set
+
+#### Conclusion Color Coding
+
+| Conclusion | CSS Class | Color |
+|------------|-----------|-------|
+| success | `wf-success` | Green |
+| failure | `wf-failure` | Red |
+| cancelled | `wf-cancelled` | Gray |
+| in_progress | `wf-in-progress` | Yellow |
+| skipped | `wf-skipped` | Gray |
 
 ### Dark/Light Theme Support
 
@@ -564,6 +934,19 @@ The CI status is derived from the `statusCheckRollup` field which aggregates all
 | Review Score | Color-coded score from Claude code review (0-10) |
 | New Commits | Indicates commits added since last review |
 | Posted | Shows inline comments have been posted to GitHub |
+| Branch Divergence | Shows how many commits behind the base branch (open PRs only) |
+
+#### Branch Divergence Badge
+
+Shows how far behind the base branch each open PR's head branch is:
+
+| State | Color | Commits Behind | CSS Class |
+|-------|-------|----------------|-----------|
+| Current | Green | 0 | `divergence-current` |
+| Slightly Behind | Yellow | 1-10 | `divergence-slightly-behind` |
+| Far Behind | Red | 11+ | `divergence-far-behind` |
+
+Divergence data is automatically fetched after the PR list loads. The backend uses `ThreadPoolExecutor` (5 workers) to batch-fetch the GitHub compare API for all open PRs in parallel. The badge displays the `behind_by` count from the GitHub compare endpoint.
 
 ### Settings Persistence
 
@@ -600,7 +983,8 @@ The Review History feature provides access to all past code reviews, enabling us
 #### History Panel Features
 
 - **Search**: Full-text search across review content and PR titles
-- **Filters**: Filter by repository, author, date range, and score range
+- **Filters**: Filter by repository, author, PR number, date range, and score range
+- **PR Number Search**: Quick lookup of reviews by specific PR number
 - **Sorting**: Sort by date, score, or PR number
 - **Pagination**: Browse through large review histories
 - **Quick View**: Click any review to open full content in modal
@@ -1105,6 +1489,205 @@ Returns aggregated developer statistics.
   ]
 }
 ```
+
+### Branch Divergence
+
+**POST** `/api/repos/<owner>/<repo>/prs/divergence`
+
+Batch-fetches branch ahead/behind information for open PRs using the GitHub compare API. Uses `ThreadPoolExecutor` with 5 workers for parallel fetching.
+
+**Request Body**:
+```json
+{
+  "prs": [
+    { "number": 123, "base": "main", "head": "feature-branch" },
+    { "number": 124, "base": "main", "head": "fix-bug" }
+  ]
+}
+```
+
+**Response**:
+```json
+{
+  "divergence": {
+    "123": { "status": "behind", "ahead_by": 2, "behind_by": 5 },
+    "124": { "status": "identical", "ahead_by": 0, "behind_by": 0 }
+  }
+}
+```
+
+**Error Responses**:
+- `400`: Missing `prs` in request body
+- `500`: Failed to fetch divergence data
+
+---
+
+### CI/Workflow Runs
+
+**GET** `/api/repos/<owner>/<repo>/workflow-runs`
+
+Returns GitHub Actions workflow runs with optional filters and aggregate statistics. Cached with the default TTL.
+
+**Query Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | integer | 50 | Maximum runs to return (capped at 100) |
+| `workflow_id` | integer | - | Filter by workflow ID |
+| `branch` | string | - | Filter by branch name |
+| `event` | string | - | Filter by trigger event (push, pull_request, schedule) |
+| `status` | string | - | Filter by run status |
+| `conclusion` | string | - | Filter by run conclusion (success, failure, cancelled) |
+
+**Response**:
+```json
+{
+  "runs": [
+    {
+      "id": 12345,
+      "name": "CI",
+      "display_title": "Fix authentication bug",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:35:00Z",
+      "event": "push",
+      "head_branch": "main",
+      "run_attempt": 1,
+      "run_number": 456,
+      "html_url": "https://github.com/owner/repo/actions/runs/12345",
+      "actor_login": "developer",
+      "duration_seconds": 300
+    }
+  ],
+  "stats": {
+    "total_runs": 50,
+    "pass_rate": 92.5,
+    "avg_duration": 285,
+    "failure_count": 3,
+    "success_count": 37,
+    "runs_by_workflow": {
+      "CI": { "total": 30, "failures": 2 },
+      "Deploy": { "total": 20, "failures": 1 }
+    }
+  },
+  "workflows": [
+    { "id": 1, "name": "CI", "state": "active", "path": ".github/workflows/ci.yml" }
+  ]
+}
+```
+
+---
+
+### Code Activity
+
+**GET** `/api/repos/<owner>/<repo>/code-activity`
+
+Returns code activity statistics including commit frequency, code changes, and owner/community participation. Cached with a 10-minute TTL.
+
+**Query Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `weeks` | integer | 52 | Number of weeks to analyze (1-52) |
+
+**Response**:
+```json
+{
+  "weekly_commits": [
+    { "week": "2024-01-08", "total": 15, "days": [2, 3, 4, 1, 2, 3, 0] }
+  ],
+  "code_changes": [
+    { "week": "2024-01-08", "additions": 500, "deletions": 200 }
+  ],
+  "owner_commits": [10, 12, 8],
+  "community_commits": [5, 3, 7],
+  "summary": {
+    "total_commits": 150,
+    "avg_weekly_commits": 11.5,
+    "total_additions": 15000,
+    "total_deletions": 8000,
+    "peak_week": "2024-01-08",
+    "peak_commits": 25,
+    "owner_percentage": 65.3
+  }
+}
+```
+
+---
+
+### PR Lifecycle Metrics
+
+**GET** `/api/repos/<owner>/<repo>/lifecycle-metrics`
+
+Returns PR lifecycle metrics including time-to-merge, time-to-first-review, stale PR detection, and merge time distribution. Uses `fetch_pr_review_times()` shared helper with SQLite cache (2-hour TTL).
+
+**Response**:
+```json
+{
+  "median_time_to_merge": 18.5,
+  "avg_time_to_merge": 42.3,
+  "median_time_to_first_review": 4.2,
+  "avg_time_to_first_review": 8.7,
+  "stale_prs": [
+    { "number": 45, "title": "Old feature", "author": "developer", "age_days": 21.3 }
+  ],
+  "stale_count": 3,
+  "distribution": {
+    "<1h": 5,
+    "1-4h": 12,
+    "4-24h": 18,
+    "1-3d": 8,
+    "3-7d": 4,
+    ">7d": 3
+  },
+  "pr_table": [
+    {
+      "number": 123,
+      "title": "Add new feature",
+      "author": "developer",
+      "created_at": "2024-01-10T08:00:00Z",
+      "state": "MERGED",
+      "time_to_first_review_hours": 2.5,
+      "time_to_merge_hours": 18.3,
+      "first_reviewer": "reviewer1"
+    }
+  ]
+}
+```
+
+---
+
+### Review Responsiveness
+
+**GET** `/api/repos/<owner>/<repo>/review-responsiveness`
+
+Returns per-reviewer response time metrics, a ranked leaderboard, and bottleneck detection for unreviewed PRs. Shares the `fetch_pr_review_times()` cached data with the lifecycle endpoint.
+
+**Response**:
+```json
+{
+  "leaderboard": [
+    {
+      "reviewer": "fast-reviewer",
+      "avg_response_time_hours": 2.5,
+      "median_response_time_hours": 1.8,
+      "total_reviews": 45,
+      "approvals": 38,
+      "changes_requested": 5,
+      "approval_rate": 84.4
+    }
+  ],
+  "bottlenecks": [
+    { "number": 99, "title": "Waiting PR", "author": "developer", "wait_hours": 120.5 }
+  ],
+  "avg_team_response_hours": 8.3,
+  "fastest_reviewer": "fast-reviewer",
+  "prs_awaiting_review": 5
+}
+```
+
+---
 
 ### Merge Queue
 
@@ -1633,6 +2216,12 @@ def run_gh_command(args, check=True):
 | `gh api repos/.../milestones` | Get milestones |
 | `gh api repos/.../teams` | Get teams |
 | `gh api repos/.../stats/contributors` | Get commit statistics |
+| `gh api repos/.../stats/code_frequency` | Get weekly code additions/deletions |
+| `gh api repos/.../stats/commit_activity` | Get weekly commit activity |
+| `gh api repos/.../stats/participation` | Get owner vs. community participation |
+| `gh api repos/.../compare/{base}...{head}` | Get branch comparison (ahead/behind) |
+| `gh api repos/.../actions/workflows` | List repository workflows |
+| `gh api repos/.../actions/runs` | List workflow runs with filters |
 | `gh api repos/.../pulls/.../reviews` | Get PR reviews |
 
 ### Caching Mechanism
@@ -1650,7 +2239,8 @@ def cached(ttl_seconds=None):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            cache_key = f"{func.__name__}:{args}:{sorted(kwargs.items())}"
+            qs = request.query_string.decode() if request else ''
+            cache_key = f"{func.__name__}:{args}:{sorted(kwargs.items())}:{qs}"
             now = time.time()
 
             if cache_key in cache:
@@ -1670,7 +2260,7 @@ def cached(ttl_seconds=None):
 **Characteristics**:
 - **Scope**: Per-process, in-memory
 - **TTL**: Configurable, default 5 minutes
-- **Key Generation**: Function name + arguments + keyword arguments
+- **Key Generation**: Function name + arguments + keyword arguments + request query string
 - **Invalidation**: Manual via `/api/clear-cache` endpoint or process restart
 
 ### Error Handling
@@ -1692,20 +2282,46 @@ The application implements error handling at multiple levels:
 
 **GitHub Stats API Handling**:
 
-The `/stats/contributors` endpoint may return 202 when computing statistics. The application implements retry logic:
+GitHub stats endpoints (`stats/contributors`, `stats/code_frequency`, `stats/commit_activity`, `stats/participation`) may return HTTP 202 while computing statistics. The application implements a reusable helper with retry logic:
 
 ```python
-def fetch_contributor_stats(owner, repo):
-    max_retries = 3
-    retry_delay = 2  # seconds
-
+def fetch_github_stats_api(owner, repo, endpoint, jq_query=None, max_retries=3, retry_delay=2):
+    """Fetch data from GitHub's stats API with 202-retry logic."""
     for attempt in range(max_retries):
-        # Check for 202 response
-        if "HTTP/2.0 202" in result.stdout:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{owner}/{repo}/{endpoint}", "-i"],
+            capture_output=True, text=True, check=False,
+        )
+        if "HTTP/2.0 202" in result.stdout or "202 Accepted" in result.stdout:
             if attempt < max_retries - 1:
                 time.sleep(retry_delay)
                 continue
-        # ... process response
+            else:
+                return []
+        # ... fetch with optional jq query and parse
+    return []
+```
+
+This helper is used by:
+- `fetch_contributor_stats()` for developer statistics
+- `get_code_activity()` for commit frequency, code churn, and participation data
+
+### Parallel API Fetching
+
+The application uses `concurrent.futures.ThreadPoolExecutor` for parallel API calls in performance-critical paths:
+
+| Usage | Max Workers | Description |
+|-------|-------------|-------------|
+| Branch divergence | 5 | Batch compare API calls for all open PRs |
+| PR review times | 5 | Fetch reviews for each PR in lifecycle/responsiveness endpoints |
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+with ThreadPoolExecutor(max_workers=5) as executor:
+    futures = [executor.submit(fetch_one, pr) for pr in pr_list]
+    for future in futures:
+        number, result = future.result()
 ```
 
 ### GraphQL Node Limits
@@ -1789,8 +2405,11 @@ process = subprocess.Popen(
 3. **Export Functionality**: Export PR lists and stats to CSV/JSON
 4. **Notification Integration**: Browser notifications for PR updates
 5. **Multi-Repository View**: View PRs across multiple repositories simultaneously
-6. **Custom Dashboards**: User-configurable dashboard widgets
+6. ~~**Custom Dashboards**: User-configurable dashboard widgets~~ **Implemented**: Analytics tab with 4 sub-tabs (Stats, Lifecycle, Activity, Reviews) and CI/Workflows tab
 7. **PR Templates**: Quick filter templates (e.g., "My Open PRs", "Needs My Review")
+8. ~~**CI/Workflow Visibility**: View workflow run history and pass/fail rates~~ **Implemented**: CI/Workflows tab with filters, stats cards, and runs table
+9. ~~**PR Lifecycle Metrics**: Time-to-merge and review responsiveness tracking~~ **Implemented**: Lifecycle and Reviews sub-tabs in Analytics
+10. ~~**Branch Staleness Detection**: Show how far behind base branch a PR is~~ **Implemented**: Branch divergence badges on PR cards
 
 #### User Experience
 
@@ -1822,6 +2441,11 @@ process = subprocess.Popen(
 10. **Fixed Review Output Path**: Reviews always written to hardcoded directory
 11. **Score Extraction Heuristic**: Score parsing relies on regex patterns; unusual formats may not be detected
 12. **Migration One-Time**: Data migration from legacy JSON/markdown runs once; subsequent manual additions to old format not auto-imported
+13. **Stats API Availability**: GitHub stats endpoints return 202 while computing; data may be unavailable for first request on cold repositories
+14. **Lifecycle PR Limit**: Lifecycle and review responsiveness metrics analyze the most recent 50 PRs only
+15. **Divergence API Calls**: Branch divergence fetches one compare API call per open PR, which may be slow for repositories with many open PRs
+16. **Code Activity Max Range**: Code activity is limited to 52 weeks maximum (GitHub API limitation)
+17. **CSS-only Charts**: Visualizations use CSS bars with native browser tooltips on hover but no advanced interactivity (no click handlers, zoom, or drill-down)
 
 ---
 
@@ -1844,7 +2468,7 @@ process = subprocess.Popen(
 ```
 gh-pr-explorer/
 ├── app.py                 # Flask backend (main application)
-├── database.py            # SQLite database module (Reviews, MergeQueue, Migrations)
+├── database.py            # SQLite database module (Reviews, MergeQueue, LifecycleCache, Migrations)
 ├── migrate_data.py        # Data migration script for legacy JSON/markdown files
 ├── pr_explorer.db         # SQLite database file (auto-created)
 ├── config.json            # Application configuration

@@ -153,6 +153,11 @@ class Database:
                     total_deletions INTEGER DEFAULT 0,
                     avg_pr_score REAL,
                     reviewed_pr_count INTEGER DEFAULT 0,
+                    commits INTEGER DEFAULT 0,
+                    avatar_url TEXT,
+                    reviews_given INTEGER DEFAULT 0,
+                    approvals INTEGER DEFAULT 0,
+                    changes_requested INTEGER DEFAULT 0,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(repo, username)
                 )
@@ -172,6 +177,37 @@ class Database:
                     last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # Create pr_lifecycle_cache table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pr_lifecycle_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo TEXT NOT NULL UNIQUE,
+                    data TEXT NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Migration: Add new columns to developer_stats for existing databases
+            # Check if columns exist before adding them
+            cursor.execute("PRAGMA table_info(developer_stats)")
+            existing_columns = {row[1] for row in cursor.fetchall()}
+
+            new_columns = [
+                ("commits", "INTEGER DEFAULT 0"),
+                ("avatar_url", "TEXT"),
+                ("reviews_given", "INTEGER DEFAULT 0"),
+                ("approvals", "INTEGER DEFAULT 0"),
+                ("changes_requested", "INTEGER DEFAULT 0"),
+            ]
+
+            for col_name, col_type in new_columns:
+                if col_name not in existing_columns:
+                    try:
+                        cursor.execute(f"ALTER TABLE developer_stats ADD COLUMN {col_name} {col_type}")
+                        logger.info(f"Added column {col_name} to developer_stats table")
+                    except sqlite3.OperationalError:
+                        pass  # Column already exists
 
             conn.commit()
             logger.info(f"Database initialized at {self.db_path}")
@@ -1005,7 +1041,8 @@ class DeveloperStatsDB:
             cursor.execute("""
                 SELECT username, total_prs, open_prs, merged_prs, closed_prs,
                        total_additions, total_deletions, avg_pr_score,
-                       reviewed_pr_count, updated_at
+                       reviewed_pr_count, commits, avatar_url, reviews_given,
+                       approvals, changes_requested, updated_at
                 FROM developer_stats
                 WHERE repo = ?
                 ORDER BY total_prs DESC
@@ -1021,7 +1058,8 @@ class DeveloperStatsDB:
             repo: Repository in owner/repo format.
             stats: List of stats dictionaries with keys:
                    username, total_prs, open_prs, merged_prs, closed_prs,
-                   total_additions, total_deletions, avg_pr_score, reviewed_pr_count
+                   total_additions, total_deletions, avg_pr_score, reviewed_pr_count,
+                   commits, avatar_url, reviews_given, approvals, changes_requested
         """
         conn = self._get_connection()
         try:
@@ -1036,8 +1074,9 @@ class DeveloperStatsDB:
                     INSERT INTO developer_stats
                     (repo, username, total_prs, open_prs, merged_prs, closed_prs,
                      total_additions, total_deletions, avg_pr_score, reviewed_pr_count,
+                     commits, avatar_url, reviews_given, approvals, changes_requested,
                      updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """, (
                     repo,
                     stat.get("username", ""),
@@ -1048,7 +1087,12 @@ class DeveloperStatsDB:
                     stat.get("total_additions", 0),
                     stat.get("total_deletions", 0),
                     stat.get("avg_pr_score"),
-                    stat.get("reviewed_pr_count", 0)
+                    stat.get("reviewed_pr_count", 0),
+                    stat.get("commits", 0),
+                    stat.get("avatar_url"),
+                    stat.get("reviews_given", 0),
+                    stat.get("approvals", 0),
+                    stat.get("changes_requested", 0)
                 ))
 
             # Update metadata
@@ -1079,12 +1123,74 @@ class DeveloperStatsDB:
             conn.close()
 
 
+class LifecycleCacheDB:
+    """Cache for PR lifecycle/review timing data in SQLite."""
+
+    def __init__(self, db: Database):
+        self.db = db
+        self._get_connection = db._get_connection
+
+    def get_cached(self, repo: str) -> Optional[Dict[str, Any]]:
+        """Get cached lifecycle data for a repository."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT data, updated_at FROM pr_lifecycle_cache WHERE repo = ?",
+                (repo,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "data": json.loads(row["data"]),
+                    "updated_at": row["updated_at"]
+                }
+            return None
+        finally:
+            conn.close()
+
+    def save_cache(self, repo: str, data: Any) -> None:
+        """Save lifecycle data to cache."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO pr_lifecycle_cache (repo, data, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(repo) DO UPDATE SET
+                   data = excluded.data, updated_at = CURRENT_TIMESTAMP""",
+                (repo, json.dumps(data))
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def is_stale(self, repo: str, ttl_hours: int = 2) -> bool:
+        """Check if cached data is older than TTL."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT updated_at FROM pr_lifecycle_cache WHERE repo = ?",
+                (repo,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return True
+            updated = datetime.strptime(row["updated_at"], "%Y-%m-%d %H:%M:%S")
+            age_hours = (datetime.now() - updated).total_seconds() / 3600
+            return age_hours > ttl_hours
+        finally:
+            conn.close()
+
+
 # Singleton instances for convenience
 _db_instance: Optional[Database] = None
 _reviews_db: Optional[ReviewsDB] = None
 _queue_db: Optional[MergeQueueDB] = None
 _settings_db: Optional[SettingsDB] = None
 _dev_stats_db: Optional[DeveloperStatsDB] = None
+_lifecycle_cache_db: Optional[LifecycleCacheDB] = None
 
 
 def get_database() -> Database:
@@ -1125,3 +1231,11 @@ def get_dev_stats_db() -> DeveloperStatsDB:
     if _dev_stats_db is None:
         _dev_stats_db = DeveloperStatsDB(get_database())
     return _dev_stats_db
+
+
+def get_lifecycle_cache_db() -> LifecycleCacheDB:
+    """Get the singleton LifecycleCacheDB instance."""
+    global _lifecycle_cache_db
+    if _lifecycle_cache_db is None:
+        _lifecycle_cache_db = LifecycleCacheDB(get_database())
+    return _lifecycle_cache_db
