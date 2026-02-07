@@ -120,8 +120,13 @@ createApp({
         const loading = ref(false);
         const error = ref(null);
 
-        // View Toggle (PRs vs Stats)
+        // Pagination
+        const currentPage = ref(1);
+        const prsPerPage = 20;
+
+        // View Toggle (PRs, Analytics, Workflows)
         const activeView = ref('prs');
+        const activeAnalyticsTab = ref('stats');
 
         // Developer Stats
         const statsLoading = ref(false);
@@ -133,6 +138,38 @@ createApp({
         const statsFromCache = ref(false);
         const statsRefreshing = ref(false);  // Background refresh in progress
         const statsStale = ref(false);
+
+        // Branch Divergence
+        const prDivergence = ref({});
+        const divergenceLoading = ref(false);
+
+        // CI/Workflows
+        const workflowRuns = ref([]);
+        const workflowsLoading = ref(false);
+        const workflowsError = ref(null);
+        const workflowsList = ref([]);
+        const workflowStats = ref(null);
+        const workflowFilters = reactive({ workflow: '', branch: '', event: '', conclusion: '' });
+
+        // Code Activity
+        const codeActivity = ref(null);
+        const activityLoading = ref(false);
+        const activityError = ref(null);
+        const activityTimeframe = ref(52);
+
+        // PR Lifecycle Metrics
+        const lifecycleMetrics = ref(null);
+        const lifecycleLoading = ref(false);
+        const lifecycleError = ref(null);
+        const lifecycleSortBy = ref('time_to_merge_hours');
+        const lifecycleSortDirection = ref('desc');
+
+        // Review Responsiveness
+        const reviewResponsiveness = ref(null);
+        const responsivenessLoading = ref(false);
+        const responsivenessError = ref(null);
+        const responsivenessSortBy = ref('avg_response_time_hours');
+        const responsivenessSortDirection = ref('asc');
 
         // Description Modal
         const descriptionModal = reactive({
@@ -167,7 +204,8 @@ createApp({
         const historyFilters = reactive({
             repo: '',
             author: '',
-            search: ''
+            search: '',
+            prNumber: ''
         });
         const selectedHistoryReview = ref(null);
         const showHistoryPanel = ref(false);
@@ -224,6 +262,17 @@ createApp({
             return count;
         });
 
+        // Computed: pagination
+        const totalPages = computed(() => {
+            return Math.ceil(prs.value.length / prsPerPage);
+        });
+
+        const paginatedPRs = computed(() => {
+            const start = (currentPage.value - 1) * prsPerPage;
+            const end = start + prsPerPage;
+            return prs.value.slice(start, end);
+        });
+
         // Computed: sorted developer stats
         const sortedDeveloperStats = computed(() => {
             if (!developerStats.value.length) return [];
@@ -237,6 +286,87 @@ createApp({
                 }
                 return bVal - aVal;
             });
+        });
+
+        // Computed: sorted lifecycle PRs
+        const sortedLifecyclePRs = computed(() => {
+            if (!lifecycleMetrics.value?.pr_table?.length) return [];
+            return [...lifecycleMetrics.value.pr_table].sort((a, b) => {
+                const col = lifecycleSortBy.value;
+                let aVal = a[col];
+                let bVal = b[col];
+                // Push nulls to bottom
+                if (aVal == null && bVal == null) return 0;
+                if (aVal == null) return 1;
+                if (bVal == null) return -1;
+                // String comparison for text columns
+                if (typeof aVal === 'string' && typeof bVal === 'string') {
+                    const cmp = aVal.localeCompare(bVal);
+                    return lifecycleSortDirection.value === 'asc' ? cmp : -cmp;
+                }
+                return lifecycleSortDirection.value === 'asc' ? aVal - bVal : bVal - aVal;
+            });
+        });
+
+        // Computed: sorted reviewer leaderboard
+        const sortedReviewerLeaderboard = computed(() => {
+            if (!reviewResponsiveness.value?.leaderboard?.length) return [];
+            return [...reviewResponsiveness.value.leaderboard].sort((a, b) => {
+                const col = responsivenessSortBy.value;
+                let aVal = a[col];
+                let bVal = b[col];
+                if (aVal == null && bVal == null) return 0;
+                if (aVal == null) return 1;
+                if (bVal == null) return -1;
+                if (typeof aVal === 'string' && typeof bVal === 'string') {
+                    const cmp = aVal.localeCompare(bVal);
+                    return responsivenessSortDirection.value === 'asc' ? cmp : -cmp;
+                }
+                return responsivenessSortDirection.value === 'asc' ? aVal - bVal : bVal - aVal;
+            });
+        });
+
+        // Workflow sorting
+        const workflowSortBy = ref('created_at');
+        const workflowSortDirection = ref('desc');
+
+        const sortWorkflows = (column) => {
+            if (workflowSortBy.value === column) {
+                workflowSortDirection.value = workflowSortDirection.value === 'asc' ? 'desc' : 'asc';
+            } else {
+                workflowSortBy.value = column;
+                workflowSortDirection.value = 'desc';
+            }
+        };
+
+        const sortedWorkflowRuns = computed(() => {
+            if (!workflowRuns.value.length) return [];
+            return [...workflowRuns.value].sort((a, b) => {
+                const col = workflowSortBy.value;
+                let aVal = a[col];
+                let bVal = b[col];
+                if (aVal == null && bVal == null) return 0;
+                if (aVal == null) return 1;
+                if (bVal == null) return -1;
+                if (typeof aVal === 'string' && typeof bVal === 'string') {
+                    const cmp = aVal.localeCompare(bVal);
+                    return workflowSortDirection.value === 'asc' ? cmp : -cmp;
+                }
+                return workflowSortDirection.value === 'asc' ? aVal - bVal : bVal - aVal;
+            });
+        });
+
+        // Workflow pagination
+        const workflowPage = ref(1);
+        const workflowsPerPage = 25;
+
+        const totalWorkflowPages = computed(() => {
+            return Math.ceil(sortedWorkflowRuns.value.length / workflowsPerPage) || 1;
+        });
+
+        const paginatedWorkflowRuns = computed(() => {
+            const start = (workflowPage.value - 1) * workflowsPerPage;
+            return sortedWorkflowRuns.value.slice(start, start + workflowsPerPage);
         });
 
         // Computed: filtered repos based on search
@@ -379,6 +509,7 @@ createApp({
 
             loading.value = true;
             error.value = null;
+            currentPage.value = 1;  // Reset to first page on new fetch
 
             const owner = selectedRepo.value.owner.login;
             const repo = selectedRepo.value.name;
@@ -388,7 +519,7 @@ createApp({
 
             // Basic filters
             params.append('state', filters.state);
-            params.append('limit', filters.limit);
+            params.append('limit', '100');  // Always fetch 100 for client-side pagination
 
             if (filters.author) params.append('author', filters.author);
             if (filters.assignee) params.append('assignee', filters.assignee);
@@ -469,10 +600,11 @@ createApp({
 
                 prs.value = data.prs || [];
 
-                // Fetch review info for all PRs and refresh merge queue in background
+                // Fetch review info, divergence, and refresh merge queue in background
                 nextTick(() => {
                     fetchReviewInfoForPRs();
                     fetchMergeQueue();  // Sync merge queue with latest PR states
+                    fetchDivergenceForPRs();
                 });
             } catch (err) {
                 error.value = err.message || 'Failed to fetch pull requests';
@@ -550,8 +682,38 @@ createApp({
 
         const setActiveView = (view) => {
             activeView.value = view;
-            if (view === 'stats' && developerStats.value.length === 0) {
+            if (view === 'analytics' && activeAnalyticsTab.value === 'stats' && developerStats.value.length === 0) {
                 fetchDeveloperStats();
+            }
+        };
+
+        const setAnalyticsTab = (tab) => {
+            activeAnalyticsTab.value = tab;
+            if (tab === 'stats' && developerStats.value.length === 0) {
+                fetchDeveloperStats();
+            }
+            if (tab === 'lifecycle' && !lifecycleMetrics.value) {
+                fetchLifecycleMetrics();
+            }
+            if (tab === 'activity' && !codeActivity.value) {
+                fetchCodeActivity();
+            }
+            if (tab === 'responsiveness' && !reviewResponsiveness.value) {
+                fetchReviewResponsiveness();
+            }
+        };
+
+        const refreshCurrentView = () => {
+            if (activeView.value === 'prs') {
+                fetchPRs();
+            } else if (activeView.value === 'analytics') {
+                const tab = activeAnalyticsTab.value;
+                if (tab === 'stats') fetchDeveloperStats(true);
+                else if (tab === 'lifecycle') fetchLifecycleMetrics();
+                else if (tab === 'activity') fetchCodeActivity();
+                else if (tab === 'responsiveness') fetchReviewResponsiveness();
+            } else if (activeView.value === 'workflows') {
+                fetchWorkflowRuns();
             }
         };
 
@@ -571,6 +733,9 @@ createApp({
         };
 
         const formatNumber = (num) => {
+            if (num === null || num === undefined) {
+                return '0';
+            }
             if (num >= 1000000) {
                 return (num / 1000000).toFixed(1) + 'M';
             }
@@ -674,6 +839,37 @@ createApp({
             } else {
                 filters.excludeLabels.splice(idx, 1);
             }
+        };
+
+        // Pagination methods
+        const nextPage = () => {
+            if (currentPage.value < totalPages.value) {
+                currentPage.value++;
+                scrollToPrList();
+            }
+        };
+
+        const previousPage = () => {
+            if (currentPage.value > 1) {
+                currentPage.value--;
+                scrollToPrList();
+            }
+        };
+
+        const goToPage = (page) => {
+            if (page >= 1 && page <= totalPages.value) {
+                currentPage.value = page;
+                scrollToPrList();
+            }
+        };
+
+        const scrollToPrList = () => {
+            nextTick(() => {
+                const prList = document.querySelector('.pr-list-section');
+                if (prList) {
+                    prList.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
         };
 
         const getStateClass = (pr) => {
@@ -1353,6 +1549,7 @@ createApp({
                 if (historyFilters.repo) params.append('repo', historyFilters.repo);
                 if (historyFilters.author) params.append('author', historyFilters.author);
                 if (historyFilters.search) params.append('search', historyFilters.search);
+                if (historyFilters.prNumber) params.append('pr_number', historyFilters.prNumber);
                 params.append('limit', '50');
 
                 const response = await fetch(`/api/review-history?${params}`);
@@ -1897,6 +2094,203 @@ createApp({
             document.addEventListener('keydown', handleKeydown);
         });
 
+        // ==========================================
+        // Stub fetch methods (filled in by later phases)
+        // ==========================================
+
+        // Phase 1: Branch Divergence
+        const fetchDivergenceForPRs = async () => {
+            if (!selectedAccount.value || !selectedRepo.value) return;
+            const openPRs = prs.value.filter(pr => pr.state === 'OPEN');
+            if (openPRs.length === 0) return;
+            divergenceLoading.value = true;
+            try {
+                const owner = selectedAccount.value.login;
+                const repo = selectedRepo.value.name;
+                const prData = openPRs.map(pr => ({
+                    number: pr.number,
+                    base: pr.baseRefName,
+                    head: pr.headRefName
+                }));
+                const resp = await fetch(`/api/repos/${owner}/${repo}/prs/divergence`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prs: prData })
+                });
+                const data = await resp.json();
+                if (data.divergence) {
+                    prDivergence.value = data.divergence;
+                }
+            } catch (err) {
+                console.error('Failed to fetch divergence:', err);
+            } finally {
+                divergenceLoading.value = false;
+            }
+        };
+
+        const getDivergenceInfo = (prNumber) => {
+            return prDivergence.value[prNumber] || null;
+        };
+
+        const getDivergenceClass = (prNumber) => {
+            const info = getDivergenceInfo(prNumber);
+            if (!info) return '';
+            if (info.behind_by === 0) return 'divergence-current';
+            if (info.behind_by <= 10) return 'divergence-slightly-behind';
+            return 'divergence-far-behind';
+        };
+
+        // Phase 2: CI/Workflows
+        const fetchWorkflowRuns = async () => {
+            if (!selectedAccount.value || !selectedRepo.value) return;
+            workflowsLoading.value = true;
+            workflowsError.value = null;
+            try {
+                const owner = selectedAccount.value.login;
+                const repo = selectedRepo.value.name;
+                const params = new URLSearchParams();
+                if (workflowFilters.workflow) params.set('workflow_id', workflowFilters.workflow);
+                if (workflowFilters.branch) params.set('branch', workflowFilters.branch);
+                if (workflowFilters.event) params.set('event', workflowFilters.event);
+                if (workflowFilters.conclusion) params.set('conclusion', workflowFilters.conclusion);
+                const resp = await fetch(`/api/repos/${owner}/${repo}/workflow-runs?${params}`);
+                const data = await resp.json();
+                if (data.error) throw new Error(data.error);
+                workflowRuns.value = data.runs || [];
+                workflowStats.value = data.stats || null;
+                workflowsList.value = data.workflows || [];
+                workflowPage.value = 1;
+            } catch (err) {
+                workflowsError.value = err.message || 'Failed to fetch workflow runs';
+                console.error('Failed to fetch workflows:', err);
+            } finally {
+                workflowsLoading.value = false;
+            }
+        };
+
+        const formatDuration = (seconds) => {
+            if (!seconds && seconds !== 0) return '-';
+            const m = Math.floor(seconds / 60);
+            const s = seconds % 60;
+            if (m === 0) return `${s}s`;
+            return `${m}m ${s}s`;
+        };
+
+        const getWorkflowConclusionClass = (conclusion) => {
+            const map = { success: 'wf-success', failure: 'wf-failure', cancelled: 'wf-cancelled', in_progress: 'wf-in-progress', skipped: 'wf-skipped' };
+            return map[conclusion] || 'wf-unknown';
+        };
+
+        const resetWorkflowFilters = () => {
+            workflowFilters.workflow = '';
+            workflowFilters.branch = '';
+            workflowFilters.event = '';
+            workflowFilters.conclusion = '';
+            fetchWorkflowRuns();
+        };
+
+        // Phase 3: Code Activity
+        const fetchCodeActivity = async () => {
+            if (!selectedAccount.value || !selectedRepo.value) return;
+            activityLoading.value = true;
+            activityError.value = null;
+            try {
+                const owner = selectedAccount.value.login;
+                const repo = selectedRepo.value.name;
+                const resp = await fetch(`/api/repos/${owner}/${repo}/code-activity?weeks=${activityTimeframe.value}`);
+                const data = await resp.json();
+                if (data.error) throw new Error(data.error);
+                codeActivity.value = data;
+            } catch (err) {
+                activityError.value = err.message || 'Failed to fetch code activity';
+                console.error('Failed to fetch code activity:', err);
+            } finally {
+                activityLoading.value = false;
+            }
+        };
+
+        const getBarHeight = (value, maxValue) => {
+            if (!maxValue || maxValue === 0) return '0%';
+            return `${Math.max(2, (value / maxValue) * 100)}%`;
+        };
+
+        const getMaxValue = (array, key) => {
+            if (!array || array.length === 0) return 0;
+            return Math.max(...array.map(item => item[key] || 0));
+        };
+
+        // Phase 4: Lifecycle + Responsiveness
+        const fetchLifecycleMetrics = async () => {
+            if (!selectedAccount.value || !selectedRepo.value) return;
+            lifecycleLoading.value = true;
+            lifecycleError.value = null;
+            try {
+                const owner = selectedAccount.value.login;
+                const repo = selectedRepo.value.name;
+                const resp = await fetch(`/api/repos/${owner}/${repo}/lifecycle-metrics`);
+                const data = await resp.json();
+                if (data.error) throw new Error(data.error);
+                lifecycleMetrics.value = data;
+            } catch (err) {
+                lifecycleError.value = err.message || 'Failed to fetch lifecycle metrics';
+                console.error('Failed to fetch lifecycle metrics:', err);
+            } finally {
+                lifecycleLoading.value = false;
+            }
+        };
+
+        const fetchReviewResponsiveness = async () => {
+            if (!selectedAccount.value || !selectedRepo.value) return;
+            responsivenessLoading.value = true;
+            responsivenessError.value = null;
+            try {
+                const owner = selectedAccount.value.login;
+                const repo = selectedRepo.value.name;
+                const resp = await fetch(`/api/repos/${owner}/${repo}/review-responsiveness`);
+                const data = await resp.json();
+                if (data.error) throw new Error(data.error);
+                reviewResponsiveness.value = data;
+            } catch (err) {
+                responsivenessError.value = err.message || 'Failed to fetch review responsiveness';
+                console.error('Failed to fetch review responsiveness:', err);
+            } finally {
+                responsivenessLoading.value = false;
+            }
+        };
+
+        const formatHours = (hours) => {
+            if (!hours && hours !== 0) return '-';
+            if (hours < 1) return `${Math.round(hours * 60)}m`;
+            if (hours < 24) return `${Math.round(hours)}h`;
+            const days = Math.floor(hours / 24);
+            const remainingHours = Math.round(hours % 24);
+            return `${days}d ${remainingHours}h`;
+        };
+
+        const sortLifecyclePRs = (column) => {
+            if (lifecycleSortBy.value === column) {
+                lifecycleSortDirection.value = lifecycleSortDirection.value === 'asc' ? 'desc' : 'asc';
+            } else {
+                lifecycleSortBy.value = column;
+                lifecycleSortDirection.value = 'desc';
+            }
+        };
+
+        const sortResponsiveness = (column) => {
+            if (responsivenessSortBy.value === column) {
+                responsivenessSortDirection.value = responsivenessSortDirection.value === 'asc' ? 'desc' : 'asc';
+            } else {
+                responsivenessSortBy.value = column;
+                responsivenessSortDirection.value = 'asc';
+            }
+        };
+
+        const getResponseTimeClass = (hours) => {
+            if (hours < 4) return 'response-fast';
+            if (hours < 24) return 'response-moderate';
+            return 'response-slow';
+        };
+
         return {
             // Theme
             darkMode,
@@ -1943,9 +2337,21 @@ createApp({
             error,
             fetchPRs,
 
+            // Pagination
+            currentPage,
+            prsPerPage,
+            totalPages,
+            paginatedPRs,
+            nextPage,
+            previousPage,
+            goToPage,
+
             // View Toggle
             activeView,
+            activeAnalyticsTab,
             setActiveView,
+            setAnalyticsTab,
+            refreshCurrentView,
 
             // Developer Stats
             statsLoading,
@@ -2077,7 +2483,65 @@ createApp({
 
             // Settings Persistence
             loadSettings,
-            saveSettings
+            saveSettings,
+
+            // Branch Divergence (Phase 1)
+            prDivergence,
+            divergenceLoading,
+            fetchDivergenceForPRs,
+            getDivergenceInfo,
+            getDivergenceClass,
+
+            // CI/Workflows (Phase 2)
+            workflowRuns,
+            workflowsLoading,
+            workflowsError,
+            workflowsList,
+            workflowStats,
+            workflowFilters,
+            fetchWorkflowRuns,
+            formatDuration,
+            getWorkflowConclusionClass,
+            resetWorkflowFilters,
+            workflowSortBy,
+            workflowSortDirection,
+            sortWorkflows,
+            sortedWorkflowRuns,
+            paginatedWorkflowRuns,
+            workflowPage,
+            workflowsPerPage,
+            totalWorkflowPages,
+
+            // Code Activity (Phase 3)
+            codeActivity,
+            activityLoading,
+            activityError,
+            activityTimeframe,
+            fetchCodeActivity,
+            getBarHeight,
+            getMaxValue,
+
+            // PR Lifecycle (Phase 4)
+            lifecycleMetrics,
+            lifecycleLoading,
+            lifecycleError,
+            lifecycleSortBy,
+            lifecycleSortDirection,
+            fetchLifecycleMetrics,
+            sortLifecyclePRs,
+            sortedLifecyclePRs,
+            formatHours,
+
+            // Review Responsiveness (Phase 4)
+            reviewResponsiveness,
+            responsivenessLoading,
+            responsivenessError,
+            responsivenessSortBy,
+            responsivenessSortDirection,
+            fetchReviewResponsiveness,
+            sortResponsiveness,
+            sortedReviewerLeaderboard,
+            getResponseTimeClass
         };
     }
 }).mount('#app');

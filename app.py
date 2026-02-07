@@ -11,12 +11,13 @@ import re
 import subprocess
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 from flask import Flask, jsonify, render_template, request
 
-from database import get_database, get_reviews_db, get_queue_db, get_settings_db, get_dev_stats_db
+from database import get_database, get_reviews_db, get_queue_db, get_settings_db, get_dev_stats_db, get_lifecycle_cache_db
 
 # Configure logging
 logging.basicConfig(
@@ -61,7 +62,8 @@ def cached(ttl_seconds=None):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            cache_key = f"{func.__name__}:{args}:{sorted(kwargs.items())}"
+            qs = request.query_string.decode() if request else ''
+            cache_key = f"{func.__name__}:{args}:{sorted(kwargs.items())}:{qs}"
             now = time.time()
 
             if cache_key in cache:
@@ -102,6 +104,61 @@ def parse_json_output(output):
         return json.loads(output)
     except json.JSONDecodeError:
         return []
+
+
+def fetch_github_stats_api(owner, repo, endpoint, jq_query=None, max_retries=3, retry_delay=2):
+    """Fetch data from GitHub's stats API with 202-retry logic.
+
+    GitHub stats endpoints return 202 while computing results. This helper
+    retries with a delay until data is ready or max retries are exhausted.
+
+    Args:
+        owner: Repository owner
+        repo: Repository name
+        endpoint: Stats endpoint path (e.g., 'stats/contributors')
+        jq_query: Optional jq query for processing the response
+        max_retries: Maximum number of retry attempts
+        retry_delay: Seconds between retries
+
+    Returns:
+        Parsed JSON result, or empty list if unavailable.
+    """
+    for attempt in range(max_retries):
+        try:
+            result = subprocess.run(
+                ["gh", "api", f"repos/{owner}/{repo}/{endpoint}", "-i"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            if "HTTP/2.0 202" in result.stdout or "202 Accepted" in result.stdout:
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    return []
+
+            args = ["api", f"repos/{owner}/{repo}/{endpoint}"]
+            if jq_query:
+                args.extend(["--jq", jq_query])
+
+            output = run_gh_command(args)
+            parsed = parse_json_output(output)
+            if parsed:
+                return parsed
+
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                continue
+
+        except RuntimeError:
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                continue
+            return []
+
+    return []
 
 
 def fetch_pr_state(owner, repo, pr_number):
@@ -555,6 +612,503 @@ def get_prs(owner, repo):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/repos/<owner>/<repo>/prs/divergence", methods=["POST"])
+def get_pr_divergence(owner, repo):
+    """Batch fetch branch divergence (ahead/behind) for open PRs."""
+    try:
+        data = request.get_json()
+        if not data or "prs" not in data:
+            return jsonify({"error": "Missing 'prs' in request body"}), 400
+
+        pr_list = data["prs"]
+
+        def fetch_one(pr_info):
+            number = pr_info["number"]
+            base = pr_info["base"]
+            head = pr_info["head"]
+            try:
+                output = run_gh_command([
+                    "api", f"repos/{owner}/{repo}/compare/{base}...{head}",
+                    "--jq", '{"status": .status, "ahead_by": .ahead_by, "behind_by": .behind_by}'
+                ])
+                result = parse_json_output(output)
+                if result:
+                    return (number, result)
+            except RuntimeError:
+                pass
+            return (number, None)
+
+        divergence = {}
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(fetch_one, pr) for pr in pr_list]
+            for future in futures:
+                number, result = future.result()
+                if result:
+                    divergence[str(number)] = result
+
+        return jsonify({"divergence": divergence})
+
+    except Exception as e:
+        logger.error(f"Failed to fetch divergence: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/repos/<owner>/<repo>/workflow-runs")
+@cached()
+def get_workflow_runs(owner, repo):
+    """Get workflow runs with optional filters and aggregate stats."""
+    try:
+        # Fetch workflows list
+        try:
+            wf_output = run_gh_command([
+                "api", f"repos/{owner}/{repo}/actions/workflows",
+                "--jq", "[.workflows[] | {id, name, state, path}]"
+            ])
+            workflows = parse_json_output(wf_output) or []
+        except RuntimeError:
+            workflows = []
+
+        # Build runs API query with multi-page fetching (up to 3 pages = 300 runs)
+        base_url = f"repos/{owner}/{repo}/actions/runs?per_page=100"
+
+        workflow_id = request.args.get("workflow_id")
+        if workflow_id:
+            base_url += f"&workflow_id={workflow_id}"
+
+        branch = request.args.get("branch")
+        if branch:
+            base_url += f"&branch={branch}"
+
+        event = request.args.get("event")
+        if event:
+            base_url += f"&event={event}"
+
+        status_filter = request.args.get("status")
+        if status_filter:
+            base_url += f"&status={status_filter}"
+
+        conclusion = request.args.get("conclusion")
+        if conclusion:
+            base_url += f"&conclusion={conclusion}"
+
+        jq_query = (
+            "[.workflow_runs[] | {"
+            "id, name, display_title, status, conclusion, "
+            "created_at, updated_at, event, head_branch, "
+            "run_attempt, run_number, html_url, "
+            "actor_login: .actor.login"
+            "}]"
+        )
+
+        runs = []
+        for page in range(1, 4):  # Fetch up to 3 pages
+            api_url = f"{base_url}&page={page}"
+            output = run_gh_command(["api", api_url, "--jq", jq_query])
+            page_runs = parse_json_output(output) or []
+            runs.extend(page_runs)
+            if len(page_runs) < 100:
+                break
+
+        # Compute duration and aggregate stats
+        total_runs = len(runs)
+        success_count = 0
+        failure_count = 0
+        total_duration = 0
+        duration_count = 0
+        runs_by_workflow = {}
+
+        for run in runs:
+            # Compute duration_seconds
+            created = run.get("created_at")
+            updated = run.get("updated_at")
+            if created and updated:
+                try:
+                    c = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    u = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                    dur = int((u - c).total_seconds())
+                    run["duration_seconds"] = max(dur, 0)
+                    if run.get("conclusion") in ("success", "failure"):
+                        total_duration += dur
+                        duration_count += 1
+                except (ValueError, TypeError):
+                    run["duration_seconds"] = None
+            else:
+                run["duration_seconds"] = None
+
+            c = run.get("conclusion")
+            if c == "success":
+                success_count += 1
+            elif c == "failure":
+                failure_count += 1
+
+            wf_name = run.get("name", "Unknown")
+            if wf_name not in runs_by_workflow:
+                runs_by_workflow[wf_name] = {"total": 0, "failures": 0}
+            runs_by_workflow[wf_name]["total"] += 1
+            if c == "failure":
+                runs_by_workflow[wf_name]["failures"] += 1
+
+        completed_runs = success_count + failure_count
+        stats = {
+            "total_runs": total_runs,
+            "pass_rate": round((success_count / completed_runs * 100), 1) if completed_runs > 0 else 0,
+            "avg_duration": round(total_duration / duration_count) if duration_count > 0 else 0,
+            "failure_count": failure_count,
+            "success_count": success_count,
+            "runs_by_workflow": runs_by_workflow
+        }
+
+        return jsonify({"runs": runs, "stats": stats, "workflows": workflows})
+
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/repos/<owner>/<repo>/code-activity")
+@cached(ttl_seconds=600)
+def get_code_activity(owner, repo):
+    """Get code activity stats (commit frequency, code changes, participation)."""
+    try:
+        weeks = int(request.args.get("weeks", 52))
+        weeks = min(max(weeks, 1), 52)
+
+        # Fetch all 3 stats APIs in parallel
+        code_freq = fetch_github_stats_api(owner, repo, "stats/code_frequency")
+        commit_activity = fetch_github_stats_api(owner, repo, "stats/commit_activity")
+        participation = fetch_github_stats_api(owner, repo, "stats/participation")
+
+        # Process code_frequency: [timestamp, additions, deletions]
+        code_changes = []
+        if isinstance(code_freq, list):
+            for entry in code_freq[-weeks:]:
+                if isinstance(entry, list) and len(entry) >= 3:
+                    ts = entry[0]
+                    date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                    code_changes.append({
+                        "week": date_str,
+                        "additions": entry[1],
+                        "deletions": abs(entry[2])
+                    })
+
+        # Process commit_activity: {week, total, days[7]}
+        weekly_commits = []
+        if isinstance(commit_activity, list):
+            for entry in commit_activity[-weeks:]:
+                if isinstance(entry, dict):
+                    ts = entry.get("week", 0)
+                    date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                    weekly_commits.append({
+                        "week": date_str,
+                        "total": entry.get("total", 0),
+                        "days": entry.get("days", [0]*7)
+                    })
+
+        # Process participation: {all: [52 weeks], owner: [52 weeks]}
+        owner_commits = []
+        community_commits = []
+        if isinstance(participation, dict):
+            all_p = participation.get("all", [])
+            owner_p = participation.get("owner", [])
+            owner_commits = owner_p[-weeks:] if owner_p else []
+            community_commits = [
+                (all_p[i] if i < len(all_p) else 0) - (owner_p[i] if i < len(owner_p) else 0)
+                for i in range(len(all_p))
+            ][-weeks:]
+
+        # Compute summary
+        total_commits = sum(w.get("total", 0) for w in weekly_commits)
+        total_additions = sum(c.get("additions", 0) for c in code_changes)
+        total_deletions = sum(c.get("deletions", 0) for c in code_changes)
+        avg_weekly = round(total_commits / len(weekly_commits), 1) if weekly_commits else 0
+
+        peak_week = None
+        peak_commits = 0
+        for w in weekly_commits:
+            if w.get("total", 0) > peak_commits:
+                peak_commits = w["total"]
+                peak_week = w["week"]
+
+        owner_total = sum(owner_commits) if owner_commits else 0
+        all_total = sum(owner_commits) + sum(community_commits) if owner_commits else 0
+        owner_pct = round(owner_total / all_total * 100, 1) if all_total > 0 else 0
+
+        return jsonify({
+            "weekly_commits": weekly_commits,
+            "code_changes": code_changes,
+            "owner_commits": owner_commits,
+            "community_commits": community_commits,
+            "summary": {
+                "total_commits": total_commits,
+                "avg_weekly_commits": avg_weekly,
+                "total_additions": total_additions,
+                "total_deletions": total_deletions,
+                "peak_week": peak_week,
+                "peak_commits": peak_commits,
+                "owner_percentage": owner_pct
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Failed to fetch code activity: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+def fetch_pr_review_times(owner, repo, limit=50):
+    """Fetch PRs with review timing data. Uses SQLite cache with 2-hour TTL."""
+    cache_db = get_lifecycle_cache_db()
+    repo_key = f"{owner}/{repo}"
+
+    # Check cache first
+    if not cache_db.is_stale(repo_key):
+        cached = cache_db.get_cached(repo_key)
+        if cached:
+            return cached["data"]
+
+    # Fetch PRs
+    try:
+        pr_output = run_gh_command([
+            "pr", "list", "-R", f"{owner}/{repo}",
+            "--state", "all", "--limit", str(limit),
+            "--json", "number,title,createdAt,mergedAt,closedAt,updatedAt,author,state"
+        ])
+        prs = parse_json_output(pr_output) or []
+    except RuntimeError:
+        prs = []
+
+    if not prs:
+        return []
+
+    def fetch_reviews_for_pr(pr):
+        number = pr.get("number")
+        try:
+            output = run_gh_command([
+                "api", f"repos/{owner}/{repo}/pulls/{number}/reviews",
+                "--jq", '[.[] | {login: .user.login, submitted_at: .submitted_at, state: .state}]'
+            ])
+            reviews = parse_json_output(output) or []
+        except RuntimeError:
+            reviews = []
+
+        pr["all_reviews"] = reviews
+        if reviews:
+            pr["first_review_at"] = reviews[0].get("submitted_at")
+            pr["first_reviewer"] = reviews[0].get("login")
+        else:
+            pr["first_review_at"] = None
+            pr["first_reviewer"] = None
+        return pr
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        enriched = list(executor.map(fetch_reviews_for_pr, prs))
+
+    # Save to cache
+    cache_db.save_cache(repo_key, enriched)
+    return enriched
+
+
+@app.route("/api/repos/<owner>/<repo>/lifecycle-metrics")
+def get_lifecycle_metrics(owner, repo):
+    """Get PR lifecycle metrics (time-to-merge, time-to-first-review, stale PRs)."""
+    try:
+        prs = fetch_pr_review_times(owner, repo)
+
+        # Compute metrics
+        merge_times = []
+        review_times = []
+        stale_prs = []
+        pr_table = []
+        distribution = {"<1h": 0, "1-4h": 0, "4-24h": 0, "1-3d": 0, "3-7d": 0, ">7d": 0}
+
+        now = datetime.now(timezone.utc)
+
+        for pr in prs:
+            created = pr.get("createdAt")
+            merged = pr.get("mergedAt")
+            first_review = pr.get("first_review_at")
+            updated = pr.get("updatedAt")
+
+            ttm_hours = None
+            ttfr_hours = None
+
+            if created:
+                created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+
+                # Time to merge
+                if merged:
+                    merged_dt = datetime.fromisoformat(merged.replace("Z", "+00:00"))
+                    ttm_hours = (merged_dt - created_dt).total_seconds() / 3600
+                    merge_times.append(ttm_hours)
+
+                    # Distribution
+                    if ttm_hours < 1:
+                        distribution["<1h"] += 1
+                    elif ttm_hours < 4:
+                        distribution["1-4h"] += 1
+                    elif ttm_hours < 24:
+                        distribution["4-24h"] += 1
+                    elif ttm_hours < 72:
+                        distribution["1-3d"] += 1
+                    elif ttm_hours < 168:
+                        distribution["3-7d"] += 1
+                    else:
+                        distribution[">7d"] += 1
+
+                # Time to first review
+                if first_review:
+                    review_dt = datetime.fromisoformat(first_review.replace("Z", "+00:00"))
+                    ttfr_hours = (review_dt - created_dt).total_seconds() / 3600
+                    review_times.append(ttfr_hours)
+
+                # Stale detection (open PRs, no activity in 14+ days)
+                if pr.get("state") == "OPEN" and updated:
+                    updated_dt = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                    age_days = (now - updated_dt).total_seconds() / 86400
+                    if age_days > 14:
+                        stale_prs.append({
+                            "number": pr.get("number"),
+                            "title": pr.get("title"),
+                            "author": pr.get("author", {}).get("login", "unknown"),
+                            "age_days": round(age_days, 1)
+                        })
+
+            pr_table.append({
+                "number": pr.get("number"),
+                "title": pr.get("title"),
+                "author": pr.get("author", {}).get("login", "unknown"),
+                "created_at": created,
+                "state": pr.get("state"),
+                "time_to_first_review_hours": round(ttfr_hours, 2) if ttfr_hours is not None else None,
+                "time_to_merge_hours": round(ttm_hours, 2) if ttm_hours is not None else None,
+                "first_reviewer": pr.get("first_reviewer")
+            })
+
+        # Compute medians/averages
+        def median(lst):
+            if not lst:
+                return None
+            s = sorted(lst)
+            n = len(s)
+            mid = n // 2
+            return s[mid] if n % 2 else (s[mid-1] + s[mid]) / 2
+
+        return jsonify({
+            "median_time_to_merge": round(median(merge_times), 2) if merge_times else None,
+            "avg_time_to_merge": round(sum(merge_times) / len(merge_times), 2) if merge_times else None,
+            "median_time_to_first_review": round(median(review_times), 2) if review_times else None,
+            "avg_time_to_first_review": round(sum(review_times) / len(review_times), 2) if review_times else None,
+            "stale_prs": stale_prs,
+            "stale_count": len(stale_prs),
+            "distribution": distribution,
+            "pr_table": pr_table
+        })
+
+    except Exception as e:
+        logger.error(f"Failed to fetch lifecycle metrics: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/repos/<owner>/<repo>/review-responsiveness")
+def get_review_responsiveness(owner, repo):
+    """Get per-reviewer responsiveness metrics and bottleneck detection."""
+    try:
+        prs = fetch_pr_review_times(owner, repo)
+
+        # Aggregate per-reviewer
+        reviewer_data = {}
+        bottlenecks = []
+        now = datetime.now(timezone.utc)
+
+        for pr in prs:
+            created = pr.get("createdAt")
+            reviews = pr.get("all_reviews", [])
+
+            if created and reviews:
+                created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+
+                for review in reviews:
+                    reviewer = review.get("login", "unknown")
+                    submitted = review.get("submitted_at")
+                    state = review.get("state", "")
+
+                    if reviewer not in reviewer_data:
+                        reviewer_data[reviewer] = {
+                            "response_times": [],
+                            "total_reviews": 0,
+                            "approvals": 0,
+                            "changes_requested": 0,
+                            "comments": 0
+                        }
+
+                    reviewer_data[reviewer]["total_reviews"] += 1
+                    if state == "APPROVED":
+                        reviewer_data[reviewer]["approvals"] += 1
+                    elif state == "CHANGES_REQUESTED":
+                        reviewer_data[reviewer]["changes_requested"] += 1
+                    elif state == "COMMENTED":
+                        reviewer_data[reviewer]["comments"] += 1
+
+                    if submitted:
+                        submitted_dt = datetime.fromisoformat(submitted.replace("Z", "+00:00"))
+                        response_hours = (submitted_dt - created_dt).total_seconds() / 3600
+                        if response_hours >= 0:
+                            reviewer_data[reviewer]["response_times"].append(response_hours)
+
+            # Bottleneck: open PRs with no reviews
+            if pr.get("state") == "OPEN" and not reviews and created:
+                created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                wait_hours = (now - created_dt).total_seconds() / 3600
+                bottlenecks.append({
+                    "number": pr.get("number"),
+                    "title": pr.get("title"),
+                    "author": pr.get("author", {}).get("login", "unknown"),
+                    "wait_hours": round(wait_hours, 1)
+                })
+
+        # Build leaderboard
+        def safe_median(lst):
+            if not lst:
+                return None
+            s = sorted(lst)
+            n = len(s)
+            mid = n // 2
+            return s[mid] if n % 2 else (s[mid-1] + s[mid]) / 2
+
+        leaderboard = []
+        for reviewer, data in reviewer_data.items():
+            times = data["response_times"]
+            total = data["total_reviews"]
+            approvals = data["approvals"]
+            leaderboard.append({
+                "reviewer": reviewer,
+                "avg_response_time_hours": round(sum(times) / len(times), 2) if times else None,
+                "median_response_time_hours": round(safe_median(times), 2) if times else None,
+                "total_reviews": total,
+                "approvals": approvals,
+                "changes_requested": data["changes_requested"],
+                "approval_rate": round(approvals / total * 100, 1) if total > 0 else 0
+            })
+
+        leaderboard.sort(key=lambda x: x.get("avg_response_time_hours") or float("inf"))
+        bottlenecks.sort(key=lambda x: x.get("wait_hours", 0), reverse=True)
+
+        # Team-level summary
+        all_times = [t for d in reviewer_data.values() for t in d["response_times"]]
+        avg_team_response = round(sum(all_times) / len(all_times), 2) if all_times else None
+        fastest = leaderboard[0]["reviewer"] if leaderboard else None
+
+        return jsonify({
+            "leaderboard": leaderboard,
+            "bottlenecks": bottlenecks[:10],
+            "avg_team_response_hours": avg_team_response,
+            "fastest_reviewer": fastest,
+            "prs_awaiting_review": len(bottlenecks)
+        })
+
+    except Exception as e:
+        logger.error(f"Failed to fetch review responsiveness: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 def get_review_status(review_decision):
     """Determine review status from reviewDecision field."""
     if not review_decision:
@@ -730,6 +1284,11 @@ def _background_refresh_stats(owner, repo, full_repo):
                 "closed_prs": stat.get("prs_closed", 0),
                 "total_additions": stat.get("lines_added", 0),
                 "total_deletions": stat.get("lines_deleted", 0),
+                "commits": stat.get("commits", 0),
+                "avatar_url": stat.get("avatar_url"),
+                "reviews_given": stat.get("reviews_given", 0),
+                "approvals": stat.get("approvals", 0),
+                "changes_requested": stat.get("changes_requested", 0),
             })
         dev_stats_db.save_stats(full_repo, cache_data)
         logger.info(f"Background refresh completed for {full_repo}")
@@ -775,6 +1334,11 @@ def get_developer_stats(owner, repo):
                     "closed_prs": stat.get("prs_closed", 0),
                     "total_additions": stat.get("lines_added", 0),
                     "total_deletions": stat.get("lines_deleted", 0),
+                    "commits": stat.get("commits", 0),
+                    "avatar_url": stat.get("avatar_url"),
+                    "reviews_given": stat.get("reviews_given", 0),
+                    "approvals": stat.get("approvals", 0),
+                    "changes_requested": stat.get("changes_requested", 0),
                 })
             dev_stats_db.save_stats(full_repo, cache_data)
             last_updated = dev_stats_db.get_last_updated(full_repo)
@@ -801,7 +1365,27 @@ def get_developer_stats(owner, repo):
                         thread.start()
                         refreshing = True
 
-            stats_with_scores = _add_avg_pr_scores(cached_stats, full_repo)
+            # Transform cached stats to match expected frontend format
+            transformed_stats = []
+            for stat in cached_stats:
+                transformed_stats.append({
+                    "login": stat.get("username", ""),
+                    "avatar_url": stat.get("avatar_url"),
+                    "commits": stat.get("commits", 0),
+                    "prs_authored": stat.get("total_prs", 0),
+                    "prs_open": stat.get("open_prs", 0),
+                    "prs_merged": stat.get("merged_prs", 0),
+                    "prs_closed": stat.get("closed_prs", 0),
+                    "lines_added": stat.get("total_additions", 0),
+                    "lines_deleted": stat.get("total_deletions", 0),
+                    "reviews_given": stat.get("reviews_given", 0),
+                    "approvals": stat.get("approvals", 0),
+                    "changes_requested": stat.get("changes_requested", 0),
+                    "avg_pr_score": stat.get("avg_pr_score"),
+                    "reviewed_pr_count": stat.get("reviewed_pr_count", 0),
+                })
+
+            stats_with_scores = _add_avg_pr_scores(transformed_stats, full_repo)
             return jsonify({
                 "stats": stats_with_scores,
                 "last_updated": last_updated.isoformat() if last_updated else None,
@@ -822,6 +1406,11 @@ def get_developer_stats(owner, repo):
                 "closed_prs": stat.get("prs_closed", 0),
                 "total_additions": stat.get("lines_added", 0),
                 "total_deletions": stat.get("lines_deleted", 0),
+                "commits": stat.get("commits", 0),
+                "avatar_url": stat.get("avatar_url"),
+                "reviews_given": stat.get("reviews_given", 0),
+                "approvals": stat.get("approvals", 0),
+                "changes_requested": stat.get("changes_requested", 0),
             })
         dev_stats_db.save_stats(full_repo, cache_data)
         last_updated = dev_stats_db.get_last_updated(full_repo)
@@ -966,54 +1555,13 @@ def _fetch_and_compute_stats(owner, repo):
 def fetch_contributor_stats(owner, repo):
     """Fetch contributor commit statistics from GitHub API.
 
-    Note: GitHub's stats API returns 202 when computing stats for the first time.
-    We retry a few times to wait for the computation to complete.
+    Uses fetch_github_stats_api helper which handles 202 retry logic.
     """
-    max_retries = 3
-    retry_delay = 2  # seconds
-
-    for attempt in range(max_retries):
-        try:
-            # First, make a raw request to check status
-            result = subprocess.run(
-                ["gh", "api", f"repos/{owner}/{repo}/stats/contributors", "-i"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-
-            # Check if we got a 202 (computing) response
-            if "HTTP/2.0 202" in result.stdout or "202 Accepted" in result.stdout:
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    continue
-                else:
-                    # Give up after max retries
-                    return []
-
-            # Now fetch with jq processing
-            output = run_gh_command([
-                "api",
-                f"repos/{owner}/{repo}/stats/contributors",
-                "--jq", "[.[] | select(.author) | {login: .author.login, avatar_url: .author.avatar_url, commits: .total, lines_added: ([.weeks[].a] | add), lines_deleted: ([.weeks[].d] | add)}]",
-            ])
-
-            result = parse_json_output(output)
-            if result:
-                return result
-
-            # Empty result, might need retry
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay)
-                continue
-
-        except RuntimeError:
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay)
-                continue
-            return []
-
-    return []
+    return fetch_github_stats_api(
+        owner, repo,
+        "stats/contributors",
+        jq_query="[.[] | select(.author) | {login: .author.login, avatar_url: .author.avatar_url, commits: .total, lines_added: ([.weeks[].a] | add), lines_deleted: ([.weeks[].d] | add)}]"
+    )
 
 
 def fetch_pr_stats(owner, repo):

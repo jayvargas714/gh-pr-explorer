@@ -604,18 +604,20 @@
                             Pull Requests
                             <span class="count" v-if="prs.length">({{ prs.length }})</span>
                         </button>
-                        <button :class="{ active: activeView === 'stats' }" @click="setActiveView('stats')">
-                            Stats
-                            <span class="count" v-if="developerStats.length">({{ developerStats.length }})</span>
+                        <button :class="{ active: activeView === 'analytics' }" @click="setActiveView('analytics')">
+                            Analytics
+                        </button>
+                        <button :class="{ active: activeView === 'workflows' }" @click="setActiveView('workflows')">
+                            CI/Workflows
                         </button>
                     </div>
-                    <button class="refresh-btn" @click="activeView === 'prs' ? fetchPRs() : fetchDeveloperStats()" :disabled="loading || statsLoading">
-                        <span :class="{ spinning: loading || statsLoading }">&#8635;</span>
+                    <button class="refresh-btn" @click="refreshCurrentView()" :disabled="loading || statsLoading || workflowsLoading || activityLoading || lifecycleLoading || responsivenessLoading">
+                        <span :class="{ spinning: loading || statsLoading || workflowsLoading || activityLoading || lifecycleLoading || responsivenessLoading }">&#8635;</span>
                     </button>
                 </div>
 
                 <!-- PR View -->
-                <div v-if="activeView === 'prs'">
+                <div v-if="activeView === 'prs'" class="pr-list-section">
                     <div v-if="loading" class="loading-state">
                         <div class="spinner"></div>
                         <p>Loading pull requests...</p>
@@ -632,7 +634,7 @@
 
                     <div v-else class="pr-cards">
                         <div
-                            v-for="pr in prs"
+                            v-for="pr in paginatedPRs"
                             :key="pr.number"
                             class="pr-card"
                             :class="[getStateClass(pr), getReviewClass(pr)]"
@@ -726,6 +728,15 @@
                                                 <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/>
                                             </svg>
                                             Posted
+                                        </span>
+                                        <!-- Branch divergence badge -->
+                                        <span
+                                            v-if="getDivergenceInfo(pr.number) && pr.state === 'OPEN'"
+                                            class="divergence-badge"
+                                            :class="getDivergenceClass(pr.number)"
+                                            :title="`${getDivergenceInfo(pr.number).behind_by} commits behind ${pr.baseRefName}`"
+                                        >
+                                            &#8595; {{ getDivergenceInfo(pr.number).behind_by }} behind
                                         </span>
                                     </div>
                                     <a :href="pr.url" target="_blank" class="pr-title">{{ pr.title }}</a>
@@ -834,10 +845,50 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- Pagination Controls -->
+                    <div v-if="prs.length > prsPerPage" class="pagination-controls">
+                        <button
+                            class="pagination-btn"
+                            @click="previousPage"
+                            :disabled="currentPage === 1"
+                            title="Previous page"
+                        >
+                            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                                <path d="M9.78 12.78a.75.75 0 0 1-1.06 0L4.47 8.53a.75.75 0 0 1 0-1.06l4.25-4.25a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042L6.06 8l3.72 3.72a.75.75 0 0 1 0 1.06Z"/>
+                            </svg>
+                            Previous
+                        </button>
+                        <span class="pagination-info">
+                            Page {{ currentPage }} of {{ totalPages }}
+                            <span class="pagination-total">({{ prs.length }} PRs)</span>
+                        </span>
+                        <button
+                            class="pagination-btn"
+                            @click="nextPage"
+                            :disabled="currentPage === totalPages"
+                            title="Next page"
+                        >
+                            Next
+                            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                                <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
 
-                <!-- Stats View -->
-                <div v-else-if="activeView === 'stats'" class="stats-view">
+                <!-- Analytics View -->
+                <div v-else-if="activeView === 'analytics'" class="analytics-view">
+                    <!-- Analytics Sub-tabs -->
+                    <div class="sub-tab-bar">
+                        <button :class="{ active: activeAnalyticsTab === 'stats' }" @click="setAnalyticsTab('stats')">Stats</button>
+                        <button :class="{ active: activeAnalyticsTab === 'lifecycle' }" @click="setAnalyticsTab('lifecycle')">Lifecycle</button>
+                        <button :class="{ active: activeAnalyticsTab === 'activity' }" @click="setAnalyticsTab('activity')">Activity</button>
+                        <button :class="{ active: activeAnalyticsTab === 'responsiveness' }" @click="setAnalyticsTab('responsiveness')">Reviews</button>
+                    </div>
+
+                <!-- Stats Sub-tab -->
+                <div v-if="activeAnalyticsTab === 'stats'" class="stats-view">
                     <!-- Stats Header with Last Updated -->
                     <div class="stats-header">
                         <div class="stats-info">
@@ -883,45 +934,45 @@
                         <table class="stats-table">
                             <thead>
                                 <tr>
-                                    <th class="sticky-col">Developer</th>
-                                    <th class="sortable" :class="{ sorted: statsSortBy === 'commits', desc: statsSortDirection === 'desc' }" @click="sortStats('commits')">
+                                    <th class="sticky-col" title="Contributor username">Developer</th>
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'commits', desc: statsSortDirection === 'desc' }" @click="sortStats('commits')" title="Total commits to the repository">
                                         Commits
                                         <span class="sort-icon">{{ statsSortBy === 'commits' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
                                     </th>
-                                    <th class="sortable" :class="{ sorted: statsSortBy === 'prs_authored', desc: statsSortDirection === 'desc' }" @click="sortStats('prs_authored')">
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'prs_authored', desc: statsSortDirection === 'desc' }" @click="sortStats('prs_authored')" title="Total pull requests authored">
                                         PRs
                                         <span class="sort-icon">{{ statsSortBy === 'prs_authored' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
                                     </th>
-                                    <th class="sortable" :class="{ sorted: statsSortBy === 'prs_merged', desc: statsSortDirection === 'desc' }" @click="sortStats('prs_merged')">
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'prs_merged', desc: statsSortDirection === 'desc' }" @click="sortStats('prs_merged')" title="Number of merged PRs">
                                         Merged
                                         <span class="sort-icon">{{ statsSortBy === 'prs_merged' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
                                     </th>
-                                    <th class="sortable" :class="{ sorted: statsSortBy === 'prs_closed', desc: statsSortDirection === 'desc' }" @click="sortStats('prs_closed')">
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'prs_closed', desc: statsSortDirection === 'desc' }" @click="sortStats('prs_closed')" title="Number of closed (not merged) PRs">
                                         Closed
                                         <span class="sort-icon">{{ statsSortBy === 'prs_closed' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
                                     </th>
-                                    <th>Merge %</th>
-                                    <th class="sortable" :class="{ sorted: statsSortBy === 'reviews_given', desc: statsSortDirection === 'desc' }" @click="sortStats('reviews_given')">
+                                    <th title="Percentage of authored PRs that were merged">Merge %</th>
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'reviews_given', desc: statsSortDirection === 'desc' }" @click="sortStats('reviews_given')" title="Total reviews given">
                                         Reviews
                                         <span class="sort-icon">{{ statsSortBy === 'reviews_given' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
                                     </th>
-                                    <th class="sortable" :class="{ sorted: statsSortBy === 'approvals', desc: statsSortDirection === 'desc' }" @click="sortStats('approvals')">
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'approvals', desc: statsSortDirection === 'desc' }" @click="sortStats('approvals')" title="Number of approval reviews">
                                         Approvals
                                         <span class="sort-icon">{{ statsSortBy === 'approvals' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
                                     </th>
-                                    <th class="sortable" :class="{ sorted: statsSortBy === 'changes_requested', desc: statsSortDirection === 'desc' }" @click="sortStats('changes_requested')">
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'changes_requested', desc: statsSortDirection === 'desc' }" @click="sortStats('changes_requested')" title="Number of changes-requested reviews">
                                         Changes Req.
                                         <span class="sort-icon">{{ statsSortBy === 'changes_requested' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
                                     </th>
-                                    <th class="sortable" :class="{ sorted: statsSortBy === 'lines_added', desc: statsSortDirection === 'desc' }" @click="sortStats('lines_added')">
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'lines_added', desc: statsSortDirection === 'desc' }" @click="sortStats('lines_added')" title="Total lines added across all PRs">
                                         Lines +
                                         <span class="sort-icon">{{ statsSortBy === 'lines_added' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
                                     </th>
-                                    <th class="sortable" :class="{ sorted: statsSortBy === 'lines_deleted', desc: statsSortDirection === 'desc' }" @click="sortStats('lines_deleted')">
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'lines_deleted', desc: statsSortDirection === 'desc' }" @click="sortStats('lines_deleted')" title="Total lines deleted across all PRs">
                                         Lines -
                                         <span class="sort-icon">{{ statsSortBy === 'lines_deleted' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
                                     </th>
-                                    <th class="sortable" :class="{ sorted: statsSortBy === 'avg_pr_score', desc: statsSortDirection === 'desc' }" @click="sortStats('avg_pr_score')">
+                                    <th class="sortable" :class="{ sorted: statsSortBy === 'avg_pr_score', desc: statsSortDirection === 'desc' }" @click="sortStats('avg_pr_score')" title="Average code review score (0-10)">
                                         Avg Score
                                         <span class="sort-icon">{{ statsSortBy === 'avg_pr_score' ? (statsSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
                                     </th>
@@ -962,6 +1013,453 @@
                             </tbody>
                         </table>
                     </div>
+                </div>
+
+                <!-- Lifecycle Sub-tab -->
+                <div v-else-if="activeAnalyticsTab === 'lifecycle'" class="lifecycle-view">
+                    <div v-if="lifecycleLoading" class="loading-state">
+                        <div class="spinner"></div>
+                        <p>Loading lifecycle metrics...</p>
+                    </div>
+                    <div v-else-if="lifecycleError" class="error-state">
+                        <p>{{ lifecycleError }}</p>
+                        <button class="btn-primary" @click="fetchLifecycleMetrics()">Retry</button>
+                    </div>
+                    <div v-else-if="!lifecycleMetrics" class="empty-state">
+                        <p>Select a repository to view PR lifecycle metrics.</p>
+                    </div>
+                    <template v-else>
+                        <!-- Summary Cards -->
+                        <div class="stat-cards">
+                            <div class="stat-card">
+                                <div class="stat-card-value">{{ lifecycleMetrics.median_time_to_merge !== null ? formatHours(lifecycleMetrics.median_time_to_merge) : '-' }}</div>
+                                <div class="stat-card-label">Median Time to Merge</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-card-value">{{ lifecycleMetrics.median_time_to_first_review !== null ? formatHours(lifecycleMetrics.median_time_to_first_review) : '-' }}</div>
+                                <div class="stat-card-label">Median Time to First Review</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-card-value" :class="{ 'stat-failure': lifecycleMetrics.stale_count > 0 }">{{ lifecycleMetrics.stale_count }}</div>
+                                <div class="stat-card-label">Stale PRs (14+ days)</div>
+                            </div>
+                        </div>
+
+                        <!-- Time-to-merge distribution -->
+                        <div class="chart-section" v-if="lifecycleMetrics.distribution">
+                            <h4 class="chart-title">Time to Merge Distribution</h4>
+                            <div class="distribution-chart">
+                                <div
+                                    v-for="(count, bucket) in lifecycleMetrics.distribution"
+                                    :key="bucket"
+                                    class="distribution-bar-row"
+                                >
+                                    <span class="distribution-label">{{ bucket }}</span>
+                                    <div class="distribution-bar-track">
+                                        <div
+                                            class="distribution-bar"
+                                            :style="{ width: getBarHeight(count, getMaxValue(Object.entries(lifecycleMetrics.distribution).map(([k,v]) => ({k, count: v})), 'count')) }"
+                                        ></div>
+                                    </div>
+                                    <span class="distribution-count">{{ count }}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Stale PRs Warning -->
+                        <div class="chart-section" v-if="lifecycleMetrics.stale_prs && lifecycleMetrics.stale_prs.length > 0">
+                            <h4 class="chart-title">Stale Pull Requests</h4>
+                            <div class="stale-pr-list">
+                                <div v-for="pr in lifecycleMetrics.stale_prs" :key="pr.number" class="stale-pr-item">
+                                    <span class="pr-number">#{{ pr.number }}</span>
+                                    <span class="stale-pr-title">{{ pr.title }}</span>
+                                    <span class="stale-pr-author">{{ pr.author }}</span>
+                                    <span class="stale-age">{{ Math.round(pr.age_days) }}d inactive</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- PR Table -->
+                        <div class="chart-section" v-if="lifecycleMetrics.pr_table">
+                            <h4 class="chart-title">PR Lifecycle Details</h4>
+                            <div class="table-wrapper">
+                                <table class="stats-table">
+                                    <thead>
+                                        <tr>
+                                            <th class="sortable" :class="{ sorted: lifecycleSortBy === 'number' }" @click="sortLifecyclePRs('number')" title="Pull request number">
+                                                PR#
+                                                <span class="sort-icon">{{ lifecycleSortBy === 'number' ? (lifecycleSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                            </th>
+                                            <th class="sortable" :class="{ sorted: lifecycleSortBy === 'author' }" @click="sortLifecyclePRs('author')" title="PR author username">
+                                                Author
+                                                <span class="sort-icon">{{ lifecycleSortBy === 'author' ? (lifecycleSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                            </th>
+                                            <th class="sortable" :class="{ sorted: lifecycleSortBy === 'state' }" @click="sortLifecyclePRs('state')" title="Current PR state (Open, Merged, Closed)">
+                                                State
+                                                <span class="sort-icon">{{ lifecycleSortBy === 'state' ? (lifecycleSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                            </th>
+                                            <th class="sortable" :class="{ sorted: lifecycleSortBy === 'time_to_first_review_hours' }" @click="sortLifecyclePRs('time_to_first_review_hours')" title="Hours from PR creation to first review">
+                                                Time to Review
+                                                <span class="sort-icon">{{ lifecycleSortBy === 'time_to_first_review_hours' ? (lifecycleSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                            </th>
+                                            <th class="sortable" :class="{ sorted: lifecycleSortBy === 'time_to_merge_hours' }" @click="sortLifecyclePRs('time_to_merge_hours')" title="Hours from PR creation to merge">
+                                                Time to Merge
+                                                <span class="sort-icon">{{ lifecycleSortBy === 'time_to_merge_hours' ? (lifecycleSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                            </th>
+                                            <th class="sortable" :class="{ sorted: lifecycleSortBy === 'first_reviewer' }" @click="sortLifecyclePRs('first_reviewer')" title="First person to review this PR">
+                                                First Reviewer
+                                                <span class="sort-icon">{{ lifecycleSortBy === 'first_reviewer' ? (lifecycleSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="pr in sortedLifecyclePRs" :key="pr.number">
+                                            <td><span class="pr-number">#{{ pr.number }}</span></td>
+                                            <td>{{ pr.author }}</td>
+                                            <td><span class="state-badge" :class="'state-' + (pr.state || '').toLowerCase()">{{ pr.state }}</span></td>
+                                            <td>{{ pr.time_to_first_review_hours !== null ? formatHours(pr.time_to_first_review_hours) : '-' }}</td>
+                                            <td>{{ pr.time_to_merge_hours !== null ? formatHours(pr.time_to_merge_hours) : '-' }}</td>
+                                            <td>{{ pr.first_reviewer || '-' }}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- Activity Sub-tab -->
+                <div v-else-if="activeAnalyticsTab === 'activity'" class="activity-view">
+                    <!-- Timeframe Toggle -->
+                    <div class="timeframe-toggle">
+                        <button :class="{ active: activityTimeframe === 4 }" @click="activityTimeframe = 4; fetchCodeActivity()">1 Month</button>
+                        <button :class="{ active: activityTimeframe === 13 }" @click="activityTimeframe = 13; fetchCodeActivity()">3 Months</button>
+                        <button :class="{ active: activityTimeframe === 26 }" @click="activityTimeframe = 26; fetchCodeActivity()">6 Months</button>
+                        <button :class="{ active: activityTimeframe === 52 }" @click="activityTimeframe = 52; fetchCodeActivity()">1 Year</button>
+                    </div>
+
+                    <div v-if="activityLoading" class="loading-state">
+                        <div class="spinner"></div>
+                        <p>Loading code activity...</p>
+                    </div>
+                    <div v-else-if="activityError" class="error-state">
+                        <p>{{ activityError }}</p>
+                        <button class="btn-primary" @click="fetchCodeActivity()">Retry</button>
+                    </div>
+                    <div v-else-if="!codeActivity" class="empty-state">
+                        <p>Select a repository to view code activity.</p>
+                    </div>
+                    <template v-else>
+                        <!-- Summary Cards -->
+                        <div class="stat-cards">
+                            <div class="stat-card">
+                                <div class="stat-card-value">{{ codeActivity.summary?.total_commits || 0 }}</div>
+                                <div class="stat-card-label">Total Commits</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-card-value">{{ codeActivity.summary?.avg_weekly_commits || 0 }}</div>
+                                <div class="stat-card-label">Avg Weekly</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-card-value additions">+{{ formatNumber(codeActivity.summary?.total_additions || 0) }}</div>
+                                <div class="stat-card-label">Additions</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-card-value deletions">-{{ formatNumber(codeActivity.summary?.total_deletions || 0) }}</div>
+                                <div class="stat-card-label">Deletions</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-card-value">{{ codeActivity.summary?.owner_percentage || 0 }}%</div>
+                                <div class="stat-card-label">Owner</div>
+                            </div>
+                        </div>
+
+                        <!-- Weekly Commits Bar Chart -->
+                        <div class="chart-section">
+                            <h4 class="chart-title">Weekly Commits</h4>
+                            <div class="bar-chart">
+                                <div class="bar-chart-bars">
+                                    <div
+                                        v-for="(week, idx) in codeActivity.weekly_commits"
+                                        :key="idx"
+                                        class="bar-wrapper"
+                                        :title="`Week of ${week.week}\n${week.total} commits`"
+                                    >
+                                        <div class="bar" :style="{ height: getBarHeight(week.total, getMaxValue(codeActivity.weekly_commits, 'total')) }"></div>
+                                    </div>
+                                </div>
+                                <div class="bar-chart-labels" v-if="codeActivity.weekly_commits.length > 0">
+                                    <span>{{ codeActivity.weekly_commits[0]?.week }}</span>
+                                    <span>{{ codeActivity.weekly_commits[codeActivity.weekly_commits.length - 1]?.week }}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Code Changes (additions/deletions) -->
+                        <div class="chart-section">
+                            <h4 class="chart-title">Code Changes</h4>
+                            <div class="bar-chart stacked-chart">
+                                <div class="bar-chart-bars">
+                                    <div
+                                        v-for="(week, idx) in codeActivity.code_changes"
+                                        :key="idx"
+                                        class="stacked-bar-wrapper"
+                                        :title="`Week of ${week.week}\n+${week.additions} additions\n-${week.deletions} deletions\nNet: ${week.additions - week.deletions}`"
+                                    >
+                                        <div class="bar bar-additions" :style="{ height: getBarHeight(week.additions, getMaxValue(codeActivity.code_changes, 'additions')) }"></div>
+                                        <div class="bar bar-deletions" :style="{ height: getBarHeight(week.deletions, getMaxValue(codeActivity.code_changes, 'deletions')) }"></div>
+                                    </div>
+                                </div>
+                                <div class="bar-chart-legend">
+                                    <span class="legend-item"><span class="legend-color additions-color"></span> Additions</span>
+                                    <span class="legend-item"><span class="legend-color deletions-color"></span> Deletions</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Owner vs Community -->
+                        <div class="chart-section" v-if="codeActivity.summary?.owner_percentage > 0">
+                            <h4 class="chart-title">Owner vs Community</h4>
+                            <div class="participation-bar">
+                                <div class="participation-owner" :style="{ width: codeActivity.summary.owner_percentage + '%' }">
+                                    {{ codeActivity.summary.owner_percentage }}% Owner
+                                </div>
+                                <div class="participation-community" :style="{ width: (100 - codeActivity.summary.owner_percentage) + '%' }">
+                                    {{ (100 - codeActivity.summary.owner_percentage).toFixed(1) }}% Community
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- Responsiveness Sub-tab -->
+                <div v-else-if="activeAnalyticsTab === 'responsiveness'" class="responsiveness-view">
+                    <div v-if="responsivenessLoading" class="loading-state">
+                        <div class="spinner"></div>
+                        <p>Loading review responsiveness...</p>
+                    </div>
+                    <div v-else-if="responsivenessError" class="error-state">
+                        <p>{{ responsivenessError }}</p>
+                        <button class="btn-primary" @click="fetchReviewResponsiveness()">Retry</button>
+                    </div>
+                    <div v-else-if="!reviewResponsiveness" class="empty-state">
+                        <p>Select a repository to view review responsiveness.</p>
+                    </div>
+                    <template v-else>
+                        <!-- Summary Cards -->
+                        <div class="stat-cards">
+                            <div class="stat-card">
+                                <div class="stat-card-value">{{ reviewResponsiveness.avg_team_response_hours !== null ? formatHours(reviewResponsiveness.avg_team_response_hours) : '-' }}</div>
+                                <div class="stat-card-label">Avg Team Response</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-card-value">{{ reviewResponsiveness.fastest_reviewer || '-' }}</div>
+                                <div class="stat-card-label">Fastest Reviewer</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-card-value" :class="{ 'stat-failure': reviewResponsiveness.prs_awaiting_review > 0 }">{{ reviewResponsiveness.prs_awaiting_review }}</div>
+                                <div class="stat-card-label">PRs Awaiting Review</div>
+                            </div>
+                        </div>
+
+                        <!-- Reviewer Leaderboard -->
+                        <div class="chart-section" v-if="reviewResponsiveness.leaderboard && reviewResponsiveness.leaderboard.length > 0">
+                            <h4 class="chart-title">Reviewer Leaderboard</h4>
+                            <div class="table-wrapper">
+                                <table class="stats-table">
+                                    <thead>
+                                        <tr>
+                                            <th class="sortable" :class="{ sorted: responsivenessSortBy === 'reviewer' }" @click="sortResponsiveness('reviewer')" title="GitHub username of the reviewer">
+                                                Reviewer
+                                                <span class="sort-icon">{{ responsivenessSortBy === 'reviewer' ? (responsivenessSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                            </th>
+                                            <th class="sortable" :class="{ sorted: responsivenessSortBy === 'avg_response_time_hours' }" @click="sortResponsiveness('avg_response_time_hours')" title="Average hours from PR creation to review">
+                                                Avg Response
+                                                <span class="sort-icon">{{ responsivenessSortBy === 'avg_response_time_hours' ? (responsivenessSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                            </th>
+                                            <th class="sortable" :class="{ sorted: responsivenessSortBy === 'median_response_time_hours' }" @click="sortResponsiveness('median_response_time_hours')" title="Median response time in hours">
+                                                Median
+                                                <span class="sort-icon">{{ responsivenessSortBy === 'median_response_time_hours' ? (responsivenessSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                            </th>
+                                            <th class="sortable" :class="{ sorted: responsivenessSortBy === 'total_reviews' }" @click="sortResponsiveness('total_reviews')" title="Total number of reviews given">
+                                                Reviews
+                                                <span class="sort-icon">{{ responsivenessSortBy === 'total_reviews' ? (responsivenessSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                            </th>
+                                            <th class="sortable" :class="{ sorted: responsivenessSortBy === 'approvals' }" @click="sortResponsiveness('approvals')" title="Number of approval reviews">
+                                                Approvals
+                                                <span class="sort-icon">{{ responsivenessSortBy === 'approvals' ? (responsivenessSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                            </th>
+                                            <th class="sortable" :class="{ sorted: responsivenessSortBy === 'changes_requested' }" @click="sortResponsiveness('changes_requested')" title="Number of changes-requested reviews">
+                                                Changes Req.
+                                                <span class="sort-icon">{{ responsivenessSortBy === 'changes_requested' ? (responsivenessSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                            </th>
+                                            <th class="sortable" :class="{ sorted: responsivenessSortBy === 'approval_rate' }" @click="sortResponsiveness('approval_rate')" title="Percentage of reviews that were approvals">
+                                                Approval %
+                                                <span class="sort-icon">{{ responsivenessSortBy === 'approval_rate' ? (responsivenessSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="r in sortedReviewerLeaderboard" :key="r.reviewer">
+                                            <td class="reviewer-name">{{ r.reviewer }}</td>
+                                            <td>
+                                                <span v-if="r.avg_response_time_hours !== null" :class="getResponseTimeClass(r.avg_response_time_hours)">
+                                                    {{ formatHours(r.avg_response_time_hours) }}
+                                                </span>
+                                                <span v-else>-</span>
+                                            </td>
+                                            <td>{{ r.median_response_time_hours !== null ? formatHours(r.median_response_time_hours) : '-' }}</td>
+                                            <td>{{ r.total_reviews }}</td>
+                                            <td>{{ r.approvals }}</td>
+                                            <td>{{ r.changes_requested }}</td>
+                                            <td>{{ r.approval_rate }}%</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Bottleneck Section -->
+                        <div class="chart-section" v-if="reviewResponsiveness.bottlenecks && reviewResponsiveness.bottlenecks.length > 0">
+                            <h4 class="chart-title">PRs Waiting for Review</h4>
+                            <div class="bottleneck-list">
+                                <div v-for="pr in reviewResponsiveness.bottlenecks" :key="pr.number" class="bottleneck-item">
+                                    <span class="pr-number">#{{ pr.number }}</span>
+                                    <span class="bottleneck-title">{{ pr.title }}</span>
+                                    <span class="bottleneck-author">{{ pr.author }}</span>
+                                    <span class="wait-time" :class="getResponseTimeClass(pr.wait_hours)">{{ formatHours(pr.wait_hours) }} waiting</span>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                </div><!-- /analytics-view -->
+
+                <!-- Workflows View -->
+                <div v-else-if="activeView === 'workflows'" class="workflows-view">
+                    <!-- Workflow Filters -->
+                    <div class="workflow-filters">
+                        <select v-model="workflowFilters.workflow" @change="fetchWorkflowRuns()">
+                            <option value="">All Workflows</option>
+                            <option v-for="wf in workflowsList" :key="wf.id" :value="wf.id">{{ wf.name }}</option>
+                        </select>
+                        <select v-model="workflowFilters.branch" @change="fetchWorkflowRuns()">
+                            <option value="">All Branches</option>
+                            <option v-for="b in branches" :key="b" :value="b">{{ b }}</option>
+                        </select>
+                        <select v-model="workflowFilters.event" @change="fetchWorkflowRuns()">
+                            <option value="">All Events</option>
+                            <option value="push">push</option>
+                            <option value="pull_request">pull_request</option>
+                            <option value="schedule">schedule</option>
+                            <option value="workflow_dispatch">workflow_dispatch</option>
+                        </select>
+                        <select v-model="workflowFilters.conclusion" @change="fetchWorkflowRuns()">
+                            <option value="">All Conclusions</option>
+                            <option value="success">success</option>
+                            <option value="failure">failure</option>
+                            <option value="cancelled">cancelled</option>
+                            <option value="skipped">skipped</option>
+                        </select>
+                        <button class="btn-secondary btn-sm" @click="resetWorkflowFilters()" title="Reset filters">Reset</button>
+                    </div>
+
+                    <div v-if="workflowsLoading" class="loading-state">
+                        <div class="spinner"></div>
+                        <p>Loading workflow runs...</p>
+                    </div>
+                    <div v-else-if="workflowsError" class="error-state">
+                        <p>{{ workflowsError }}</p>
+                        <button class="btn-primary" @click="fetchWorkflowRuns()">Retry</button>
+                    </div>
+                    <div v-else-if="workflowRuns.length === 0" class="empty-state">
+                        <p>No workflow runs found. Select a repository or adjust filters.</p>
+                    </div>
+                    <template v-else>
+                        <!-- Stat Cards -->
+                        <div class="stat-cards">
+                            <div class="stat-card">
+                                <div class="stat-card-value">{{ workflowStats?.pass_rate || 0 }}%</div>
+                                <div class="stat-card-label">Pass Rate</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-card-value">{{ formatDuration(workflowStats?.avg_duration) }}</div>
+                                <div class="stat-card-label">Avg Duration</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-card-value">{{ workflowStats?.total_runs || 0 }}</div>
+                                <div class="stat-card-label">Total Runs</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-card-value stat-failure">{{ workflowStats?.failure_count || 0 }}</div>
+                                <div class="stat-card-label">Failures</div>
+                            </div>
+                        </div>
+
+                        <!-- Runs Table -->
+                        <div class="table-wrapper">
+                            <table class="stats-table workflows-table">
+                                <thead>
+                                    <tr>
+                                        <th class="sortable" :class="{ sorted: workflowSortBy === 'name' }" @click="sortWorkflows('name')" title="Workflow name and run number">
+                                            Workflow
+                                            <span class="sort-icon">{{ workflowSortBy === 'name' ? (workflowSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                        </th>
+                                        <th class="sortable" :class="{ sorted: workflowSortBy === 'conclusion' }" @click="sortWorkflows('conclusion')" title="Run conclusion or current status">
+                                            Status
+                                            <span class="sort-icon">{{ workflowSortBy === 'conclusion' ? (workflowSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                        </th>
+                                        <th class="sortable" :class="{ sorted: workflowSortBy === 'head_branch' }" @click="sortWorkflows('head_branch')" title="Branch that triggered the workflow">
+                                            Branch
+                                            <span class="sort-icon">{{ workflowSortBy === 'head_branch' ? (workflowSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                        </th>
+                                        <th class="sortable" :class="{ sorted: workflowSortBy === 'event' }" @click="sortWorkflows('event')" title="Git event that triggered the run">
+                                            Event
+                                            <span class="sort-icon">{{ workflowSortBy === 'event' ? (workflowSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                        </th>
+                                        <th class="sortable" :class="{ sorted: workflowSortBy === 'actor_login' }" @click="sortWorkflows('actor_login')" title="User who triggered the workflow">
+                                            Actor
+                                            <span class="sort-icon">{{ workflowSortBy === 'actor_login' ? (workflowSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                        </th>
+                                        <th class="sortable" :class="{ sorted: workflowSortBy === 'duration_seconds' }" @click="sortWorkflows('duration_seconds')" title="Time from run start to completion">
+                                            Duration
+                                            <span class="sort-icon">{{ workflowSortBy === 'duration_seconds' ? (workflowSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                        </th>
+                                        <th class="sortable" :class="{ sorted: workflowSortBy === 'created_at' }" @click="sortWorkflows('created_at')" title="When the workflow run started">
+                                            Started
+                                            <span class="sort-icon">{{ workflowSortBy === 'created_at' ? (workflowSortDirection === 'desc' ? '▼' : '▲') : '⇅' }}</span>
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="run in paginatedWorkflowRuns" :key="run.id">
+                                        <td>
+                                            <a :href="run.html_url" target="_blank" class="workflow-name">{{ run.display_title || run.name }}</a>
+                                            <div class="workflow-run-number">#{{ run.run_number }}</div>
+                                        </td>
+                                        <td>
+                                            <span class="workflow-status-badge" :class="getWorkflowConclusionClass(run.conclusion || run.status)">
+                                                {{ run.conclusion || run.status }}
+                                            </span>
+                                        </td>
+                                        <td class="text-mono">{{ run.head_branch }}</td>
+                                        <td>{{ run.event }}</td>
+                                        <td>{{ run.actor_login }}</td>
+                                        <td>{{ formatDuration(run.duration_seconds) }}</td>
+                                        <td>{{ formatDate(run.created_at) }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Workflow Pagination -->
+                        <div class="pagination" v-if="totalWorkflowPages > 1">
+                            <button class="btn-secondary" @click="workflowPage > 1 && workflowPage--" :disabled="workflowPage <= 1">Previous</button>
+                            <span class="page-info">Page {{ workflowPage }} of {{ totalWorkflowPages }} ({{ sortedWorkflowRuns.length }} runs)</span>
+                            <button class="btn-secondary" @click="workflowPage < totalWorkflowPages && workflowPage++" :disabled="workflowPage >= totalWorkflowPages">Next</button>
+                        </div>
+                    </template>
                 </div>
 
                 <!-- Description Modal -->
@@ -1247,6 +1745,14 @@
                             @input="fetchReviewHistory"
                             placeholder="Filter by repo..."
                             class="history-filter-input"
+                        >
+                        <input
+                            type="number"
+                            v-model="historyFilters.prNumber"
+                            @input="fetchReviewHistory"
+                            placeholder="PR #..."
+                            class="history-filter-input pr-number-input"
+                            min="1"
                         >
                     </div>
                     <div class="history-panel-body">
