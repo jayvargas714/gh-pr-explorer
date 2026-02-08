@@ -1,10 +1,15 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import fs from 'fs'
+import path from 'path'
 
-// Backend configuration from environment or defaults
-const BACKEND_HOST = process.env.VITE_BACKEND_HOST || '127.0.0.1'
-const BACKEND_PORT = process.env.VITE_BACKEND_PORT || '5050'
-const FRONTEND_PORT = process.env.VITE_PORT || 3000
+// Read backend config from the single source of truth: config.json
+const config = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, '../config.json'), 'utf-8')
+)
+const BACKEND_HOST = config.host || '127.0.0.1'
+const BACKEND_PORT = config.port || 5050
+const FRONTEND_PORT = config.frontend_port || 3000
 
 // https://vitejs.dev/config/
 export default defineConfig({
