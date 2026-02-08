@@ -7,6 +7,10 @@ import { PRList } from './components/prs/PRList'
 import { AnalyticsView } from './components/analytics/AnalyticsView'
 import { WorkflowsView } from './components/workflows/WorkflowsView'
 import { QueuePanel } from './components/queue/QueuePanel'
+import { ReviewErrorModal } from './components/reviews/ReviewErrorModal'
+import { ReviewViewer } from './components/reviews/ReviewViewer'
+import { HistoryPanel } from './components/reviews/HistoryPanel'
+import { ReviewPollingManager } from './components/reviews/ReviewPollingManager'
 import { useAccountStore } from './stores/useAccountStore'
 import { useUIStore } from './stores/useUIStore'
 
@@ -52,6 +56,10 @@ function App() {
       </MainLayout>
 
       <QueuePanel />
+      <HistoryPanel />
+      <ReviewErrorModal />
+      <ReviewViewer />
+      <ReviewPollingManager />
     </>
   )
 }

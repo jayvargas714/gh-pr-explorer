@@ -18,8 +18,8 @@
 | **Phase 5: PR List and Cards** | ✅ Complete | 4 | ~550 | 42a292c | PR list, cards, badges, actions, divergence |
 | **Phase 6: Analytics Views** | ✅ Complete | 7 | ~756 | bdc1551 | 4 sub-tabs, charts, tables, CSS-only visualizations |
 | **Phase 7: CI/Workflows View** | ✅ Complete | 5 | ~370 | 8d7fd31 | Filters, stats cards, sortable table, pagination |
-| **Phase 8: Merge Queue Panel** | ✅ Complete | 4 | ~450 | - | Slide-out panel, notes modal, reordering, badges |
-| **Phase 9: Code Reviews + History** | ⏳ Pending | - | - | - | Review system, history panel |
+| **Phase 8: Merge Queue Panel** | ✅ Complete | 4 | ~450 | 4a35c71 | Slide-out panel, notes modal, reordering, badges |
+| **Phase 9: Code Reviews + History** | ✅ Complete | 6 | ~620 | - | Review button, error/viewer modals, history panel, polling |
 | **Phase 10: Modals and Remaining** | ⏳ Pending | - | - | - | Description modal, welcome section |
 | **Phase 11: Integration and Polish** | ⏳ Pending | - | - | - | Wire everything, test, update docs |
 
@@ -78,28 +78,25 @@
 
 ---
 
-## Next Up: Phase 9 - Code Reviews + History
+## Next Up: Phase 10 - Modals and Remaining Features
 
 **Components to Build:**
-- ReviewButton (start/cancel/status review button)
-- ReviewErrorModal (error details modal)
-- ReviewViewer (markdown review viewer modal)
-- HistoryPanel (slide-out panel for review history)
-- ReviewPollingManager (useEffect hook for polling)
+- DescriptionModal (PR description markdown viewer)
+- WelcomeSection (onboarding for unauthenticated users)
 
 **CSS:**
-- reviews.css
+- modals.css (if needed, otherwise use existing modal styles)
 
-**Expected Files:** ~5 components + 1 CSS file
+**Expected Files:** ~2 components
 
 ---
 
 ## Totals So Far
 
-- **Files Created:** 76
-- **Lines of Code:** ~6,607
-- **Commits:** 7
-- **Time:** Phases 0-8 complete (79% done)
+- **Files Created:** 82
+- **Lines of Code:** ~7,227
+- **Commits:** 8
+- **Time:** Phases 0-9 complete (88% done)
 
 ---
 
