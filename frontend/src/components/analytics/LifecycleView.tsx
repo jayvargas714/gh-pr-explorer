@@ -116,18 +116,23 @@ export function LifecycleView() {
       <div className="mx-lifecycle__distribution">
         <h3>Merge Time Distribution</h3>
         <div className="mx-distribution-bars">
-          {Object.entries(lifecycleMetrics.distribution).map(([bucket, count]) => (
-            <div key={bucket} className="mx-distribution-bar">
-              <span className="mx-distribution-bar__label">{bucket}</span>
-              <div
-                className="mx-distribution-bar__fill"
-                style={{
-                  width: `${(count / Math.max(...Object.values(lifecycleMetrics.distribution))) * 100}%`,
-                }}
-              />
-              <span className="mx-distribution-bar__count">{count}</span>
-            </div>
-          ))}
+          {(() => {
+            const maxCount = Math.max(...Object.values(lifecycleMetrics.distribution).map(Number))
+            return Object.entries(lifecycleMetrics.distribution).map(([bucket, count]) => (
+              <div key={bucket} className="mx-distribution-bar">
+                <span className="mx-distribution-bar__label">{bucket}</span>
+                <div className="mx-distribution-bar__track">
+                  <div
+                    className="mx-distribution-bar__fill"
+                    style={{
+                      width: `${maxCount > 0 ? (Number(count) / maxCount) * 100 : 0}%`,
+                    }}
+                  />
+                </div>
+                <span className="mx-distribution-bar__count">{count}</span>
+              </div>
+            ))
+          })()}
         </div>
       </div>
 

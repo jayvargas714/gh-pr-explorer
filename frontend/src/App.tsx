@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { MainLayout } from './components/layout/MainLayout'
+import { ViewTabs } from './components/layout/ViewTabs'
 import { WelcomeSection } from './components/layout/WelcomeSection'
 import { AccountSelector } from './components/account/AccountSelector'
 import { RepoSelector } from './components/account/RepoSelector'
@@ -14,10 +15,13 @@ import { HistoryPanel } from './components/reviews/HistoryPanel'
 import { ReviewPollingManager } from './components/reviews/ReviewPollingManager'
 import { useAccountStore } from './stores/useAccountStore'
 import { useUIStore } from './stores/useUIStore'
+import { useSettingsPersistence } from './hooks/useSettingsPersistence'
 
 function App() {
-  const selectedRepo = useAccountStore((state) => state.selectedRepo)
+  const { selectedAccount, selectedRepo } = useAccountStore()
   const activeView = useUIStore((state) => state.activeView)
+
+  useSettingsPersistence()
 
   useEffect(() => {
     // Check for saved theme preference or default to dark
@@ -48,13 +52,19 @@ function App() {
         <AccountSelector />
         <RepoSelector />
 
-        {selectedRepo ? (
+        {!selectedAccount ? (
+          <WelcomeSection />
+        ) : !selectedRepo ? (
+          <div className="mx-empty-state">
+            <h2>Select a Repository</h2>
+            <p>Choose a repository from the dropdown above to view pull requests</p>
+          </div>
+        ) : (
           <>
+            <ViewTabs />
             <FilterPanel />
             {renderView()}
           </>
-        ) : (
-          <WelcomeSection />
         )}
       </MainLayout>
 

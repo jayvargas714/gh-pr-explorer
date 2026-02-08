@@ -1,6 +1,63 @@
 /* Analytics Views Styles */
 
-/* Common Analytics Layout */
+/* ============================================================================
+   Analytics Tab Navigation
+   ============================================================================ */
+
+.mx-analytics {
+  width: 100%;
+}
+
+.mx-analytics__tabs {
+  display: flex;
+  gap: var(--mx-space-2);
+  border-bottom: 1px solid var(--mx-color-border);
+  margin-bottom: var(--mx-space-6);
+}
+
+.mx-analytics-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-space-2);
+  padding: var(--mx-space-3) var(--mx-space-4);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-sm);
+  font-weight: var(--mx-font-weight-medium);
+  cursor: pointer;
+  transition: all var(--mx-transition-fast);
+  position: relative;
+  bottom: -1px;
+}
+
+.mx-analytics-tab:hover {
+  color: var(--mx-color-text-primary);
+  background-color: var(--mx-color-surface-hover);
+}
+
+.mx-analytics-tab--active {
+  color: var(--mx-color-primary);
+  border-bottom-color: var(--mx-color-primary);
+}
+
+.mx-analytics-tab__icon {
+  font-size: var(--mx-font-size-base);
+}
+
+.mx-analytics-tab__label {
+  font-size: var(--mx-font-size-sm);
+}
+
+.mx-analytics__content {
+  min-height: 400px;
+}
+
+/* ============================================================================
+   Common Analytics Layout
+   ============================================================================ */
+
 .mx-analytics__loading {
   display: flex;
   flex-direction: column;
@@ -125,14 +182,22 @@
   font-size: var(--mx-font-size-sm);
   color: var(--mx-color-text-secondary);
   font-weight: var(--mx-font-weight-medium);
+  flex-shrink: 0;
+}
+
+.mx-distribution-bar__track {
+  flex: 1;
+  height: 24px;
+  background: var(--mx-color-bg-secondary);
+  border-radius: var(--mx-radius-sm);
+  overflow: hidden;
 }
 
 .mx-distribution-bar__fill {
-  flex: 1;
-  height: 24px;
+  height: 100%;
   background: linear-gradient(90deg, var(--mx-color-primary), var(--mx-color-primary-light));
   border-radius: var(--mx-radius-sm);
-  transition: var(--mx-transition-base);
+  transition: width var(--mx-transition-base);
   min-width: 2px;
 }
 

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { setSetting } from '../api/settings'
 
 interface FilterState {
   // Basic filters
@@ -49,13 +50,17 @@ interface FilterState {
   sortDirection: string
   limit: number
 
+  // Persistence
+  _skipSave: boolean
+
   // Actions
   setFilter: <K extends keyof FilterState>(key: K, value: FilterState[K]) => void
   resetFilters: () => void
   getActiveFiltersCount: () => number
+  restoreFilters: (saved: Record<string, any>) => void
 }
 
-const DEFAULT_FILTERS: Omit<FilterState, 'setFilter' | 'resetFilters' | 'getActiveFiltersCount'> = {
+const DEFAULT_FILTERS: Omit<FilterState, 'setFilter' | 'resetFilters' | 'getActiveFiltersCount' | 'restoreFilters' | '_skipSave'> = {
   state: 'open',
   author: '',
   assignee: '',
@@ -96,12 +101,40 @@ const DEFAULT_FILTERS: Omit<FilterState, 'setFilter' | 'resetFilters' | 'getActi
   limit: 100,
 }
 
+// Debounced save to backend
+let saveTimeout: ReturnType<typeof setTimeout> | null = null
+
+export function debouncedSaveSettings(filters: Record<string, any>, accountLogin: string | null, repoFullName: string | null) {
+  if (saveTimeout) clearTimeout(saveTimeout)
+  saveTimeout = setTimeout(() => {
+    setSetting('filter_settings', {
+      filters,
+      selectedAccountLogin: accountLogin,
+      selectedRepoFullName: repoFullName,
+    }).catch((err) => console.error('Failed to save settings:', err))
+  }, 1000)
+}
+
 export const useFilterStore = create<FilterState>((set, get) => ({
   ...DEFAULT_FILTERS,
+  _skipSave: false,
 
   setFilter: (key, value) => set({ [key]: value }),
 
   resetFilters: () => set(DEFAULT_FILTERS),
+
+  restoreFilters: (saved: Record<string, any>) => {
+    const updates: Record<string, any> = { _skipSave: true }
+    const state = get()
+    for (const key of Object.keys(saved)) {
+      if (key in state && key !== 'setFilter' && key !== 'resetFilters' && key !== 'getActiveFiltersCount' && key !== 'restoreFilters' && key !== '_skipSave') {
+        updates[key] = saved[key]
+      }
+    }
+    set(updates)
+    // Re-enable saving after restore
+    setTimeout(() => set({ _skipSave: false }), 100)
+  },
 
   getActiveFiltersCount: () => {
     const state = get()

@@ -269,6 +269,7 @@
 
 .mx-repo-badge {
   display: inline-flex;
+  margin-left: auto;
   padding: var(--mx-space-1) var(--mx-space-2);
   background-color: var(--mx-color-warning-bg);
   color: var(--mx-color-warning);
