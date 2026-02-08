@@ -15,9 +15,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
-from flask import Flask, jsonify, render_template, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 
-from database import get_database, get_reviews_db, get_queue_db, get_settings_db, get_dev_stats_db, get_lifecycle_cache_db
+from database import get_database, get_reviews_db, get_queue_db, get_settings_db, get_dev_stats_db, get_lifecycle_cache_db, get_workflow_cache_db
 
 # Configure logging
 logging.basicConfig(
@@ -49,6 +49,11 @@ reviews_db = get_reviews_db()
 queue_db = get_queue_db()
 settings_db = get_settings_db()
 dev_stats_db = get_dev_stats_db()
+workflow_cache_db = get_workflow_cache_db()
+
+# Workflow cache background refresh tracking
+_workflow_refresh_in_progress = set()
+_workflow_refresh_lock = threading.Lock()
 
 # Simple in-memory cache
 cache = {}
@@ -279,18 +284,8 @@ def parse_critical_issues(content):
 
 @app.route("/")
 def index():
-    """Serve the main HTML page.
-
-    In production mode, serves the React build from frontend/dist/.
-    In development mode, falls back to the legacy Vue.js template.
-    """
-    frontend_dist = Path(__file__).parent / "frontend" / "dist" / "index.html"
-    if frontend_dist.exists():
-        # Production mode: serve React build
-        return send_from_directory(Path(__file__).parent / "frontend" / "dist", "index.html")
-    else:
-        # Development mode: serve legacy Vue.js template
-        return render_template("index.html")
+    """Serve the React frontend. Run 'npm run build' in frontend/ first."""
+    return send_from_directory(Path(__file__).parent / "frontend" / "dist", "index.html")
 
 
 @app.route("/assets/<path:filename>")
@@ -669,123 +664,287 @@ def get_pr_divergence(owner, repo):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/repos/<owner>/<repo>/workflow-runs")
-@cached()
-def get_workflow_runs(owner, repo):
-    """Get workflow runs with optional filters and aggregate stats."""
-    try:
-        # Fetch workflows list
+def _fetch_workflow_data(owner, repo):
+    """Fetch unfiltered workflow runs in parallel batches.
+
+    Returns dict with keys: runs, workflows, all_time_total
+    """
+    max_runs = config.get("workflow_cache_max_runs", 1000)
+    max_pages = max_runs // 100
+
+    base_url = f"repos/{owner}/{repo}/actions/runs?per_page=100"
+    jq_query = (
+        "[.workflow_runs[] | {"
+        "id, name, display_title, status, conclusion, "
+        "created_at, updated_at, event, head_branch, "
+        "run_attempt, run_number, html_url, "
+        "actor_login: .actor.login, "
+        "workflow_id: .workflow_id"
+        "}]"
+    )
+
+    def fetch_page(page_num):
+        """Fetch a single page of workflow runs."""
+        try:
+            output = run_gh_command(["api", f"{base_url}&page={page_num}", "--jq", jq_query])
+            return parse_json_output(output) or []
+        except RuntimeError:
+            return []
+
+    def fetch_workflows():
+        """Fetch the workflows list."""
         try:
             wf_output = run_gh_command([
                 "api", f"repos/{owner}/{repo}/actions/workflows",
                 "--jq", "[.workflows[] | {id, name, state, path}]"
             ])
-            workflows = parse_json_output(wf_output) or []
+            return parse_json_output(wf_output) or []
         except RuntimeError:
-            workflows = []
+            return []
 
-        # Build runs API query with multi-page fetching (up to 3 pages = 300 runs)
-        base_url = f"repos/{owner}/{repo}/actions/runs?per_page=100"
-
-        workflow_id = request.args.get("workflow_id")
-        if workflow_id:
-            base_url += f"&workflow_id={workflow_id}"
-
-        branch = request.args.get("branch")
-        if branch:
-            base_url += f"&branch={branch}"
-
-        event = request.args.get("event")
-        if event:
-            base_url += f"&event={event}"
-
-        status_filter = request.args.get("status")
-        if status_filter:
-            base_url += f"&status={status_filter}"
-
-        conclusion = request.args.get("conclusion")
-        if conclusion:
-            base_url += f"&conclusion={conclusion}"
-
-        jq_query = (
-            "[.workflow_runs[] | {"
-            "id, name, display_title, status, conclusion, "
-            "created_at, updated_at, event, head_branch, "
-            "run_attempt, run_number, html_url, "
-            "actor_login: .actor.login"
-            "}]"
-        )
-
-        # Fetch total_count from first page (lightweight, just the count)
-        all_time_total = 0
+    def fetch_total_count():
+        """Fetch unfiltered all-time total count."""
         try:
-            count_output = run_gh_command(["api", f"{base_url}&page=1", "--jq", ".total_count"])
-            all_time_total = int(count_output.strip()) if count_output.strip() else 0
+            count_output = run_gh_command([
+                "api", f"repos/{owner}/{repo}/actions/runs?per_page=1&page=1",
+                "--jq", ".total_count"
+            ])
+            return int(count_output.strip()) if count_output.strip() else 0
         except (RuntimeError, ValueError):
-            pass
+            return 0
 
-        runs = []
-        for page in range(1, 4):  # Fetch up to 3 pages
-            api_url = f"{base_url}&page={page}"
-            output = run_gh_command(["api", api_url, "--jq", jq_query])
-            page_runs = parse_json_output(output) or []
+    runs = []
+    workflows = []
+    all_time_total = 0
+
+    # Batch 1: workflows + total count + pages 1-3 in parallel
+    batch1_pages = min(3, max_pages)
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        wf_future = executor.submit(fetch_workflows)
+        count_future = executor.submit(fetch_total_count)
+        page_futures = {executor.submit(fetch_page, p): p for p in range(1, batch1_pages + 1)}
+
+        workflows = wf_future.result()
+        all_time_total = count_future.result()
+
+        # Collect page results in order
+        page_results = {}
+        for future in page_futures:
+            page_num = page_futures[future]
+            page_results[page_num] = future.result()
+
+    # Process batch 1 results in order, stop if a page returned < 100
+    needs_more = True
+    for p in range(1, batch1_pages + 1):
+        page_runs = page_results.get(p, [])
+        runs.extend(page_runs)
+        if len(page_runs) < 100:
+            needs_more = False
+            break
+
+    # Batch 2: pages 4-8 if all batch 1 pages returned 100
+    if needs_more and max_pages > 3:
+        batch2_end = min(8, max_pages)
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            page_futures = {executor.submit(fetch_page, p): p for p in range(4, batch2_end + 1)}
+            page_results = {}
+            for future in page_futures:
+                page_num = page_futures[future]
+                page_results[page_num] = future.result()
+
+        for p in range(4, batch2_end + 1):
+            page_runs = page_results.get(p, [])
+            runs.extend(page_runs)
+            if len(page_runs) < 100:
+                needs_more = False
+                break
+
+    # Batch 3: pages 9-10 if still needed
+    if needs_more and max_pages > 8:
+        batch3_end = min(10, max_pages)
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            page_futures = {executor.submit(fetch_page, p): p for p in range(9, batch3_end + 1)}
+            page_results = {}
+            for future in page_futures:
+                page_num = page_futures[future]
+                page_results[page_num] = future.result()
+
+        for p in range(9, batch3_end + 1):
+            page_runs = page_results.get(p, [])
             runs.extend(page_runs)
             if len(page_runs) < 100:
                 break
 
-        # Compute duration and aggregate stats
-        total_runs = len(runs)
-        success_count = 0
-        failure_count = 0
-        total_duration = 0
-        duration_count = 0
-        runs_by_workflow = {}
-
-        for run in runs:
-            # Compute duration_seconds
-            created = run.get("created_at")
-            updated = run.get("updated_at")
-            if created and updated:
-                try:
-                    c = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                    u = datetime.fromisoformat(updated.replace("Z", "+00:00"))
-                    dur = int((u - c).total_seconds())
-                    run["duration_seconds"] = max(dur, 0)
-                    if run.get("conclusion") in ("success", "failure"):
-                        total_duration += dur
-                        duration_count += 1
-                except (ValueError, TypeError):
-                    run["duration_seconds"] = None
-            else:
+    # Pre-compute duration_seconds on each run before caching
+    for run in runs:
+        created = run.get("created_at")
+        updated = run.get("updated_at")
+        if created and updated:
+            try:
+                c = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                u = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                run["duration_seconds"] = max(int((u - c).total_seconds()), 0)
+            except (ValueError, TypeError):
                 run["duration_seconds"] = None
+        else:
+            run["duration_seconds"] = None
 
-            c = run.get("conclusion")
-            if c == "success":
-                success_count += 1
-            elif c == "failure":
-                failure_count += 1
+    return {"runs": runs, "workflows": workflows, "all_time_total": all_time_total}
 
-            wf_name = run.get("name", "Unknown")
-            if wf_name not in runs_by_workflow:
-                runs_by_workflow[wf_name] = {"total": 0, "failures": 0}
-            runs_by_workflow[wf_name]["total"] += 1
-            if c == "failure":
-                runs_by_workflow[wf_name]["failures"] += 1
 
-        completed_runs = success_count + failure_count
-        stats = {
-            "total_runs": total_runs,
-            "all_time_total": all_time_total,
-            "pass_rate": round((success_count / completed_runs * 100), 1) if completed_runs > 0 else 0,
-            "avg_duration": round(total_duration / duration_count) if duration_count > 0 else 0,
-            "failure_count": failure_count,
-            "success_count": success_count,
-            "runs_by_workflow": runs_by_workflow
-        }
+def _filter_and_compute_stats(cached_data, filters):
+    """Apply filters to cached workflow data and compute aggregate stats.
 
-        return jsonify({"runs": runs, "stats": stats, "workflows": workflows})
+    Args:
+        cached_data: dict with keys: runs, workflows, all_time_total
+        filters: dict with optional keys: workflow_id, branch, event, conclusion, status
+    Returns:
+        dict with keys: runs, stats, workflows
+    """
+    runs = cached_data.get("runs", [])
+    workflows = cached_data.get("workflows", [])
+    all_time_total = cached_data.get("all_time_total", 0)
 
-    except RuntimeError as e:
+    # Apply Python-side filters
+    filtered = runs
+    wf_id = filters.get("workflow_id")
+    if wf_id:
+        try:
+            wf_id_int = int(wf_id)
+            filtered = [r for r in filtered if r.get("workflow_id") == wf_id_int]
+        except (ValueError, TypeError):
+            pass
+
+    branch = filters.get("branch")
+    if branch:
+        filtered = [r for r in filtered if r.get("head_branch") == branch]
+
+    event = filters.get("event")
+    if event:
+        filtered = [r for r in filtered if r.get("event") == event]
+
+    conclusion = filters.get("conclusion")
+    status_filter = filters.get("status")
+    if conclusion:
+        filtered = [r for r in filtered if r.get("conclusion") == conclusion]
+    elif status_filter:
+        # status can match either status or conclusion field
+        filtered = [r for r in filtered
+                    if r.get("status") == status_filter or r.get("conclusion") == status_filter]
+
+    # Compute aggregate stats on filtered subset
+    total_runs = len(filtered)
+    success_count = 0
+    failure_count = 0
+    total_duration = 0
+    duration_count = 0
+    runs_by_workflow = {}
+
+    for run in filtered:
+        c = run.get("conclusion")
+        if c == "success":
+            success_count += 1
+        elif c == "failure":
+            failure_count += 1
+
+        dur = run.get("duration_seconds")
+        if dur is not None and c in ("success", "failure"):
+            total_duration += dur
+            duration_count += 1
+
+        wf_name = run.get("name", "Unknown")
+        if wf_name not in runs_by_workflow:
+            runs_by_workflow[wf_name] = {"total": 0, "failures": 0}
+        runs_by_workflow[wf_name]["total"] += 1
+        if c == "failure":
+            runs_by_workflow[wf_name]["failures"] += 1
+
+    completed_runs = success_count + failure_count
+    stats = {
+        "total_runs": total_runs,
+        "all_time_total": all_time_total,
+        "pass_rate": round((success_count / completed_runs * 100), 1) if completed_runs > 0 else 0,
+        "avg_duration": round(total_duration / duration_count) if duration_count > 0 else 0,
+        "failure_count": failure_count,
+        "success_count": success_count,
+        "runs_by_workflow": runs_by_workflow
+    }
+
+    return {"runs": filtered, "stats": stats, "workflows": workflows}
+
+
+def _background_refresh_workflows(owner, repo, repo_key):
+    """Background task to refresh workflow cache for a repository."""
+    try:
+        logger.info(f"Background workflow refresh started for {repo_key}")
+        data = _fetch_workflow_data(owner, repo)
+        workflow_cache_db.save_cache(repo_key, data)
+        logger.info(f"Background workflow refresh completed for {repo_key}: {len(data['runs'])} runs cached")
+    except Exception as e:
+        logger.error(f"Background workflow refresh failed for {repo_key}: {e}")
+    finally:
+        with _workflow_refresh_lock:
+            _workflow_refresh_in_progress.discard(repo_key)
+
+
+@app.route("/api/repos/<owner>/<repo>/workflow-runs")
+def get_workflow_runs(owner, repo):
+    """Get workflow runs with optional filters and aggregate stats.
+
+    Uses SQLite cache with stale-while-revalidate pattern:
+    - Cached + fresh: filter & return instantly
+    - Cached + stale: return stale data, kick off background refresh
+    - No cache: synchronous parallel fetch, save, filter & return
+    """
+    repo_key = f"{owner}/{repo}"
+    ttl_minutes = config.get("workflow_cache_ttl_minutes", 60)
+    force_refresh = request.args.get("refresh", "").lower() == "true"
+
+    # Collect filter params
+    filters = {
+        "workflow_id": request.args.get("workflow_id"),
+        "branch": request.args.get("branch"),
+        "event": request.args.get("event"),
+        "conclusion": request.args.get("conclusion"),
+        "status": request.args.get("status"),
+    }
+
+    try:
+        # Force refresh: synchronous fetch regardless of cache state
+        if force_refresh:
+            logger.info(f"Force refresh requested for {repo_key}")
+            data = _fetch_workflow_data(owner, repo)
+            workflow_cache_db.save_cache(repo_key, data)
+            result = _filter_and_compute_stats(data, filters)
+            return jsonify(result)
+
+        cached = workflow_cache_db.get_cached(repo_key)
+        is_stale = workflow_cache_db.is_stale(repo_key, ttl_minutes)
+
+        if cached:
+            # Stale: return immediately but trigger background refresh
+            if is_stale:
+                with _workflow_refresh_lock:
+                    if repo_key not in _workflow_refresh_in_progress:
+                        _workflow_refresh_in_progress.add(repo_key)
+                        thread = threading.Thread(
+                            target=_background_refresh_workflows,
+                            args=(owner, repo, repo_key),
+                            daemon=True
+                        )
+                        thread.start()
+
+            result = _filter_and_compute_stats(cached["data"], filters)
+            return jsonify(result)
+
+        # No cache: synchronous fetch
+        data = _fetch_workflow_data(owner, repo)
+        workflow_cache_db.save_cache(repo_key, data)
+        result = _filter_and_compute_stats(data, filters)
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Failed to get workflow runs for {repo_key}: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -1697,9 +1856,10 @@ def fetch_review_stats(owner, repo):
 
 @app.route("/api/clear-cache", methods=["POST"])
 def clear_cache():
-    """Clear the in-memory cache."""
+    """Clear the in-memory cache and workflow SQLite cache."""
     global cache
     cache = {}
+    workflow_cache_db.clear()
     return jsonify({"message": "Cache cleared"})
 
 
@@ -2688,7 +2848,37 @@ def get_review_status_endpoint(owner, repo, pr_number):
     })
 
 
+def _startup_refresh_workflow_caches():
+    """Background task: refresh any stale workflow caches on startup."""
+    ttl_minutes = config.get("workflow_cache_ttl_minutes", 60)
+    try:
+        repos = workflow_cache_db.get_all_repos()
+        for repo_key in repos:
+            if workflow_cache_db.is_stale(repo_key, ttl_minutes):
+                parts = repo_key.split("/", 1)
+                if len(parts) == 2:
+                    owner, repo = parts
+                    with _workflow_refresh_lock:
+                        if repo_key not in _workflow_refresh_in_progress:
+                            _workflow_refresh_in_progress.add(repo_key)
+                    try:
+                        logger.info(f"Startup: refreshing stale workflow cache for {repo_key}")
+                        data = _fetch_workflow_data(owner, repo)
+                        workflow_cache_db.save_cache(repo_key, data)
+                        logger.info(f"Startup: refreshed {repo_key} with {len(data['runs'])} runs")
+                    except Exception as e:
+                        logger.error(f"Startup: failed to refresh {repo_key}: {e}")
+                    finally:
+                        with _workflow_refresh_lock:
+                            _workflow_refresh_in_progress.discard(repo_key)
+    except Exception as e:
+        logger.error(f"Startup workflow cache refresh failed: {e}")
+
+
 if __name__ == "__main__":
+    # Refresh stale workflow caches in background on startup
+    threading.Thread(target=_startup_refresh_workflow_caches, daemon=True).start()
+
     app.run(
         host=config.get("host", "127.0.0.1"),
         port=config.get("port", 5050),
