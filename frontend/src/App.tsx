@@ -3,10 +3,13 @@ import { MainLayout } from './components/layout/MainLayout'
 import { AccountSelector } from './components/account/AccountSelector'
 import { RepoSelector } from './components/account/RepoSelector'
 import { FilterPanel } from './components/filters/FilterPanel'
+import { PRList } from './components/prs/PRList'
 import { useAccountStore } from './stores/useAccountStore'
+import { useUIStore } from './stores/useUIStore'
 
 function App() {
   const selectedRepo = useAccountStore((state) => state.selectedRepo)
+  const activeView = useUIStore((state) => state.activeView)
 
   useEffect(() => {
     // Check for saved theme preference or default to dark
@@ -16,6 +19,29 @@ function App() {
     }
   }, [])
 
+  const renderView = () => {
+    if (!selectedRepo) return null
+
+    switch (activeView) {
+      case 'prs':
+        return <PRList />
+      case 'analytics':
+        return (
+          <div className="mx-placeholder">
+            <p>Analytics view - Phase 6</p>
+          </div>
+        )
+      case 'workflows':
+        return (
+          <div className="mx-placeholder">
+            <p>Workflows view - Phase 7</p>
+          </div>
+        )
+      default:
+        return null
+    }
+  }
+
   return (
     <MainLayout>
       <AccountSelector />
@@ -24,10 +50,7 @@ function App() {
       {selectedRepo && (
         <>
           <FilterPanel />
-          <div className="mx-placeholder">
-            <p>Phase 4 Complete - Ready for Phase 5 (PR List)</p>
-            <p>Selected: {selectedRepo.owner.login}/{selectedRepo.name}</p>
-          </div>
+          {renderView()}
         </>
       )}
     </MainLayout>

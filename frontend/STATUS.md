@@ -15,7 +15,7 @@
 | **Phase 2: State Management + API Layer** | ✅ Complete | 17 | 1,385 | 4b33919 | 9 Zustand stores, 7 API modules |
 | **Phase 3: Layout and Navigation** | ✅ Complete | 9 | ~650 | - | Header, tabs, selectors, layout, footer |
 | **Phase 4: Filter Panel** | ✅ Complete | 8 | ~600 | - | 5 filter tabs, 40+ filter properties |
-| **Phase 5: PR List and Cards** | ⏳ Pending | - | - | - | PR list, cards, badges, actions |
+| **Phase 5: PR List and Cards** | ✅ Complete | 4 | ~550 | - | PR list, cards, badges, actions, divergence |
 | **Phase 6: Analytics Views** | ⏳ Pending | - | - | - | 4 sub-tabs, charts, tables |
 | **Phase 7: CI/Workflows View** | ⏳ Pending | - | - | - | Filters, stats, table |
 | **Phase 8: Merge Queue Panel** | ⏳ Pending | - | - | - | Slide-out panel, notes, reordering |
