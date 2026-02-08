@@ -5,7 +5,6 @@ import { useUIStore } from '../../stores/useUIStore'
 import { fetchReviewHistory } from '../../api/reviews'
 import { Button } from '../common/Button'
 import { Input } from '../common/Input'
-import { Select } from '../common/Select'
 import { Badge } from '../common/Badge'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
@@ -14,8 +13,14 @@ import { formatRelativeTime } from '../../utils/formatters'
 export function HistoryPanel() {
   const showHistoryPanel = useUIStore((state) => state.showHistoryPanel)
   const setShowHistoryPanel = useUIStore((state) => state.setShowHistoryPanel)
-  const { setShowReviewViewer, setReviewViewerContent } = useReviewStore()
-  const { historyFilters, setHistoryFilter, resetHistoryFilters } = useHistoryStore()
+  const { openReviewViewer } = useReviewStore()
+  const {
+    searchQuery,
+    setSearchQuery,
+    prNumberFilter,
+    setPRNumberFilter,
+    resetFilters,
+  } = useHistoryStore()
   const [reviews, setReviews] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -24,13 +29,16 @@ export function HistoryPanel() {
     if (showHistoryPanel) {
       loadHistory()
     }
-  }, [showHistoryPanel, historyFilters])
+  }, [showHistoryPanel, searchQuery, prNumberFilter])
 
   const loadHistory = async () => {
     try {
       setLoading(true)
       setError(null)
-      const response = await fetchReviewHistory(historyFilters)
+      const params: Record<string, any> = {}
+      if (searchQuery) params.search = searchQuery
+      if (prNumberFilter) params.pr_number = prNumberFilter
+      const response = await fetchReviewHistory(params)
       setReviews(response.reviews)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load review history')
@@ -40,8 +48,7 @@ export function HistoryPanel() {
   }
 
   const handleViewReview = (review: any) => {
-    setReviewViewerContent(review)
-    setShowReviewViewer(true)
+    openReviewViewer(review)
   }
 
   const getScoreBadge = (score: number | null) => {
@@ -76,19 +83,19 @@ export function HistoryPanel() {
           <Input
             label="Search"
             placeholder="Search reviews..."
-            value={historyFilters.search || ''}
-            onChange={(e) => setHistoryFilter('search', e.target.value)}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
           />
 
           <Input
             label="PR Number"
             type="number"
             placeholder="Filter by PR #"
-            value={historyFilters.pr_number || ''}
-            onChange={(e) => setHistoryFilter('pr_number', e.target.value)}
+            value={prNumberFilter}
+            onChange={(e) => setPRNumberFilter(e.target.value)}
           />
 
-          <Button variant="secondary" size="sm" onClick={resetHistoryFilters}>
+          <Button variant="secondary" size="sm" onClick={resetFilters}>
             Reset
           </Button>
         </div>

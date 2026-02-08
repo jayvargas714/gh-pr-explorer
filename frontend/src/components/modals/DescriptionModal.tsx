@@ -31,7 +31,7 @@ export function DescriptionModal({ pr, isOpen, onClose }: DescriptionModalProps)
           <div className="mx-description-modal__badges">
             {pr.isDraft && <Badge variant="warning">Draft</Badge>}
             {pr.state === 'OPEN' && <Badge variant="success">Open</Badge>}
-            {pr.state === 'CLOSED' && <Badge variant="default">Closed</Badge>}
+            {pr.state === 'CLOSED' && <Badge variant="neutral">Closed</Badge>}
             {pr.state === 'MERGED' && <Badge variant="info">Merged</Badge>}
           </div>
         </div>

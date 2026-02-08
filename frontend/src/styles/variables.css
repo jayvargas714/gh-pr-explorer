@@ -4,59 +4,79 @@
   /* === Dark Theme (Default) === */
 
   /* Colors - Primary */
-  --mx-color-primary: #00ff41;
-  --mx-color-primary-dim: #00cc33;
-  --mx-color-primary-bright: #00ff66;
+  --mx-color-primary: #00ff9d;
+  --mx-color-primary-dim: #00cc7d;
+  --mx-color-primary-bright: #00ffb8;
+
+  /* Colors - Secondary & Accent */
+  --mx-color-secondary: #00e5ff;
+  --mx-color-accent: #7dff00;
 
   /* Colors - Background */
-  --mx-color-bg-primary: #0d0208;
-  --mx-color-bg-secondary: #1a0f14;
-  --mx-color-bg-tertiary: #2d1b24;
-  --mx-color-bg-elevated: #1f1419;
+  --mx-color-bg-primary: #0a0e14;
+  --mx-color-bg-secondary: #0f1923;
+  --mx-color-bg-tertiary: #131d2a;
+  --mx-color-bg-elevated: #0f1923;
+  --mx-color-bg-input: #0d1520;
 
   /* Colors - Surface */
-  --mx-color-surface: #2d1b24;
-  --mx-color-surface-hover: #3a2430;
-  --mx-color-surface-active: #472d3c;
+  --mx-color-surface: #131d2a;
+  --mx-color-surface-hover: #1a2735;
+  --mx-color-surface-active: #213040;
 
   /* Colors - Text */
-  --mx-color-text-primary: #00ff41;
-  --mx-color-text-secondary: #00cc33;
-  --mx-color-text-tertiary: #009926;
-  --mx-color-text-muted: #667766;
-  --mx-color-text-inverse: #0d0208;
+  --mx-color-text-primary: #e0f0e8;
+  --mx-color-text-secondary: #6b8a7a;
+  --mx-color-text-tertiary: #4d6a5a;
+  --mx-color-text-muted: #3d5a4a;
+  --mx-color-text-inverse: #0a0e14;
 
   /* Colors - Border */
-  --mx-color-border: #00ff4133;
-  --mx-color-border-hover: #00ff4166;
-  --mx-color-border-focus: #00ff41;
+  --mx-color-border: #1a2d3d;
+  --mx-color-border-hover: #264050;
+  --mx-color-border-focus: #00ff9d;
 
   /* Colors - Status */
-  --mx-color-success: #00ff41;
-  --mx-color-success-bg: #00ff4114;
-  --mx-color-error: #ff0040;
-  --mx-color-error-bg: #ff004014;
-  --mx-color-warning: #ffa500;
-  --mx-color-warning-bg: #ffa50014;
-  --mx-color-info: #00ccff;
-  --mx-color-info-bg: #00ccff14;
+  --mx-color-success: #00ff9d;
+  --mx-color-success-bg: rgba(0, 255, 157, 0.08);
+  --mx-color-error: #ff3d5a;
+  --mx-color-error-bg: rgba(255, 61, 90, 0.08);
+  --mx-color-warning: #ffbd00;
+  --mx-color-warning-bg: rgba(255, 189, 0, 0.08);
+  --mx-color-info: #00e5ff;
+  --mx-color-info-bg: rgba(0, 229, 255, 0.08);
+
+  /* Glow Effects */
+  --mx-glow-primary: 0 0 20px rgba(0, 255, 157, 0.3), 0 0 60px rgba(0, 255, 157, 0.1);
+  --mx-glow-secondary: 0 0 20px rgba(0, 229, 255, 0.3);
+  --mx-glow-accent: 0 0 20px rgba(125, 255, 0, 0.3);
+  --mx-glow-warning: 0 0 15px rgba(255, 189, 0, 0.25);
+  --mx-glow-error: 0 0 15px rgba(255, 61, 90, 0.3);
+
+  /* Gradients */
+  --mx-gradient-1: linear-gradient(135deg, #00ff9d, #00e5ff);
+  --mx-gradient-2: linear-gradient(135deg, #7dff00, #00ff9d);
+  --mx-gradient-3: linear-gradient(135deg, #00e5ff, #7d5aff);
 
   /* Typography */
   --mx-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --mx-font-mono: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
 
-  --mx-font-size-xs: 0.75rem;    /* 12px */
-  --mx-font-size-sm: 0.875rem;   /* 14px */
-  --mx-font-size-base: 1rem;     /* 16px */
-  --mx-font-size-lg: 1.125rem;   /* 18px */
-  --mx-font-size-xl: 1.25rem;    /* 20px */
-  --mx-font-size-2xl: 1.5rem;    /* 24px */
-  --mx-font-size-3xl: 1.875rem;  /* 30px */
+  --mx-font-size-xs: 0.75rem;       /* 12px */
+  --mx-font-size-sm: 0.875rem;      /* 14px */
+  --mx-font-size-base: 1rem;        /* 16px */
+  --mx-font-size-lg: 1.125rem;      /* 18px */
+  --mx-font-size-xl: 1.25rem;       /* 20px */
+  --mx-font-size-2xl: 1.5rem;       /* 24px */
+  --mx-font-size-3xl: 1.75rem;      /* 28px */
+  --mx-font-size-4xl: 2.25rem;      /* 36px */
+  --mx-font-size-display: 3rem;     /* 48px */
 
   --mx-font-weight-normal: 400;
   --mx-font-weight-medium: 500;
   --mx-font-weight-semibold: 600;
   --mx-font-weight-bold: 700;
+  --mx-font-weight-extrabold: 800;
 
   --mx-line-height-tight: 1.25;
   --mx-line-height-normal: 1.5;
@@ -74,23 +94,35 @@
   --mx-space-12: 3rem;     /* 48px */
   --mx-space-16: 4rem;     /* 64px */
 
+  /* Spacing aliases (for --mx-spacing-N compat) */
+  --mx-spacing-1: var(--mx-space-1);
+  --mx-spacing-2: var(--mx-space-2);
+  --mx-spacing-3: var(--mx-space-3);
+  --mx-spacing-4: var(--mx-space-4);
+  --mx-spacing-5: var(--mx-space-5);
+  --mx-spacing-6: var(--mx-space-6);
+  --mx-spacing-8: var(--mx-space-8);
+  --mx-spacing-10: var(--mx-space-10);
+  --mx-spacing-12: var(--mx-space-12);
+  --mx-spacing-16: var(--mx-space-16);
+
   /* Border Radius */
-  --mx-radius-sm: 0.25rem;  /* 4px */
-  --mx-radius-md: 0.5rem;   /* 8px */
-  --mx-radius-lg: 0.75rem;  /* 12px */
-  --mx-radius-xl: 1rem;     /* 16px */
+  --mx-radius-sm: 0.5rem;    /* 8px */
+  --mx-radius-md: 0.75rem;   /* 12px */
+  --mx-radius-lg: 1rem;      /* 16px */
+  --mx-radius-xl: 1.25rem;   /* 20px */
   --mx-radius-full: 9999px;
 
   /* Shadows */
-  --mx-shadow-sm: 0 1px 2px 0 rgba(0, 255, 65, 0.1);
-  --mx-shadow-md: 0 4px 6px -1px rgba(0, 255, 65, 0.1), 0 2px 4px -1px rgba(0, 255, 65, 0.06);
-  --mx-shadow-lg: 0 10px 15px -3px rgba(0, 255, 65, 0.1), 0 4px 6px -2px rgba(0, 255, 65, 0.05);
-  --mx-shadow-xl: 0 20px 25px -5px rgba(0, 255, 65, 0.1), 0 10px 10px -5px rgba(0, 255, 65, 0.04);
+  --mx-shadow-sm: 0 1px 2px 0 rgba(0, 255, 157, 0.08);
+  --mx-shadow-md: 0 4px 6px -1px rgba(0, 255, 157, 0.08), 0 2px 4px -1px rgba(0, 255, 157, 0.04);
+  --mx-shadow-lg: 0 10px 15px -3px rgba(0, 255, 157, 0.08), 0 4px 6px -2px rgba(0, 255, 157, 0.03);
+  --mx-shadow-xl: 0 20px 25px -5px rgba(0, 255, 157, 0.08), 0 10px 10px -5px rgba(0, 255, 157, 0.03);
 
   /* Transitions */
   --mx-transition-fast: 150ms ease;
-  --mx-transition-base: 250ms ease;
-  --mx-transition-slow: 350ms ease;
+  --mx-transition-base: 300ms ease;
+  --mx-transition-slow: 400ms ease;
 
   /* Z-Index */
   --mx-z-base: 0;
@@ -100,51 +132,79 @@
   --mx-z-modal: 1040;
   --mx-z-popover: 1050;
   --mx-z-tooltip: 1060;
+
+  /* Aliases for compat with secondary CSS files */
+  --mx-color-background: var(--mx-color-bg-primary);
+  --mx-color-primary-light: var(--mx-color-primary-bright);
+  --mx-color-primary-alpha: rgba(0, 255, 157, 0.15);
+  --mx-font-family-mono: var(--mx-font-mono);
 }
 
 /* === Light Theme Override === */
 .matrix-light {
   /* Colors - Primary */
-  --mx-color-primary: #009926;
-  --mx-color-primary-dim: #007a1f;
-  --mx-color-primary-bright: #00b830;
+  --mx-color-primary: #00a866;
+  --mx-color-primary-dim: #008a55;
+  --mx-color-primary-bright: #00c077;
+
+  /* Colors - Secondary & Accent */
+  --mx-color-secondary: #0095b3;
+  --mx-color-accent: #5a9e00;
 
   /* Colors - Background */
-  --mx-color-bg-primary: #f0f4f0;
-  --mx-color-bg-secondary: #e6ebe6;
-  --mx-color-bg-tertiary: #d9e3d9;
+  --mx-color-bg-primary: #f0f5f2;
+  --mx-color-bg-secondary: #e8f0eb;
+  --mx-color-bg-tertiary: #dce8e0;
   --mx-color-bg-elevated: #ffffff;
+  --mx-color-bg-input: #f0f5f2;
 
   /* Colors - Surface */
   --mx-color-surface: #ffffff;
-  --mx-color-surface-hover: #f5f9f5;
-  --mx-color-surface-active: #ebf2eb;
+  --mx-color-surface-hover: #f5faf7;
+  --mx-color-surface-active: #ecf5ef;
 
   /* Colors - Text */
-  --mx-color-text-primary: #0d0208;
-  --mx-color-text-secondary: #1a0f14;
-  --mx-color-text-tertiary: #2d1b24;
-  --mx-color-text-muted: #667766;
-  --mx-color-text-inverse: #f0f4f0;
+  --mx-color-text-primary: #0a1f14;
+  --mx-color-text-secondary: #4a6a5a;
+  --mx-color-text-tertiary: #6a8a7a;
+  --mx-color-text-muted: #8aaa9a;
+  --mx-color-text-inverse: #ffffff;
 
   /* Colors - Border */
-  --mx-color-border: #00992633;
-  --mx-color-border-hover: #00992666;
-  --mx-color-border-focus: #009926;
+  --mx-color-border: #d0ddd6;
+  --mx-color-border-hover: #b0c8ba;
+  --mx-color-border-focus: #00a866;
 
   /* Colors - Status */
-  --mx-color-success: #009926;
-  --mx-color-success-bg: #00992614;
-  --mx-color-error: #cc0033;
-  --mx-color-error-bg: #cc003314;
-  --mx-color-warning: #cc7a00;
-  --mx-color-warning-bg: #cc7a0014;
-  --mx-color-info: #0099cc;
-  --mx-color-info-bg: #0099cc14;
+  --mx-color-success: #00a866;
+  --mx-color-success-bg: rgba(0, 168, 102, 0.08);
+  --mx-color-error: #d42a45;
+  --mx-color-error-bg: rgba(212, 42, 69, 0.08);
+  --mx-color-warning: #c99200;
+  --mx-color-warning-bg: rgba(201, 146, 0, 0.08);
+  --mx-color-info: #0095b3;
+  --mx-color-info-bg: rgba(0, 149, 179, 0.08);
+
+  /* Glow Effects (subtle for light theme) */
+  --mx-glow-primary: 0 0 20px rgba(0, 168, 102, 0.2), 0 0 40px rgba(0, 168, 102, 0.08);
+  --mx-glow-secondary: 0 0 15px rgba(0, 149, 179, 0.2);
+  --mx-glow-accent: 0 0 15px rgba(90, 158, 0, 0.2);
+  --mx-glow-warning: 0 0 12px rgba(201, 146, 0, 0.15);
+  --mx-glow-error: 0 0 12px rgba(212, 42, 69, 0.2);
+
+  /* Gradients */
+  --mx-gradient-1: linear-gradient(135deg, #00a866, #0095b3);
+  --mx-gradient-2: linear-gradient(135deg, #5a9e00, #00a866);
+  --mx-gradient-3: linear-gradient(135deg, #0095b3, #6a4adc);
 
   /* Shadows - adjusted for light theme */
   --mx-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --mx-shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  --mx-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-  --mx-shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  --mx-shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
+  --mx-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.03);
+  --mx-shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 10px 10px -5px rgba(0, 0, 0, 0.03);
+
+  /* Aliases for light theme */
+  --mx-color-background: var(--mx-color-bg-primary);
+  --mx-color-primary-light: var(--mx-color-primary-bright);
+  --mx-color-primary-alpha: rgba(0, 168, 102, 0.15);
 }

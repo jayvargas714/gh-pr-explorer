@@ -7,10 +7,9 @@ import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 import { formatRelativeTime } from '../../utils/formatters'
-import type { Review } from '../../api/types'
 
 export function ReviewViewer() {
-  const { showReviewViewer, reviewViewerContent, setShowReviewViewer, setReviewViewerContent } =
+  const { showReviewViewer, reviewViewerContent, openReviewViewer, closeReviewViewer } =
     useReviewStore()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -27,7 +26,7 @@ export function ReviewViewer() {
       setLoading(true)
       setError(null)
       const review = await fetchReviewById(reviewId)
-      setReviewViewerContent(review)
+      openReviewViewer(review)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load review')
     } finally {
@@ -36,8 +35,7 @@ export function ReviewViewer() {
   }
 
   const handleClose = () => {
-    setShowReviewViewer(false)
-    setReviewViewerContent(null)
+    closeReviewViewer()
     setCopySuccess(false)
   }
 
@@ -56,7 +54,7 @@ export function ReviewViewer() {
 
   return (
     <Modal
-      title={`Code Review - PR #${reviewViewerContent?.pr_number || ''}`}
+      title={`Code Review - PR #${reviewViewerContent?.pr_number || reviewViewerContent?.prNumber || ''}`}
       onClose={handleClose}
       size="xl"
     >
@@ -72,15 +70,15 @@ export function ReviewViewer() {
           <div className="mx-review-viewer__header">
             <div className="mx-review-viewer__meta">
               <a
-                href={reviewViewerContent.pr_url}
+                href={reviewViewerContent.pr_url || reviewViewerContent.prUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="mx-review-viewer__pr-link"
               >
-                {reviewViewerContent.pr_title}
+                {reviewViewerContent.pr_title || reviewViewerContent.prTitle}
               </a>
               <span className="mx-review-viewer__time">
-                Reviewed {formatRelativeTime(reviewViewerContent.review_timestamp)}
+                Reviewed {formatRelativeTime(reviewViewerContent.review_timestamp || reviewViewerContent.reviewTimestamp)}
               </span>
               {reviewViewerContent.score !== null && reviewViewerContent.score !== undefined && (
                 <span className="mx-review-viewer__score">Score: {reviewViewerContent.score}/10</span>

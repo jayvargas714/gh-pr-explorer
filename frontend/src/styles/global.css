@@ -25,18 +25,26 @@ body {
 }
 
 /* Typography */
-h1, h2, h3, h4, h5, h6 {
+h1, h2 {
+  font-weight: var(--mx-font-weight-bold);
+  line-height: var(--mx-line-height-tight);
+  color: var(--mx-color-text-primary);
+}
+
+h3, h4, h5, h6 {
   font-weight: var(--mx-font-weight-semibold);
   line-height: var(--mx-line-height-tight);
   color: var(--mx-color-text-primary);
 }
 
 h1 {
-  font-size: var(--mx-font-size-3xl);
+  font-size: var(--mx-font-size-4xl);
+  letter-spacing: -0.015em;
 }
 
 h2 {
-  font-size: var(--mx-font-size-2xl);
+  font-size: var(--mx-font-size-3xl);
+  letter-spacing: -0.01em;
 }
 
 h3 {
@@ -68,6 +76,7 @@ a:hover {
 code {
   font-family: var(--mx-font-mono);
   font-size: var(--mx-font-size-sm);
+  letter-spacing: 0.02em;
   background-color: var(--mx-color-bg-tertiary);
   padding: var(--mx-space-1) var(--mx-space-2);
   border-radius: var(--mx-radius-sm);
@@ -140,8 +149,13 @@ select {
 
 /* Selection */
 ::selection {
-  background-color: var(--mx-color-primary);
-  color: var(--mx-color-text-inverse);
+  background: rgba(0, 255, 157, 0.25);
+  color: var(--mx-color-text-primary);
+}
+
+.matrix-light ::selection {
+  background: rgba(0, 168, 102, 0.2);
+  color: var(--mx-color-text-primary);
 }
 
 /* Utility Classes */

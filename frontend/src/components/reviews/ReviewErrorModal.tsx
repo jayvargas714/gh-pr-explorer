@@ -3,18 +3,12 @@ import { Modal } from '../common/Modal'
 import { Alert } from '../common/Alert'
 
 export function ReviewErrorModal() {
-  const { reviewErrorModal, setReviewErrorModal } = useReviewStore()
+  const { reviewErrorModal, hideReviewError } = useReviewStore()
 
   if (!reviewErrorModal.show) return null
 
   const handleClose = () => {
-    setReviewErrorModal({
-      show: false,
-      prNumber: null,
-      prTitle: '',
-      errorOutput: '',
-      exitCode: null,
-    })
+    hideReviewError()
   }
 
   return (

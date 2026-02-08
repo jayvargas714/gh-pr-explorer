@@ -53,7 +53,7 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
       case 'OPEN':
         return <Badge variant="success">Open</Badge>
       case 'CLOSED':
-        return <Badge variant="default">Closed</Badge>
+        return <Badge variant="neutral">Closed</Badge>
       case 'MERGED':
         return <Badge variant="info">Merged</Badge>
       default:

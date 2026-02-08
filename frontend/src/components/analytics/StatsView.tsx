@@ -5,7 +5,7 @@ import { fetchDeveloperStats } from '../../api/analytics'
 import { SortableTable, Column } from '../common/SortableTable'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
-import { formatNumber, formatPercentage, calculatePercentage } from '../../utils/formatters'
+import { formatNumber, calculatePercentage } from '../../utils/formatters'
 import { DeveloperStats } from '../../api/types'
 
 export function StatsView() {

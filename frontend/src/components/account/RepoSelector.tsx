@@ -9,7 +9,6 @@ import { useClickOutside } from '../../hooks/useClickOutside'
 export function RepoSelector() {
   const {
     selectedAccount,
-    repos,
     selectedRepo,
     repoSearch,
     reposLoading,

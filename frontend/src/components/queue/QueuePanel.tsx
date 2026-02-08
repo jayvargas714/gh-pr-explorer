@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useQueueStore } from '../../stores/useQueueStore'
 import { useUIStore } from '../../stores/useUIStore'
 import { fetchMergeQueue } from '../../api/queue'
@@ -10,7 +10,7 @@ import { Button } from '../common/Button'
 export function QueuePanel() {
   const showQueuePanel = useUIStore((state) => state.showQueuePanel)
   const setShowQueuePanel = useUIStore((state) => state.setShowQueuePanel)
-  const { mergeQueue, queueLoading, queueError, setMergeQueue, setQueueLoading, setQueueError } =
+  const { mergeQueue, loading: queueLoading, error: queueError, setMergeQueue, setLoading: setQueueLoading, setError: setQueueError } =
     useQueueStore()
 
   useEffect(() => {

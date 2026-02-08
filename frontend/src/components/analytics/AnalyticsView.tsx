@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useUIStore } from '../../stores/useUIStore'
 import { StatsView } from './StatsView'
 import { LifecycleView } from './LifecycleView'

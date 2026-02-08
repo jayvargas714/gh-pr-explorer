@@ -12,15 +12,18 @@ export function WorkflowsView() {
   const selectedRepo = useAccountStore((state) => state.selectedRepo)
   const {
     workflowRuns,
-    workflowsLoading,
-    workflowsError,
-    workflowsList,
+    loading,
+    error,
+    workflows,
     workflowStats,
-    workflowFilters,
+    workflowFilter,
+    branchFilter,
+    eventFilter,
+    conclusionFilter,
     setWorkflowRuns,
-    setWorkflowsLoading,
-    setWorkflowsError,
-    setWorkflowsList,
+    setLoading,
+    setError,
+    setWorkflows,
     setWorkflowStats,
   } = useWorkflowStore()
 
@@ -28,30 +31,36 @@ export function WorkflowsView() {
     if (selectedRepo) {
       loadWorkflows()
     }
-  }, [selectedRepo, workflowFilters])
+  }, [selectedRepo, workflowFilter, branchFilter, eventFilter, conclusionFilter])
 
   const loadWorkflows = async () => {
     if (!selectedRepo) return
 
     try {
-      setWorkflowsLoading(true)
-      setWorkflowsError(null)
+      setLoading(true)
+      setError(null)
+      const filters: Record<string, string> = {}
+      if (workflowFilter) filters.workflow_id = workflowFilter
+      if (branchFilter) filters.branch = branchFilter
+      if (eventFilter) filters.event = eventFilter
+      if (conclusionFilter) filters.conclusion = conclusionFilter
+
       const response = await fetchWorkflowRuns(
         selectedRepo.owner.login,
         selectedRepo.name,
-        workflowFilters
+        filters
       )
       setWorkflowRuns(response.runs)
-      setWorkflowsList(response.workflows || [])
+      setWorkflows(response.workflows || [])
       setWorkflowStats(response.stats || null)
     } catch (err) {
-      setWorkflowsError(err instanceof Error ? err.message : 'Failed to load workflow runs')
+      setError(err instanceof Error ? err.message : 'Failed to load workflow runs')
     } finally {
-      setWorkflowsLoading(false)
+      setLoading(false)
     }
   }
 
-  if (workflowsLoading && workflowRuns.length === 0) {
+  if (loading && workflowRuns.length === 0) {
     return (
       <div className="mx-workflows__loading">
         <Spinner size="lg" />
@@ -60,13 +69,13 @@ export function WorkflowsView() {
     )
   }
 
-  if (workflowsError) {
-    return <Alert variant="error">{workflowsError}</Alert>
+  if (error) {
+    return <Alert variant="error">{error}</Alert>
   }
 
   return (
     <div className="mx-workflows-view">
-      <WorkflowFilters workflows={workflowsList} />
+      <WorkflowFilters workflows={workflows} />
 
       {workflowStats && <WorkflowStats stats={workflowStats} />}
 

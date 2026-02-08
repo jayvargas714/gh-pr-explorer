@@ -7,7 +7,15 @@ interface WorkflowFiltersProps {
 }
 
 export function WorkflowFilters({ workflows }: WorkflowFiltersProps) {
-  const { workflowFilters, setWorkflowFilter, resetWorkflowFilters } = useWorkflowStore()
+  const {
+    workflowFilter,
+    eventFilter,
+    conclusionFilter,
+    setWorkflowFilter,
+    setEventFilter,
+    setConclusionFilter,
+    resetFilters,
+  } = useWorkflowStore()
 
   const eventOptions = [
     { value: '', label: 'All Events' },
@@ -36,26 +44,26 @@ export function WorkflowFilters({ workflows }: WorkflowFiltersProps) {
       <div className="mx-workflow-filters__row">
         <Select
           label="Workflow"
-          value={workflowFilters.workflow}
-          onChange={(value) => setWorkflowFilter('workflow', value)}
+          value={workflowFilter}
+          onChange={(e) => setWorkflowFilter(e.target.value)}
           options={workflowOptions}
         />
 
         <Select
           label="Event"
-          value={workflowFilters.event}
-          onChange={(value) => setWorkflowFilter('event', value)}
+          value={eventFilter}
+          onChange={(e) => setEventFilter(e.target.value)}
           options={eventOptions}
         />
 
         <Select
           label="Result"
-          value={workflowFilters.conclusion}
-          onChange={(value) => setWorkflowFilter('conclusion', value)}
+          value={conclusionFilter}
+          onChange={(e) => setConclusionFilter(e.target.value)}
           options={conclusionOptions}
         />
 
-        <Button variant="secondary" size="sm" onClick={resetWorkflowFilters}>
+        <Button variant="secondary" size="sm" onClick={resetFilters}>
           Reset Filters
         </Button>
       </div>

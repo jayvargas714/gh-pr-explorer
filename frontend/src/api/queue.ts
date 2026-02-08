@@ -36,8 +36,8 @@ export async function removeFromQueue(
 /**
  * Reorder merge queue
  */
-export async function reorderQueue(order: Array<{ number: number; repo: string }>) {
-  return api.post('/merge-queue/reorder', { order })
+export async function reorderQueue(fromIndex: number, toIndex: number) {
+  return api.put('/merge-queue/reorder', { from_index: fromIndex, to_index: toIndex })
 }
 
 /**

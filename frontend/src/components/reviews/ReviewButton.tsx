@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useReviewStore } from '../../stores/useReviewStore'
+import { useAccountStore } from '../../stores/useAccountStore'
 import { startReview, cancelReview } from '../../api/reviews'
 import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
@@ -11,24 +12,39 @@ interface ReviewButtonProps {
 
 export function ReviewButton({ pr }: ReviewButtonProps) {
   const [starting, setStarting] = useState(false)
-  const { activeReviews, addActiveReview, removeActiveReview, setReviewErrorModal } =
+  const { activeReviews, updateReview, removeReview, showReviewError } =
     useReviewStore()
+  const selectedRepo = useAccountStore((state) => state.selectedRepo)
 
-  const reviewKey = `${pr.base.repo.owner.login}/${pr.base.repo.name}/${pr.number}`
+  const owner = selectedRepo?.owner.login ?? ''
+  const repo = selectedRepo?.name ?? ''
+  const reviewKey = `${owner}/${repo}/${pr.number}`
   const review = activeReviews[reviewKey]
 
   const handleStartReview = async () => {
-    if (starting) return
+    if (starting || !owner || !repo) return
 
     try {
       setStarting(true)
       const response = await startReview({
         number: pr.number,
         url: pr.url,
-        owner: pr.base.repo.owner.login,
-        repo: pr.base.repo.name,
+        owner,
+        repo,
       })
-      addActiveReview(reviewKey, response)
+      updateReview(reviewKey, {
+        key: reviewKey,
+        owner,
+        repo,
+        pr_number: pr.number,
+        status: 'running',
+        started_at: new Date().toISOString(),
+        completed_at: null,
+        pr_url: pr.url,
+        review_file: response.key || '',
+        exit_code: null,
+        error_output: '',
+      })
     } catch (err) {
       console.error('Failed to start review:', err)
     } finally {
@@ -38,8 +54,8 @@ export function ReviewButton({ pr }: ReviewButtonProps) {
 
   const handleCancelReview = async () => {
     try {
-      await cancelReview(pr.base.repo.owner.login, pr.base.repo.name, pr.number)
-      removeActiveReview(reviewKey)
+      await cancelReview(owner, repo, pr.number)
+      removeReview(reviewKey)
     } catch (err) {
       console.error('Failed to cancel review:', err)
     }
@@ -47,13 +63,12 @@ export function ReviewButton({ pr }: ReviewButtonProps) {
 
   const handleShowError = () => {
     if (!review) return
-    setReviewErrorModal({
-      show: true,
-      prNumber: pr.number,
-      prTitle: pr.title,
-      errorOutput: review.error_output || 'Unknown error',
-      exitCode: review.exit_code || null,
-    })
+    showReviewError(
+      pr.number,
+      pr.title,
+      review.error_output || 'Unknown error',
+      review.exit_code || null,
+    )
   }
 
   // No review running

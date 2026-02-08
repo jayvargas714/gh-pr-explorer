@@ -14,9 +14,11 @@ interface UIState {
 
   // Panel visibility
   showQueuePanel: boolean
+  setShowQueuePanel: (show: boolean) => void
   toggleQueuePanel: () => void
 
   showHistoryPanel: boolean
+  setShowHistoryPanel: (show: boolean) => void
   toggleHistoryPanel: () => void
 
   // Global loading/error
@@ -47,9 +49,11 @@ export const useUIStore = create<UIState>((set) => ({
 
   // Panel visibility
   showQueuePanel: false,
+  setShowQueuePanel: (show) => set({ showQueuePanel: show }),
   toggleQueuePanel: () => set((state) => ({ showQueuePanel: !state.showQueuePanel })),
 
   showHistoryPanel: false,
+  setShowHistoryPanel: (show) => set({ showHistoryPanel: show }),
   toggleHistoryPanel: () => set((state) => ({ showHistoryPanel: !state.showHistoryPanel })),
 
   // Global loading/error

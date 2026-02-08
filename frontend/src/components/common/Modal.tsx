@@ -1,7 +1,7 @@
 import { ReactNode, useEffect } from 'react'
 
 interface ModalProps {
-  isOpen: boolean
+  isOpen?: boolean
   onClose: () => void
   title?: string
   children: ReactNode
@@ -9,7 +9,7 @@ interface ModalProps {
 }
 
 export function Modal({
-  isOpen,
+  isOpen = true,
   onClose,
   title,
   children,

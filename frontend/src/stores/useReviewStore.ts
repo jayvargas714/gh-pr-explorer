@@ -21,16 +21,7 @@ interface ReviewState {
 
   // Review viewer modal
   showReviewViewer: boolean
-  reviewViewerContent: {
-    id: number
-    content: string
-    prNumber: number
-    prTitle: string
-    prAuthor: string
-    prUrl: string
-    reviewTimestamp: string
-    score: number | null
-  } | null
+  reviewViewerContent: any | null
 
   // Copy success feedback
   copySuccess: boolean

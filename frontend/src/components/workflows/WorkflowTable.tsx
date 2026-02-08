@@ -11,17 +11,17 @@ interface WorkflowTableProps {
 
 export function WorkflowTable({ runs }: WorkflowTableProps) {
   const {
-    workflowSortBy,
-    workflowSortDirection,
-    workflowPage,
+    sortBy,
+    sortDirection,
+    currentPage,
     sortWorkflows,
-    setWorkflowPage,
-    getSortedWorkflowRuns,
-    getTotalWorkflowPages,
+    setCurrentPage,
+    getSortedWorkflows,
+    getTotalPages,
   } = useWorkflowStore()
 
-  const sortedRuns = getSortedWorkflowRuns()
-  const totalPages = getTotalWorkflowPages()
+  const sortedRuns = getSortedWorkflows()
+  const totalPages = getTotalPages()
 
   const getConclusionBadge = (conclusion: string | null, status: string) => {
     if (status === 'in_progress' || status === 'queued') {
@@ -34,11 +34,11 @@ export function WorkflowTable({ runs }: WorkflowTableProps) {
       case 'failure':
         return <Badge variant="error">Failure</Badge>
       case 'cancelled':
-        return <Badge variant="default">Cancelled</Badge>
+        return <Badge variant="neutral">Cancelled</Badge>
       case 'skipped':
-        return <Badge variant="default">Skipped</Badge>
+        return <Badge variant="neutral">Skipped</Badge>
       default:
-        return <Badge variant="default">{conclusion || status}</Badge>
+        return <Badge variant="neutral">{conclusion || status}</Badge>
     }
   }
 
@@ -108,18 +108,18 @@ export function WorkflowTable({ runs }: WorkflowTableProps) {
       <SortableTable
         columns={columns}
         data={sortedRuns}
-        sortBy={workflowSortBy}
-        sortDirection={workflowSortDirection}
+        sortBy={sortBy}
+        sortDirection={sortDirection}
         onSort={sortWorkflows}
         keyExtractor={(run) => run.id}
       />
 
       {totalPages > 1 && (
         <Pagination
-          currentPage={workflowPage}
+          currentPage={currentPage}
           totalPages={totalPages}
           totalItems={runs.length}
-          onPageChange={setWorkflowPage}
+          onPageChange={setCurrentPage}
         />
       )}
     </div>

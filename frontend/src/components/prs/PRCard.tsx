@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { PullRequest } from '../../api/types'
 import { usePRStore } from '../../stores/usePRStore'
+import { useAccountStore } from '../../stores/useAccountStore'
 import { useQueueStore } from '../../stores/useQueueStore'
 import { Card } from '../common/Card'
 import { Badge } from '../common/Badge'
@@ -17,21 +18,23 @@ interface PRCardProps {
 export function PRCard({ pr }: PRCardProps) {
   const [showDescription, setShowDescription] = useState(false)
   const prDivergence = usePRStore((state) => state.prDivergence)
+  const selectedRepo = useAccountStore((state) => state.selectedRepo)
   const { isInQueue, addToQueue, removeFromQueue } = useQueueStore()
 
+  const repoFullName = selectedRepo ? `${selectedRepo.owner.login}/${selectedRepo.name}` : ''
   const divergence = prDivergence[pr.number]
-  const inQueue = isInQueue(pr.number, `${pr.author.login}/${pr.baseRefName}`)
+  const inQueue = isInQueue(pr.number, repoFullName)
 
   const handleQueueToggle = () => {
     if (inQueue) {
-      removeFromQueue(pr.number, `${pr.author.login}/${pr.baseRefName}`)
+      removeFromQueue(pr.number, repoFullName)
     } else {
       addToQueue({
         id: 0, // Will be set by backend
         number: pr.number,
         title: pr.title,
         url: pr.url,
-        repo: `${pr.author.login}/${pr.baseRefName}`,
+        repo: repoFullName,
         author: pr.author.login,
         additions: pr.additions,
         deletions: pr.deletions,
