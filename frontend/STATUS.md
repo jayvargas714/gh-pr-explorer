@@ -13,10 +13,10 @@
 | **Phase 0: Scaffolding** | ✅ Complete | 15 | 1,123 | 33b1cf2 | Vite setup, Matrix design tokens, API types |
 | **Phase 1: Common UI Components** | ✅ Complete | 16 | 1,350 | 4b33919 | 12 components, 3 hooks, formatters, CSS |
 | **Phase 2: State Management + API Layer** | ✅ Complete | 17 | 1,385 | 4b33919 | 9 Zustand stores, 7 API modules |
-| **Phase 3: Layout and Navigation** | ✅ Complete | 9 | ~650 | - | Header, tabs, selectors, layout, footer |
-| **Phase 4: Filter Panel** | ✅ Complete | 8 | ~600 | - | 5 filter tabs, 40+ filter properties |
-| **Phase 5: PR List and Cards** | ✅ Complete | 4 | ~550 | - | PR list, cards, badges, actions, divergence |
-| **Phase 6: Analytics Views** | ⏳ Pending | - | - | - | 4 sub-tabs, charts, tables |
+| **Phase 3: Layout and Navigation** | ✅ Complete | 9 | ~650 | 21b70c2 | Header, tabs, selectors, layout, footer |
+| **Phase 4: Filter Panel** | ✅ Complete | 8 | ~600 | 4d97ba0 | 5 filter tabs, 40+ filter properties |
+| **Phase 5: PR List and Cards** | ✅ Complete | 4 | ~550 | 42a292c | PR list, cards, badges, actions, divergence |
+| **Phase 6: Analytics Views** | ✅ Complete | 7 | ~756 | - | 4 sub-tabs, charts, tables, CSS-only visualizations |
 | **Phase 7: CI/Workflows View** | ⏳ Pending | - | - | - | Filters, stats, table |
 | **Phase 8: Merge Queue Panel** | ⏳ Pending | - | - | - | Slide-out panel, notes, reordering |
 | **Phase 9: Code Reviews + History** | ⏳ Pending | - | - | - | Review system, history panel |
@@ -78,29 +78,27 @@
 
 ---
 
-## Next Up: Phase 3 - Layout and Navigation
+## Next Up: Phase 7 - CI/Workflows View
 
 **Components to Build:**
-- Header (logo, queue/history toggles, theme toggle)
-- ViewTabs (Pull Requests / Analytics / CI/Workflows)
-- MainLayout (conditional rendering based on selections)
-- AccountSelector and RepoSelector
-- Footer
-- WelcomeSection
+- WorkflowsView (main container)
+- WorkflowFilters (workflow/branch/event/conclusion filters)
+- WorkflowTable (sortable table with runs)
+- WorkflowStats (stat cards for pass rate, avg duration, failures)
 
 **CSS:**
-- layout.css
+- workflows.css
 
-**Expected Files:** ~6 components + 1 CSS file
+**Expected Files:** ~4 components + 1 CSS file
 
 ---
 
 ## Totals So Far
 
-- **Files Created:** 48
-- **Lines of Code:** 3,858
-- **Commits:** 2
-- **Time:** Phase 0-2 complete
+- **Files Created:** 67
+- **Lines of Code:** ~5,787
+- **Commits:** 5
+- **Time:** Phases 0-6 complete (61% done)
 
 ---
 
