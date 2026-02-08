@@ -1,0 +1,217 @@
+/* Filter Panel Styles - Matrix UI Design System */
+
+/* ============================================================================
+   Filter Panel
+   ============================================================================ */
+
+.mx-filter-panel {
+  background-color: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-lg);
+  margin-bottom: var(--mx-space-6);
+  overflow: hidden;
+}
+
+.mx-filter-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--mx-space-4);
+  border-bottom: 1px solid var(--mx-color-border);
+}
+
+.mx-filter-panel__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-space-3);
+  background: none;
+  border: none;
+  color: var(--mx-color-text-primary);
+  font-size: var(--mx-font-size-base);
+  font-weight: var(--mx-font-weight-semibold);
+  cursor: pointer;
+  transition: color var(--mx-transition-fast);
+}
+
+.mx-filter-panel__toggle:hover {
+  color: var(--mx-color-primary);
+}
+
+.mx-filter-panel__toggle-icon {
+  font-size: var(--mx-font-size-sm);
+  transition: transform var(--mx-transition-fast);
+}
+
+.mx-filter-panel__title {
+  font-size: var(--mx-font-size-lg);
+}
+
+.mx-filter-panel__tabs {
+  display: flex;
+  gap: var(--mx-space-2);
+  padding: var(--mx-space-3);
+  border-bottom: 1px solid var(--mx-color-border);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mx-filter-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-space-2);
+  padding: var(--mx-space-2) var(--mx-space-4);
+  background-color: var(--mx-color-bg-secondary);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-sm);
+  font-weight: var(--mx-font-weight-medium);
+  cursor: pointer;
+  transition: all var(--mx-transition-fast);
+  white-space: nowrap;
+}
+
+.mx-filter-tab:hover {
+  background-color: var(--mx-color-surface-hover);
+  border-color: var(--mx-color-border-hover);
+  color: var(--mx-color-text-primary);
+}
+
+.mx-filter-tab--active {
+  background-color: var(--mx-color-primary);
+  border-color: var(--mx-color-primary);
+  color: var(--mx-color-text-inverse);
+}
+
+.mx-filter-tab__icon {
+  font-size: var(--mx-font-size-base);
+}
+
+.mx-filter-panel__content {
+  padding: var(--mx-space-5);
+}
+
+/* ============================================================================
+   Filter Section
+   ============================================================================ */
+
+.mx-filter-section {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: var(--mx-space-4);
+}
+
+.mx-filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-space-2);
+}
+
+.mx-filter-label {
+  font-size: var(--mx-font-size-sm);
+  font-weight: var(--mx-font-weight-medium);
+  color: var(--mx-color-text-secondary);
+}
+
+.mx-filter-help {
+  font-size: var(--mx-font-size-xs);
+  color: var(--mx-color-text-muted);
+  margin: 0;
+  font-style: italic;
+}
+
+/* ============================================================================
+   Button Group (for state selection)
+   ============================================================================ */
+
+.mx-button-group {
+  display: flex;
+  gap: var(--mx-space-2);
+  flex-wrap: wrap;
+}
+
+.mx-button-group__item {
+  flex: 1;
+  min-width: 70px;
+  padding: var(--mx-space-2) var(--mx-space-3);
+  background-color: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  color: var(--mx-color-text-primary);
+  font-size: var(--mx-font-size-sm);
+  font-weight: var(--mx-font-weight-medium);
+  cursor: pointer;
+  transition: all var(--mx-transition-fast);
+}
+
+.mx-button-group__item:hover {
+  background-color: var(--mx-color-surface-hover);
+  border-color: var(--mx-color-border-hover);
+}
+
+.mx-button-group__item--active {
+  background-color: var(--mx-color-primary);
+  border-color: var(--mx-color-primary);
+  color: var(--mx-color-text-inverse);
+}
+
+/* ============================================================================
+   Checkbox Group (for multi-select)
+   ============================================================================ */
+
+.mx-checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-space-3);
+}
+
+/* ============================================================================
+   Date Range
+   ============================================================================ */
+
+.mx-date-range {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-space-2);
+}
+
+.mx-date-range__sep {
+  color: var(--mx-color-text-muted);
+  font-size: var(--mx-font-size-sm);
+}
+
+/* ============================================================================
+   Responsive
+   ============================================================================ */
+
+@media (max-width: 768px) {
+  .mx-filter-section {
+    grid-template-columns: 1fr;
+  }
+
+  .mx-filter-panel__tabs {
+    gap: var(--mx-space-1);
+  }
+
+  .mx-filter-tab {
+    padding: var(--mx-space-2) var(--mx-space-3);
+    font-size: var(--mx-font-size-xs);
+  }
+
+  .mx-button-group {
+    flex-direction: column;
+  }
+
+  .mx-button-group__item {
+    min-width: 100%;
+  }
+
+  .mx-date-range {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mx-date-range__sep {
+    text-align: center;
+  }
+}

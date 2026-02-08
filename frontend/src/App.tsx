@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { MainLayout } from './components/layout/MainLayout'
 import { AccountSelector } from './components/account/AccountSelector'
 import { RepoSelector } from './components/account/RepoSelector'
+import { FilterPanel } from './components/filters/FilterPanel'
 import { useAccountStore } from './stores/useAccountStore'
 
 function App() {
@@ -21,10 +22,13 @@ function App() {
       <RepoSelector />
 
       {selectedRepo && (
-        <div className="mx-placeholder">
-          <p>Phase 3 Complete - Ready for Phase 4 (Filter Panel)</p>
-          <p>Selected: {selectedRepo.owner.login}/{selectedRepo.name}</p>
-        </div>
+        <>
+          <FilterPanel />
+          <div className="mx-placeholder">
+            <p>Phase 4 Complete - Ready for Phase 5 (PR List)</p>
+            <p>Selected: {selectedRepo.owner.login}/{selectedRepo.name}</p>
+          </div>
+        </>
       )}
     </MainLayout>
   )
