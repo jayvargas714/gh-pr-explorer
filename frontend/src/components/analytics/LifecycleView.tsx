@@ -5,6 +5,7 @@ import { fetchLifecycleMetrics } from '../../api/analytics'
 import { SortableTable, Column } from '../common/SortableTable'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
+import { InfoTooltip } from '../common/InfoTooltip'
 import { formatHours } from '../../utils/formatters'
 
 export function LifecycleView() {
@@ -114,7 +115,7 @@ export function LifecycleView() {
       </div>
 
       <div className="mx-lifecycle__distribution">
-        <h3>Merge Time Distribution</h3>
+        <h3>Merge Time Distribution<InfoTooltip text="Shows how long merged PRs took from creation to merge, grouped into time buckets. Wider bars indicate more PRs fell into that time range." /></h3>
         <div className="mx-distribution-bars">
           {(() => {
             const maxCount = Math.max(...Object.values(lifecycleMetrics.distribution).map(Number))

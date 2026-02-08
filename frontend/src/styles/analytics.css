@@ -282,6 +282,7 @@
   gap: 4px;
   height: 200px;
   padding-top: var(--mx-spacing-4);
+  overflow: hidden;
 }
 
 .mx-bar-chart__bar {
@@ -311,16 +312,16 @@
   gap: 4px;
   height: 200px;
   padding-top: var(--mx-spacing-4);
+  overflow: hidden;
 }
 
 .mx-stacked-bar {
   flex: 1;
   min-width: 8px;
-  height: 100%;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
-  gap: 2px;
+  align-self: flex-end;
+  gap: 1px;
 }
 
 .mx-stacked-bar__additions {
@@ -351,6 +352,7 @@
   display: flex;
   align-items: flex-end;
   gap: 8px;
+  overflow: hidden;
   height: 200px;
   padding-top: var(--mx-spacing-4);
 }

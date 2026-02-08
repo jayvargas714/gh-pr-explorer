@@ -645,3 +645,59 @@
   padding: var(--mx-space-3) var(--mx-space-4);
   color: var(--mx-color-text-primary);
 }
+
+/* ============================================================================
+   Info Tooltip
+   ============================================================================ */
+
+.mx-info-tooltip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--mx-space-2);
+  vertical-align: middle;
+}
+
+.mx-info-tooltip__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--mx-radius-full);
+  border: 1px solid var(--mx-color-text-muted);
+  color: var(--mx-color-text-muted);
+  font-size: 11px;
+  font-weight: var(--mx-font-weight-semibold);
+  cursor: help;
+  transition: all var(--mx-transition-fast);
+}
+
+.mx-info-tooltip:hover .mx-info-tooltip__icon {
+  border-color: var(--mx-color-primary);
+  color: var(--mx-color-primary);
+}
+
+.mx-info-tooltip__content {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 260px;
+  padding: var(--mx-space-3);
+  background-color: var(--mx-color-bg-elevated);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  box-shadow: var(--mx-shadow-lg);
+  font-size: var(--mx-font-size-sm);
+  font-weight: var(--mx-font-weight-normal);
+  color: var(--mx-color-text-secondary);
+  line-height: 1.5;
+  z-index: var(--mx-z-tooltip);
+  white-space: normal;
+}
+
+.mx-info-tooltip:hover .mx-info-tooltip__content {
+  display: block;
+}
