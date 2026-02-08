@@ -1,55 +1,72 @@
 # GitHub PR Explorer - React Frontend
 
-Modern React 18 + TypeScript frontend with Matrix UI design system.
-
-## Development
-
-```bash
-# Install dependencies
-npm install
-
-# Start dev server (proxies to Flask backend on :5050)
-npm run dev
-
-# Visit http://localhost:3000
-```
-
-## Production Build
-
-```bash
-# Build for production
-npm run build
-
-# Preview production build
-npm run preview
-```
+Modern React 18 frontend for GitHub PR Explorer, built with TypeScript, Vite, Zustand, and Matrix UI design system.
 
 ## Tech Stack
 
-- **Framework**: React 18 + TypeScript
-- **Build Tool**: Vite
-- **State Management**: Zustand
-- **Styling**: CSS with Matrix design tokens
-- **Markdown**: react-markdown + remark-gfm
+- **React 18** - UI library with Composition API
+- **TypeScript** - Type-safe JavaScript
+- **Vite** - Fast build tool and dev server
+- **Zustand** - Lightweight state management
+- **React Markdown** - Markdown rendering
+- **Matrix UI** - Custom design system with CSS custom properties
 
-## Project Structure
+## Prerequisites
 
-```
-src/
-├── main.tsx              # Entry point
-├── App.tsx               # Root component
-├── api/                  # API client and types
-├── stores/               # Zustand state stores
-├── components/           # React components
-├── hooks/                # Custom hooks
-├── utils/                # Utility functions
-└── styles/               # CSS files
-```
+- Node.js 18+ and npm
+- Flask backend running on `http://127.0.0.1:5050`
 
-## Matrix Design System
+## Installation
 
-The UI uses the Matrix design system with:
-- Dark-first theme (default)
-- Light theme via `.matrix-light` class
-- CSS custom properties (`--mx-*`)
-- Inter font (UI) + JetBrains Mono (code)
+\`\`\`bash
+cd frontend
+npm install
+\`\`\`
+
+## Development
+
+Start the dev server with hot module replacement:
+
+\`\`\`bash
+npm run dev
+\`\`\`
+
+The frontend will run on \`http://localhost:3000\` with automatic proxy to the Flask backend on port 5050.
+
+## Production Build
+
+Build the optimized production bundle:
+
+\`\`\`bash
+npm run build
+\`\`\`
+
+The build output will be in the \`dist/\` directory.
+
+## Features
+
+### Pull Requests View
+- Client-side pagination (20 PRs per page)
+- 40+ filter properties across 5 tabs
+- Branch divergence indicators
+- Code review integration
+
+### Analytics View (4 Sub-tabs)
+- Developer stats, PR lifecycle, code activity, review responsiveness
+
+### CI/Workflows View
+- Workflow run history with filters and statistics
+
+### Merge Queue & Reviews
+- Queue management with notes
+- Code review system with history
+
+## State Management
+
+Uses Zustand with 9 domain-sliced stores for clean state management.
+
+## Matrix UI Design System
+
+Custom design system with CSS custom properties for theming, dark/light mode support.
+
+See full documentation in parent directory.

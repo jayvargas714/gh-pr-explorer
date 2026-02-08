@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { PullRequest } from '../../api/types'
 import { usePRStore } from '../../stores/usePRStore'
 import { useQueueStore } from '../../stores/useQueueStore'
@@ -5,6 +6,8 @@ import { Card } from '../common/Card'
 import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
 import { PRBadges } from './PRBadges'
+import { ReviewButton } from '../reviews/ReviewButton'
+import { DescriptionModal } from '../modals/DescriptionModal'
 import { formatRelativeTime } from '../../utils/formatters'
 
 interface PRCardProps {
@@ -12,6 +15,7 @@ interface PRCardProps {
 }
 
 export function PRCard({ pr }: PRCardProps) {
+  const [showDescription, setShowDescription] = useState(false)
   const prDivergence = usePRStore((state) => state.prDivergence)
   const { isInQueue, addToQueue, removeFromQueue } = useQueueStore()
 
@@ -96,11 +100,14 @@ export function PRCard({ pr }: PRCardProps) {
           {inQueue ? '📋 Queued' : '➕ Queue'}
         </Button>
 
-        <Button variant="secondary" size="sm" title="Start code review">
-          🤖 Review
-        </Button>
+        <ReviewButton pr={pr} />
 
-        <Button variant="ghost" size="sm" title="View description">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setShowDescription(true)}
+          title="View description"
+        >
           📝
         </Button>
 
@@ -113,6 +120,8 @@ export function PRCard({ pr }: PRCardProps) {
           🔗
         </Button>
       </div>
+
+      <DescriptionModal pr={pr} isOpen={showDescription} onClose={() => setShowDescription(false)} />
     </Card>
   )
 }
