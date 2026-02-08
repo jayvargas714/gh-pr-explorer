@@ -96,6 +96,9 @@ export async function getReviewDetail(reviewId: number): Promise<ReviewDetail> {
   return response.review
 }
 
+// Alias for consistency
+export const fetchReviewById = getReviewDetail
+
 /**
  * Get reviews for a specific PR
  */

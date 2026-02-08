@@ -50,6 +50,9 @@ export async function getQueueNotes(
   return api.get<QueueNotesResponse>(`/merge-queue/${prNumber}/notes?repo=${repo}`)
 }
 
+// Alias for consistency
+export const fetchQueueNotes = getQueueNotes
+
 /**
  * Add note to queue item
  */
