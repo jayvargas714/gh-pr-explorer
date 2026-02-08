@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_from_directory
 
 from database import get_database, get_reviews_db, get_queue_db, get_settings_db, get_dev_stats_db, get_lifecycle_cache_db
 
@@ -279,8 +279,24 @@ def parse_critical_issues(content):
 
 @app.route("/")
 def index():
-    """Serve the main HTML page."""
-    return render_template("index.html")
+    """Serve the main HTML page.
+
+    In production mode, serves the React build from frontend/dist/.
+    In development mode, falls back to the legacy Vue.js template.
+    """
+    frontend_dist = Path(__file__).parent / "frontend" / "dist" / "index.html"
+    if frontend_dist.exists():
+        # Production mode: serve React build
+        return send_from_directory(Path(__file__).parent / "frontend" / "dist", "index.html")
+    else:
+        # Development mode: serve legacy Vue.js template
+        return render_template("index.html")
+
+
+@app.route("/assets/<path:filename>")
+def serve_frontend_assets(filename):
+    """Serve static assets from the React build."""
+    return send_from_directory(Path(__file__).parent / "frontend" / "dist" / "assets", filename)
 
 
 @app.route("/api/user")
