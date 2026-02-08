@@ -42,7 +42,7 @@
 /* Button variants */
 .mx-button--primary {
   background-color: var(--mx-color-primary);
-  color: var(--mx-color-text-inverse);
+  color: #000;
   border-color: var(--mx-color-primary);
   font-weight: var(--mx-font-weight-bold);
   box-shadow: var(--mx-glow-primary);

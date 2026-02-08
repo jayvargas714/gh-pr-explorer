@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { useAccountStore } from '../../stores/useAccountStore'
+import { useMetadataStore } from '../../stores/useMetadataStore'
 import { fetchRepos } from '../../api/repos'
 import { Input } from '../common/Input'
 import { Spinner } from '../common/Spinner'
@@ -20,6 +21,8 @@ export function RepoSelector() {
     setReposError,
     filteredRepos,
   } = useAccountStore()
+
+  const { loadMetadata, clear: clearMetadata } = useMetadataStore()
 
   const [isOpen, setIsOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -50,6 +53,15 @@ export function RepoSelector() {
       setReposLoading(false)
     }
   }
+
+  // Load metadata when repo changes
+  useEffect(() => {
+    if (selectedAccount && selectedRepo) {
+      loadMetadata(selectedAccount.login, selectedRepo.name)
+    } else {
+      clearMetadata()
+    }
+  }, [selectedRepo])
 
   const handleRepoSelect = (repo: any) => {
     setSelectedRepo(repo)

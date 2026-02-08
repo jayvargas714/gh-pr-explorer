@@ -1,8 +1,15 @@
 import { useFilterStore } from '../../stores/useFilterStore'
+import { useMetadataStore } from '../../stores/useMetadataStore'
 import { Select } from '../common/Select'
 
 export function PeopleFilters() {
   const filters = useFilterStore()
+  const { contributors } = useMetadataStore()
+
+  const userOptions = [
+    { value: '', label: 'All Users' },
+    ...contributors.map((c) => ({ value: c, label: c })),
+  ]
 
   return (
     <div className="mx-filter-section">
@@ -11,10 +18,7 @@ export function PeopleFilters() {
           label="Involves"
           value={filters.involves}
           onChange={(e) => filters.setFilter('involves', e.target.value)}
-          options={[
-            { value: '', label: 'All Users' },
-            // TODO: Populate from repository metadata
-          ]}
+          options={userOptions}
         />
         <p className="mx-filter-help">
           Author, assignee, mentions, or commenter
@@ -26,10 +30,7 @@ export function PeopleFilters() {
           label="Mentions"
           value={filters.mentions}
           onChange={(e) => filters.setFilter('mentions', e.target.value)}
-          options={[
-            { value: '', label: 'All Users' },
-            // TODO: Populate from repository metadata
-          ]}
+          options={userOptions}
         />
       </div>
 
@@ -38,10 +39,7 @@ export function PeopleFilters() {
           label="Commenter"
           value={filters.commenter}
           onChange={(e) => filters.setFilter('commenter', e.target.value)}
-          options={[
-            { value: '', label: 'All Users' },
-            // TODO: Populate from repository metadata
-          ]}
+          options={userOptions}
         />
       </div>
     </div>

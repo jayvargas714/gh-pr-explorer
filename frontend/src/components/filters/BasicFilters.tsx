@@ -1,9 +1,11 @@
 import { useFilterStore } from '../../stores/useFilterStore'
+import { useMetadataStore } from '../../stores/useMetadataStore'
 import { Select } from '../common/Select'
 import { Toggle } from '../common/Toggle'
 
 export function BasicFilters() {
   const filters = useFilterStore()
+  const { contributors, branches, milestones } = useMetadataStore()
 
   const stateOptions = [
     { value: 'open', label: 'Open' },
@@ -22,6 +24,27 @@ export function BasicFilters() {
     { value: '', label: 'Any' },
     { value: 'true', label: 'Linked to Issue' },
     { value: 'false', label: 'Not Linked' },
+  ]
+
+  const contributorOptions = [
+    { value: '', label: 'All Authors' },
+    ...contributors.map((c) => ({ value: c, label: c })),
+  ]
+
+  const assigneeOptions = [
+    { value: '', label: 'All Assignees' },
+    ...contributors.map((c) => ({ value: c, label: c })),
+  ]
+
+  const branchOptions = [
+    { value: '', label: 'All Branches' },
+    ...branches.map((b) => ({ value: b, label: b })),
+  ]
+
+  const milestoneOptions = [
+    { value: '', label: 'All Milestones' },
+    { value: 'none', label: 'No Milestone' },
+    ...milestones.map((m) => ({ value: m.title, label: m.title })),
   ]
 
   return (
@@ -57,10 +80,7 @@ export function BasicFilters() {
           label="Author"
           value={filters.author}
           onChange={(e) => filters.setFilter('author', e.target.value)}
-          options={[
-            { value: '', label: 'All Authors' },
-            // TODO: Populate from repository metadata
-          ]}
+          options={contributorOptions}
         />
       </div>
 
@@ -69,10 +89,7 @@ export function BasicFilters() {
           label="Assignee"
           value={filters.assignee}
           onChange={(e) => filters.setFilter('assignee', e.target.value)}
-          options={[
-            { value: '', label: 'All Assignees' },
-            // TODO: Populate from repository metadata
-          ]}
+          options={assigneeOptions}
         />
       </div>
 
@@ -89,10 +106,7 @@ export function BasicFilters() {
           label="Base Branch"
           value={filters.base}
           onChange={(e) => filters.setFilter('base', e.target.value)}
-          options={[
-            { value: '', label: 'All Branches' },
-            // TODO: Populate from repository metadata
-          ]}
+          options={branchOptions}
         />
       </div>
 
@@ -101,10 +115,7 @@ export function BasicFilters() {
           label="Head Branch"
           value={filters.head}
           onChange={(e) => filters.setFilter('head', e.target.value)}
-          options={[
-            { value: '', label: 'All Branches' },
-            // TODO: Populate from repository metadata
-          ]}
+          options={branchOptions}
         />
       </div>
 
@@ -121,11 +132,7 @@ export function BasicFilters() {
           label="Milestone"
           value={filters.milestone}
           onChange={(e) => filters.setFilter('milestone', e.target.value)}
-          options={[
-            { value: '', label: 'All Milestones' },
-            { value: 'none', label: 'No Milestone' },
-            // TODO: Populate from repository metadata
-          ]}
+          options={milestoneOptions}
         />
       </div>
 

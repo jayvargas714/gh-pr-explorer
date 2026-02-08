@@ -1,9 +1,11 @@
 import { useFilterStore } from '../../stores/useFilterStore'
+import { useMetadataStore } from '../../stores/useMetadataStore'
 import { Select } from '../common/Select'
 import { Toggle } from '../common/Toggle'
 
 export function ReviewFilters() {
   const filters = useFilterStore()
+  const { contributors } = useMetadataStore()
 
   const reviewStatuses = [
     { value: 'none', label: 'No Reviews' },
@@ -16,6 +18,16 @@ export function ReviewFilters() {
     { value: 'pending', label: 'Pending' },
     { value: 'success', label: 'Success' },
     { value: 'failure', label: 'Failure' },
+  ]
+
+  const contributorOptions = [
+    { value: '', label: 'All Reviewers' },
+    ...contributors.map((c) => ({ value: c, label: c })),
+  ]
+
+  const requestedOptions = [
+    { value: '', label: 'All Users' },
+    ...contributors.map((c) => ({ value: c, label: c })),
   ]
 
   const toggleReviewStatus = (status: string) => {
@@ -77,10 +89,7 @@ export function ReviewFilters() {
           label="Reviewed By"
           value={filters.reviewedBy}
           onChange={(e) => filters.setFilter('reviewedBy', e.target.value)}
-          options={[
-            { value: '', label: 'All Reviewers' },
-            // TODO: Populate from repository metadata
-          ]}
+          options={contributorOptions}
         />
       </div>
 
@@ -89,10 +98,7 @@ export function ReviewFilters() {
           label="Review Requested From"
           value={filters.reviewRequested}
           onChange={(e) => filters.setFilter('reviewRequested', e.target.value)}
-          options={[
-            { value: '', label: 'All Users' },
-            // TODO: Populate from repository metadata
-          ]}
+          options={requestedOptions}
         />
       </div>
     </div>

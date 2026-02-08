@@ -187,7 +187,7 @@
 .mx-button-group__item--active {
   background: var(--mx-color-primary);
   border-color: var(--mx-color-primary);
-  color: white;
+  color: #000;
 }
 
 .mx-activity__charts {

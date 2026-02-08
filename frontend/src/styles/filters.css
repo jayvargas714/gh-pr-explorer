@@ -152,7 +152,7 @@
 .mx-button-group__item--active {
   background-color: var(--mx-color-primary);
   border-color: var(--mx-color-primary);
-  color: var(--mx-color-text-inverse);
+  color: #000;
 }
 
 /* ============================================================================
