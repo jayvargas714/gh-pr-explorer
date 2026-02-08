@@ -12,7 +12,7 @@ interface WorkflowStatsProps {
 }
 
 export function WorkflowStats({ stats }: WorkflowStatsProps) {
-  const runsLabel = stats.total_runs >= 300 ? 'Last 300 Runs' : 'Recent Runs'
+  const runsLabel = stats.total_runs >= 1000 ? 'Last 1000 Runs' : 'Recent Runs'
 
   return (
     <div className="mx-stat-cards">
@@ -27,7 +27,7 @@ export function WorkflowStats({ stats }: WorkflowStatsProps) {
       <div className="mx-stat-card">
         <span className="mx-stat-card__label">
           {runsLabel}
-          <InfoTooltip text="The most recent workflow runs fetched from GitHub (up to 300). All stats below — pass rate, avg duration, and failures — are calculated from this set only." />
+          <InfoTooltip text="The most recent workflow runs fetched from GitHub (up to 1000). All stats below — pass rate, avg duration, and failures — are calculated from this set only." />
         </span>
         <span className="mx-stat-card__value">{formatNumber(stats.total_runs)}</span>
       </div>

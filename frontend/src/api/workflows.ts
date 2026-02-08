@@ -14,6 +14,7 @@ export async function fetchWorkflowRuns(
     event?: string
     status?: string
     conclusion?: string
+    refresh?: boolean
   } = {}
 ): Promise<WorkflowRunsResponse> {
   const params = new URLSearchParams()

@@ -4,9 +4,11 @@ import { Button } from '../common/Button'
 
 interface WorkflowFiltersProps {
   workflows: Array<{ id: number; name: string }>
+  onRefreshCache: () => void
+  refreshing: boolean
 }
 
-export function WorkflowFilters({ workflows }: WorkflowFiltersProps) {
+export function WorkflowFilters({ workflows, onRefreshCache, refreshing }: WorkflowFiltersProps) {
   const {
     workflowFilter,
     eventFilter,
@@ -65,6 +67,16 @@ export function WorkflowFilters({ workflows }: WorkflowFiltersProps) {
 
         <Button variant="secondary" size="sm" onClick={resetFilters}>
           Reset Filters
+        </Button>
+
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={onRefreshCache}
+          disabled={refreshing}
+          title="Fetch latest workflow runs from GitHub"
+        >
+          {refreshing ? 'Refreshing...' : 'Refresh Cache'}
         </Button>
       </div>
     </div>

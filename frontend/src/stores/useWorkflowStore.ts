@@ -7,6 +7,7 @@ interface WorkflowState {
   workflowStats: WorkflowStats | null
   workflows: Workflow[]
   loading: boolean
+  refreshing: boolean
   error: string | null
 
   // Filters
@@ -26,6 +27,7 @@ interface WorkflowState {
   setWorkflowStats: (stats: WorkflowStats | null) => void
   setWorkflows: (workflows: Workflow[]) => void
   setLoading: (loading: boolean) => void
+  setRefreshing: (refreshing: boolean) => void
   setError: (error: string | null) => void
 
   setWorkflowFilter: (filter: string) => void
@@ -50,6 +52,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   workflowStats: null,
   workflows: [],
   loading: false,
+  refreshing: false,
   error: null,
 
   // Filters
@@ -69,6 +72,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   setWorkflowStats: (stats) => set({ workflowStats: stats }),
   setWorkflows: (workflows) => set({ workflows }),
   setLoading: (loading) => set({ loading }),
+  setRefreshing: (refreshing) => set({ refreshing }),
   setError: (error) => set({ error }),
 
   setWorkflowFilter: (filter) => set({ workflowFilter: filter }),

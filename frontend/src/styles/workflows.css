@@ -20,6 +20,22 @@
   font-size: var(--mx-font-size-base);
 }
 
+/* Workflows Content Container (overlay anchor) */
+.mx-workflows__content {
+  position: relative;
+}
+
+.mx-workflows__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--mx-color-background-overlay, rgba(0, 0, 0, 0.35));
+  border-radius: var(--mx-radius-md);
+  z-index: 10;
+}
+
 /* Workflow Filters */
 .mx-workflow-filters {
   background: var(--mx-color-surface);
