@@ -1,0 +1,102 @@
+/* Workflows View Styles */
+
+/* Workflows View Container */
+.mx-workflows-view {
+  padding: var(--mx-spacing-4);
+}
+
+.mx-workflows__loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--mx-spacing-4);
+  padding: var(--mx-spacing-8);
+  min-height: 400px;
+}
+
+.mx-workflows__loading p {
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-base);
+}
+
+/* Workflow Filters */
+.mx-workflow-filters {
+  background: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  padding: var(--mx-spacing-4);
+  margin-bottom: var(--mx-spacing-6);
+}
+
+.mx-workflow-filters__row {
+  display: flex;
+  gap: var(--mx-spacing-3);
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.mx-workflow-filters__row > * {
+  flex: 1;
+  min-width: 150px;
+}
+
+.mx-workflow-filters__row button {
+  flex: 0 0 auto;
+}
+
+/* Workflow Table */
+.mx-workflow-table {
+  background: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  overflow: hidden;
+}
+
+.mx-workflow-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-spacing-1);
+}
+
+.mx-workflow-link {
+  color: var(--mx-color-primary);
+  text-decoration: none;
+  font-weight: var(--mx-font-weight-medium);
+  transition: var(--mx-transition-base);
+}
+
+.mx-workflow-link:hover {
+  color: var(--mx-color-primary-light);
+  text-decoration: underline;
+}
+
+.mx-workflow-title {
+  font-size: var(--mx-font-size-sm);
+  color: var(--mx-color-text-secondary);
+}
+
+.mx-workflow-event {
+  font-size: var(--mx-font-size-sm);
+  color: var(--mx-color-text-secondary);
+  font-family: var(--mx-font-family-mono);
+  background: var(--mx-color-background);
+  padding: 2px 6px;
+  border-radius: var(--mx-radius-sm);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .mx-workflow-filters__row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mx-workflow-filters__row > * {
+    width: 100%;
+  }
+
+  .mx-workflow-table {
+    overflow-x: auto;
+  }
+}

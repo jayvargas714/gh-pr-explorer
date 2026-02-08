@@ -5,6 +5,7 @@ import { RepoSelector } from './components/account/RepoSelector'
 import { FilterPanel } from './components/filters/FilterPanel'
 import { PRList } from './components/prs/PRList'
 import { AnalyticsView } from './components/analytics/AnalyticsView'
+import { WorkflowsView } from './components/workflows/WorkflowsView'
 import { useAccountStore } from './stores/useAccountStore'
 import { useUIStore } from './stores/useUIStore'
 
@@ -29,11 +30,7 @@ function App() {
       case 'analytics':
         return <AnalyticsView />
       case 'workflows':
-        return (
-          <div className="mx-placeholder">
-            <p>Workflows view - Phase 7</p>
-          </div>
-        )
+        return <WorkflowsView />
       default:
         return null
     }

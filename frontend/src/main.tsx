@@ -8,6 +8,7 @@ import './styles/layout.css'
 import './styles/filters.css'
 import './styles/prs.css'
 import './styles/analytics.css'
+import './styles/workflows.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

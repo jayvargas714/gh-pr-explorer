@@ -16,8 +16,8 @@
 | **Phase 3: Layout and Navigation** | ✅ Complete | 9 | ~650 | 21b70c2 | Header, tabs, selectors, layout, footer |
 | **Phase 4: Filter Panel** | ✅ Complete | 8 | ~600 | 4d97ba0 | 5 filter tabs, 40+ filter properties |
 | **Phase 5: PR List and Cards** | ✅ Complete | 4 | ~550 | 42a292c | PR list, cards, badges, actions, divergence |
-| **Phase 6: Analytics Views** | ✅ Complete | 7 | ~756 | - | 4 sub-tabs, charts, tables, CSS-only visualizations |
-| **Phase 7: CI/Workflows View** | ⏳ Pending | - | - | - | Filters, stats, table |
+| **Phase 6: Analytics Views** | ✅ Complete | 7 | ~756 | bdc1551 | 4 sub-tabs, charts, tables, CSS-only visualizations |
+| **Phase 7: CI/Workflows View** | ✅ Complete | 5 | ~370 | - | Filters, stats cards, sortable table, pagination |
 | **Phase 8: Merge Queue Panel** | ⏳ Pending | - | - | - | Slide-out panel, notes, reordering |
 | **Phase 9: Code Reviews + History** | ⏳ Pending | - | - | - | Review system, history panel |
 | **Phase 10: Modals and Remaining** | ⏳ Pending | - | - | - | Description modal, welcome section |
@@ -78,27 +78,26 @@
 
 ---
 
-## Next Up: Phase 7 - CI/Workflows View
+## Next Up: Phase 8 - Merge Queue Panel
 
 **Components to Build:**
-- WorkflowsView (main container)
-- WorkflowFilters (workflow/branch/event/conclusion filters)
-- WorkflowTable (sortable table with runs)
-- WorkflowStats (stat cards for pass rate, avg duration, failures)
+- QueuePanel (slide-out panel with queue items)
+- QueueItem (individual queue item with actions)
+- NotesModal (add/view notes for queue items)
 
 **CSS:**
-- workflows.css
+- queue.css
 
-**Expected Files:** ~4 components + 1 CSS file
+**Expected Files:** ~3 components + 1 CSS file
 
 ---
 
 ## Totals So Far
 
-- **Files Created:** 67
-- **Lines of Code:** ~5,787
-- **Commits:** 5
-- **Time:** Phases 0-6 complete (61% done)
+- **Files Created:** 72
+- **Lines of Code:** ~6,157
+- **Commits:** 6
+- **Time:** Phases 0-7 complete (70% done)
 
 ---
 
