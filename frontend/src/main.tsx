@@ -11,6 +11,7 @@ import './styles/analytics.css'
 import './styles/workflows.css'
 import './styles/queue.css'
 import './styles/reviews.css'
+import './styles/modals.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

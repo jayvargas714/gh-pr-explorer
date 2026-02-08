@@ -1,0 +1,346 @@
+/* Modals and Welcome Section Styles */
+
+/* Description Modal */
+.mx-description-modal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-spacing-4);
+}
+
+.mx-description-modal__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--mx-spacing-3);
+  padding-bottom: var(--mx-spacing-3);
+  border-bottom: 1px solid var(--mx-color-border);
+}
+
+.mx-description-modal__meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-spacing-1);
+}
+
+.mx-description-modal__link {
+  font-size: var(--mx-font-size-sm);
+  color: var(--mx-color-primary);
+  text-decoration: none;
+  font-weight: var(--mx-font-weight-medium);
+  transition: var(--mx-transition-base);
+}
+
+.mx-description-modal__link:hover {
+  color: var(--mx-color-primary-light);
+  text-decoration: underline;
+}
+
+.mx-description-modal__author {
+  font-size: var(--mx-font-size-sm);
+  color: var(--mx-color-text-secondary);
+}
+
+.mx-description-modal__badges {
+  display: flex;
+  gap: var(--mx-spacing-2);
+  flex-wrap: wrap;
+}
+
+.mx-description-modal__branches {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-spacing-2);
+  font-size: var(--mx-font-size-sm);
+  color: var(--mx-color-text-secondary);
+  padding: var(--mx-spacing-2);
+  background: var(--mx-color-surface);
+  border-radius: var(--mx-radius-md);
+}
+
+.mx-description-modal__branch {
+  font-family: var(--mx-font-family-mono);
+  font-weight: var(--mx-font-weight-medium);
+  color: var(--mx-color-text-primary);
+}
+
+.mx-description-modal__arrow {
+  color: var(--mx-color-text-tertiary);
+}
+
+.mx-description-modal__content {
+  max-height: 500px;
+  overflow-y: auto;
+  padding: var(--mx-spacing-3);
+  background: var(--mx-color-surface);
+  border-radius: var(--mx-radius-md);
+  line-height: 1.6;
+}
+
+.mx-description-modal__content h1,
+.mx-description-modal__content h2,
+.mx-description-modal__content h3,
+.mx-description-modal__content h4,
+.mx-description-modal__content h5,
+.mx-description-modal__content h6 {
+  margin-top: var(--mx-spacing-4);
+  margin-bottom: var(--mx-spacing-2);
+  color: var(--mx-color-text-primary);
+}
+
+.mx-description-modal__content h1 {
+  font-size: var(--mx-font-size-2xl);
+}
+
+.mx-description-modal__content h2 {
+  font-size: var(--mx-font-size-xl);
+}
+
+.mx-description-modal__content h3 {
+  font-size: var(--mx-font-size-lg);
+}
+
+.mx-description-modal__content p {
+  margin-bottom: var(--mx-spacing-2);
+  color: var(--mx-color-text-primary);
+}
+
+.mx-description-modal__content ul,
+.mx-description-modal__content ol {
+  margin-bottom: var(--mx-spacing-2);
+  padding-left: var(--mx-spacing-6);
+}
+
+.mx-description-modal__content li {
+  margin-bottom: var(--mx-spacing-1);
+}
+
+.mx-description-modal__content code {
+  background: var(--mx-color-background);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-sm);
+  padding: 2px 6px;
+  font-family: var(--mx-font-family-mono);
+  font-size: var(--mx-font-size-sm);
+}
+
+.mx-description-modal__content pre {
+  background: var(--mx-color-background);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  padding: var(--mx-spacing-3);
+  overflow-x: auto;
+  margin-bottom: var(--mx-spacing-2);
+}
+
+.mx-description-modal__content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.mx-description-modal__content a {
+  color: var(--mx-color-primary);
+  text-decoration: none;
+  transition: var(--mx-transition-base);
+}
+
+.mx-description-modal__content a:hover {
+  color: var(--mx-color-primary-light);
+  text-decoration: underline;
+}
+
+.mx-description-modal__empty {
+  text-align: center;
+  color: var(--mx-color-text-secondary);
+  font-style: italic;
+  padding: var(--mx-spacing-6);
+}
+
+.mx-description-modal__labels,
+.mx-description-modal__assignees {
+  padding-top: var(--mx-spacing-3);
+  border-top: 1px solid var(--mx-color-border);
+}
+
+.mx-description-modal__labels strong,
+.mx-description-modal__assignees strong {
+  display: block;
+  margin-bottom: var(--mx-spacing-2);
+  font-size: var(--mx-font-size-sm);
+  font-weight: var(--mx-font-weight-semibold);
+  color: var(--mx-color-text-primary);
+}
+
+.mx-description-modal__label-list,
+.mx-description-modal__assignee-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mx-spacing-2);
+}
+
+.mx-description-modal__label {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: var(--mx-radius-full);
+  font-size: var(--mx-font-size-xs);
+  font-weight: var(--mx-font-weight-medium);
+  color: white;
+}
+
+.mx-description-modal__assignee {
+  display: inline-block;
+  padding: 4px 12px;
+  background: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-full);
+  font-size: var(--mx-font-size-sm);
+  color: var(--mx-color-text-primary);
+}
+
+/* Welcome Section */
+.mx-welcome {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: calc(100vh - 200px);
+  padding: var(--mx-spacing-8);
+}
+
+.mx-welcome__container {
+  max-width: 800px;
+  width: 100%;
+}
+
+.mx-welcome__title {
+  font-size: var(--mx-font-size-3xl);
+  font-weight: var(--mx-font-weight-bold);
+  color: var(--mx-color-text-primary);
+  text-align: center;
+  margin-bottom: var(--mx-spacing-2);
+}
+
+.mx-welcome__subtitle {
+  font-size: var(--mx-font-size-lg);
+  color: var(--mx-color-text-secondary);
+  text-align: center;
+  margin-bottom: var(--mx-spacing-6);
+}
+
+.mx-welcome__steps {
+  margin-top: var(--mx-spacing-6);
+}
+
+.mx-welcome__steps h2,
+.mx-welcome__features h2 {
+  font-size: var(--mx-font-size-xl);
+  font-weight: var(--mx-font-weight-bold);
+  color: var(--mx-color-text-primary);
+  margin-bottom: var(--mx-spacing-4);
+}
+
+.mx-welcome__step {
+  display: flex;
+  gap: var(--mx-spacing-3);
+  margin-bottom: var(--mx-spacing-4);
+}
+
+.mx-welcome__step-number {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--mx-color-primary);
+  color: white;
+  font-weight: var(--mx-font-weight-bold);
+  border-radius: var(--mx-radius-full);
+  font-size: var(--mx-font-size-lg);
+}
+
+.mx-welcome__step-content {
+  flex: 1;
+}
+
+.mx-welcome__step-content h3 {
+  font-size: var(--mx-font-size-base);
+  font-weight: var(--mx-font-weight-semibold);
+  color: var(--mx-color-text-primary);
+  margin-bottom: var(--mx-spacing-1);
+}
+
+.mx-welcome__step-content p {
+  color: var(--mx-color-text-secondary);
+  line-height: 1.6;
+}
+
+.mx-welcome__step-content a {
+  color: var(--mx-color-primary);
+  text-decoration: none;
+  font-weight: var(--mx-font-weight-medium);
+  transition: var(--mx-transition-base);
+}
+
+.mx-welcome__step-content a:hover {
+  color: var(--mx-color-primary-light);
+  text-decoration: underline;
+}
+
+.mx-welcome__step-content code {
+  background: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-sm);
+  padding: 2px 6px;
+  font-family: var(--mx-font-family-mono);
+  font-size: var(--mx-font-size-sm);
+  color: var(--mx-color-text-primary);
+}
+
+.mx-welcome__features {
+  margin-top: var(--mx-spacing-8);
+  background: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  padding: var(--mx-spacing-6);
+}
+
+.mx-welcome__features ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.mx-welcome__features li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--mx-spacing-2);
+  padding: var(--mx-spacing-2) 0;
+  color: var(--mx-color-text-primary);
+}
+
+.mx-welcome__features li::before {
+  content: '✓';
+  color: var(--mx-color-success);
+  font-weight: var(--mx-font-weight-bold);
+  flex-shrink: 0;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .mx-welcome {
+    padding: var(--mx-spacing-4);
+  }
+
+  .mx-welcome__title {
+    font-size: var(--mx-font-size-2xl);
+  }
+
+  .mx-welcome__subtitle {
+    font-size: var(--mx-font-size-base);
+  }
+
+  .mx-description-modal__header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

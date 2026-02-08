@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { MainLayout } from './components/layout/MainLayout'
+import { WelcomeSection } from './components/layout/WelcomeSection'
 import { AccountSelector } from './components/account/AccountSelector'
 import { RepoSelector } from './components/account/RepoSelector'
 import { FilterPanel } from './components/filters/FilterPanel'
@@ -47,11 +48,13 @@ function App() {
         <AccountSelector />
         <RepoSelector />
 
-        {selectedRepo && (
+        {selectedRepo ? (
           <>
             <FilterPanel />
             {renderView()}
           </>
+        ) : (
+          <WelcomeSection />
         )}
       </MainLayout>
 
