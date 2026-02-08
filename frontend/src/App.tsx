@@ -6,6 +6,7 @@ import { FilterPanel } from './components/filters/FilterPanel'
 import { PRList } from './components/prs/PRList'
 import { AnalyticsView } from './components/analytics/AnalyticsView'
 import { WorkflowsView } from './components/workflows/WorkflowsView'
+import { QueuePanel } from './components/queue/QueuePanel'
 import { useAccountStore } from './stores/useAccountStore'
 import { useUIStore } from './stores/useUIStore'
 
@@ -37,17 +38,21 @@ function App() {
   }
 
   return (
-    <MainLayout>
-      <AccountSelector />
-      <RepoSelector />
+    <>
+      <MainLayout>
+        <AccountSelector />
+        <RepoSelector />
 
-      {selectedRepo && (
-        <>
-          <FilterPanel />
-          {renderView()}
-        </>
-      )}
-    </MainLayout>
+        {selectedRepo && (
+          <>
+            <FilterPanel />
+            {renderView()}
+          </>
+        )}
+      </MainLayout>
+
+      <QueuePanel />
+    </>
   )
 }
 

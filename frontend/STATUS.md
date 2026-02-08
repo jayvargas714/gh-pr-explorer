@@ -17,8 +17,8 @@
 | **Phase 4: Filter Panel** | ✅ Complete | 8 | ~600 | 4d97ba0 | 5 filter tabs, 40+ filter properties |
 | **Phase 5: PR List and Cards** | ✅ Complete | 4 | ~550 | 42a292c | PR list, cards, badges, actions, divergence |
 | **Phase 6: Analytics Views** | ✅ Complete | 7 | ~756 | bdc1551 | 4 sub-tabs, charts, tables, CSS-only visualizations |
-| **Phase 7: CI/Workflows View** | ✅ Complete | 5 | ~370 | - | Filters, stats cards, sortable table, pagination |
-| **Phase 8: Merge Queue Panel** | ⏳ Pending | - | - | - | Slide-out panel, notes, reordering |
+| **Phase 7: CI/Workflows View** | ✅ Complete | 5 | ~370 | 8d7fd31 | Filters, stats cards, sortable table, pagination |
+| **Phase 8: Merge Queue Panel** | ✅ Complete | 4 | ~450 | - | Slide-out panel, notes modal, reordering, badges |
 | **Phase 9: Code Reviews + History** | ⏳ Pending | - | - | - | Review system, history panel |
 | **Phase 10: Modals and Remaining** | ⏳ Pending | - | - | - | Description modal, welcome section |
 | **Phase 11: Integration and Polish** | ⏳ Pending | - | - | - | Wire everything, test, update docs |
@@ -78,26 +78,28 @@
 
 ---
 
-## Next Up: Phase 8 - Merge Queue Panel
+## Next Up: Phase 9 - Code Reviews + History
 
 **Components to Build:**
-- QueuePanel (slide-out panel with queue items)
-- QueueItem (individual queue item with actions)
-- NotesModal (add/view notes for queue items)
+- ReviewButton (start/cancel/status review button)
+- ReviewErrorModal (error details modal)
+- ReviewViewer (markdown review viewer modal)
+- HistoryPanel (slide-out panel for review history)
+- ReviewPollingManager (useEffect hook for polling)
 
 **CSS:**
-- queue.css
+- reviews.css
 
-**Expected Files:** ~3 components + 1 CSS file
+**Expected Files:** ~5 components + 1 CSS file
 
 ---
 
 ## Totals So Far
 
-- **Files Created:** 72
-- **Lines of Code:** ~6,157
-- **Commits:** 6
-- **Time:** Phases 0-7 complete (70% done)
+- **Files Created:** 76
+- **Lines of Code:** ~6,607
+- **Commits:** 7
+- **Time:** Phases 0-8 complete (79% done)
 
 ---
 

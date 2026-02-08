@@ -9,6 +9,7 @@ import './styles/filters.css'
 import './styles/prs.css'
 import './styles/analytics.css'
 import './styles/workflows.css'
+import './styles/queue.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
