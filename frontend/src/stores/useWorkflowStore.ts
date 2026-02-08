@@ -36,6 +36,7 @@ interface WorkflowState {
 
   sortWorkflows: (column: string) => void
   setCurrentPage: (page: number) => void
+  setWorkflowsPerPage: (perPage: number) => void
 
   // Computed
   getSortedWorkflows: () => WorkflowRun[]
@@ -61,7 +62,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   sortBy: 'created_at',
   sortDirection: 'desc',
   currentPage: 1,
-  workflowsPerPage: 25,
+  workflowsPerPage: 50,
 
   // Actions
   setWorkflowRuns: (runs) => set({ workflowRuns: runs, currentPage: 1 }),
@@ -90,6 +91,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     })),
 
   setCurrentPage: (page) => set({ currentPage: page }),
+  setWorkflowsPerPage: (perPage) => set({ workflowsPerPage: perPage, currentPage: 1 }),
 
   // Computed
   getSortedWorkflows: () => {

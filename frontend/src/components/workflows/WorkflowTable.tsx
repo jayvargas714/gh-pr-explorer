@@ -9,18 +9,22 @@ interface WorkflowTableProps {
   runs: WorkflowRun[]
 }
 
+const PAGE_SIZE_OPTIONS = [25, 50, 100]
+
 export function WorkflowTable({ runs }: WorkflowTableProps) {
   const {
     sortBy,
     sortDirection,
     currentPage,
+    workflowsPerPage,
     sortWorkflows,
     setCurrentPage,
-    getSortedWorkflows,
+    setWorkflowsPerPage,
+    getPaginatedWorkflows,
     getTotalPages,
   } = useWorkflowStore()
 
-  const sortedRuns = getSortedWorkflows()
+  const paginatedRuns = getPaginatedWorkflows()
   const totalPages = getTotalPages()
 
   const getConclusionBadge = (conclusion: string | null, status: string) => {
@@ -107,21 +111,36 @@ export function WorkflowTable({ runs }: WorkflowTableProps) {
     <div className="mx-workflow-table">
       <SortableTable
         columns={columns}
-        data={sortedRuns}
+        data={paginatedRuns}
         sortBy={sortBy}
         sortDirection={sortDirection}
         onSort={sortWorkflows}
         keyExtractor={(run) => run.id}
       />
 
-      {totalPages > 1 && (
-        <Pagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          totalItems={runs.length}
-          onPageChange={setCurrentPage}
-        />
-      )}
+      <div className="mx-workflow-table__footer">
+        <div className="mx-workflow-table__page-size">
+          <label>Rows per page:</label>
+          <select
+            value={workflowsPerPage}
+            onChange={(e) => setWorkflowsPerPage(Number(e.target.value))}
+            className="mx-select__field"
+          >
+            {PAGE_SIZE_OPTIONS.map((size) => (
+              <option key={size} value={size}>{size}</option>
+            ))}
+          </select>
+        </div>
+
+        {totalPages > 1 && (
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={runs.length}
+            onPageChange={setCurrentPage}
+          />
+        )}
+      </div>
     </div>
   )
 }

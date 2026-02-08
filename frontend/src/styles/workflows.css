@@ -85,6 +85,35 @@
   border-radius: var(--mx-radius-sm);
 }
 
+/* Workflow Table Footer */
+.mx-workflow-table__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--mx-space-3) var(--mx-space-4);
+  border-top: 1px solid var(--mx-color-border);
+  flex-wrap: wrap;
+  gap: var(--mx-space-3);
+}
+
+.mx-workflow-table__page-size {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-space-2);
+  font-size: var(--mx-font-size-sm);
+  color: var(--mx-color-text-secondary);
+}
+
+.mx-workflow-table__page-size select {
+  padding: var(--mx-space-1) var(--mx-space-2);
+  background-color: var(--mx-color-bg-input);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-sm);
+  color: var(--mx-color-text-primary);
+  font-size: var(--mx-font-size-sm);
+  cursor: pointer;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
   .mx-workflow-filters__row {

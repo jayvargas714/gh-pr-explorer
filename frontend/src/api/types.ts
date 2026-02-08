@@ -161,6 +161,7 @@ export interface WorkflowRun {
 
 export interface WorkflowStats {
   total_runs: number
+  all_time_total: number
   pass_rate: number
   avg_duration: number
   failure_count: number

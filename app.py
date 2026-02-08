@@ -716,6 +716,14 @@ def get_workflow_runs(owner, repo):
             "}]"
         )
 
+        # Fetch total_count from first page (lightweight, just the count)
+        all_time_total = 0
+        try:
+            count_output = run_gh_command(["api", f"{base_url}&page=1", "--jq", ".total_count"])
+            all_time_total = int(count_output.strip()) if count_output.strip() else 0
+        except (RuntimeError, ValueError):
+            pass
+
         runs = []
         for page in range(1, 4):  # Fetch up to 3 pages
             api_url = f"{base_url}&page={page}"
@@ -767,6 +775,7 @@ def get_workflow_runs(owner, repo):
         completed_runs = success_count + failure_count
         stats = {
             "total_runs": total_runs,
+            "all_time_total": all_time_total,
             "pass_rate": round((success_count / completed_runs * 100), 1) if completed_runs > 0 else 0,
             "avg_duration": round(total_duration / duration_count) if duration_count > 0 else 0,
             "failure_count": failure_count,
