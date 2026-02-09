@@ -175,9 +175,24 @@
   gap: var(--mx-space-2);
 }
 
+.mx-date-range .mx-input-wrapper {
+  flex: 1;
+  min-width: 0;
+}
+
+.mx-date-range .mx-input {
+  width: 100%;
+}
+
 .mx-date-range__sep {
   color: var(--mx-color-text-muted);
   font-size: var(--mx-font-size-sm);
+  flex-shrink: 0;
+}
+
+/* Date filter section uses 2-column layout since each group has two date pickers */
+.mx-filter-section:has(.mx-date-range) {
+  grid-template-columns: repeat(2, 1fr);
 }
 
 /* ============================================================================
