@@ -148,6 +148,31 @@
   border: 1px solid var(--mx-color-border);
 }
 
+/* Score Buttons (used in PR cards and queue items) */
+.mx-score-btn.mx-button--ghost {
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+
+.mx-score-btn--good.mx-button--ghost {
+  color: var(--mx-color-success);
+  border-color: var(--mx-color-success);
+}
+
+.mx-score-btn--ok.mx-button--ghost {
+  color: var(--mx-color-warning);
+  border-color: var(--mx-color-warning);
+}
+
+.mx-score-btn--bad.mx-button--ghost {
+  color: var(--mx-color-error);
+  border-color: var(--mx-color-error);
+}
+
+.mx-score-btn--neutral.mx-button--ghost {
+  color: var(--mx-color-text-secondary);
+}
+
 /* ============================================================================
    Cards
    ============================================================================ */

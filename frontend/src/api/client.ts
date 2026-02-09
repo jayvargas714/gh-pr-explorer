@@ -38,7 +38,7 @@ async function request<T>(
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
       throw new APIError(
-        errorData.message || `Request failed with status ${response.status}`,
+        errorData.message || errorData.error || `Request failed with status ${response.status}`,
         response.status,
         errorData
       )

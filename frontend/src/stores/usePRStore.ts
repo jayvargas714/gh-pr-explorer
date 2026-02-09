@@ -1,6 +1,11 @@
 import { create } from 'zustand'
 import { PullRequest, DivergenceMap } from '../api/types'
 
+export interface PRReviewInfo {
+  reviewId: number
+  score: number | null
+}
+
 interface PRState {
   // PRs
   prs: PullRequest[]
@@ -15,6 +20,9 @@ interface PRState {
   prDivergence: DivergenceMap
   divergenceLoading: boolean
 
+  // Review scores (pr_number -> review info)
+  prReviewScores: Record<number, PRReviewInfo>
+
   // Actions
   setPRs: (prs: PullRequest[]) => void
   setLoading: (loading: boolean) => void
@@ -22,6 +30,7 @@ interface PRState {
   setCurrentPage: (page: number) => void
   setPRDivergence: (divergence: DivergenceMap) => void
   setDivergenceLoading: (loading: boolean) => void
+  setPRReviewScores: (scores: Record<number, PRReviewInfo>) => void
 
   // Computed
   getPaginatedPRs: () => PullRequest[]
@@ -42,6 +51,9 @@ export const usePRStore = create<PRState>((set, get) => ({
   prDivergence: {},
   divergenceLoading: false,
 
+  // Review scores
+  prReviewScores: {},
+
   // Actions
   setPRs: (prs) => set({ prs, currentPage: 1 }),
   setLoading: (loading) => set({ loading }),
@@ -49,6 +61,7 @@ export const usePRStore = create<PRState>((set, get) => ({
   setCurrentPage: (page) => set({ currentPage: page }),
   setPRDivergence: (divergence) => set({ prDivergence: divergence }),
   setDivergenceLoading: (loading) => set({ divergenceLoading: loading }),
+  setPRReviewScores: (scores) => set({ prReviewScores: scores }),
 
   // Computed
   getPaginatedPRs: () => {

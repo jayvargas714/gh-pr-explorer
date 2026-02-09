@@ -3,6 +3,9 @@ import { PullRequest } from '../../api/types'
 import { usePRStore } from '../../stores/usePRStore'
 import { useAccountStore } from '../../stores/useAccountStore'
 import { useQueueStore } from '../../stores/useQueueStore'
+import { useReviewStore } from '../../stores/useReviewStore'
+import { addToQueue as apiAddToQueue, removeFromQueue as apiRemoveFromQueue } from '../../api/queue'
+import { fetchMergeQueue } from '../../api/queue'
 import { Card } from '../common/Card'
 import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
@@ -17,38 +20,43 @@ interface PRCardProps {
 
 export function PRCard({ pr }: PRCardProps) {
   const [showDescription, setShowDescription] = useState(false)
+  const [queueLoading, setQueueLoading] = useState(false)
   const prDivergence = usePRStore((state) => state.prDivergence)
+  const prReviewScores = usePRStore((state) => state.prReviewScores)
   const selectedRepo = useAccountStore((state) => state.selectedRepo)
-  const { isInQueue, addToQueue, removeFromQueue } = useQueueStore()
+  const { isInQueue, setMergeQueue } = useQueueStore()
+  const openReviewViewer = useReviewStore((state) => state.openReviewViewer)
+
+  const reviewInfo = prReviewScores[pr.number]
 
   const repoFullName = selectedRepo ? `${selectedRepo.owner.login}/${selectedRepo.name}` : ''
   const divergence = prDivergence[pr.number]
   const inQueue = isInQueue(pr.number, repoFullName)
 
-  const handleQueueToggle = () => {
-    if (inQueue) {
-      removeFromQueue(pr.number, repoFullName)
-    } else {
-      addToQueue({
-        id: 0, // Will be set by backend
-        number: pr.number,
-        title: pr.title,
-        url: pr.url,
-        repo: repoFullName,
-        author: pr.author.login,
-        additions: pr.additions,
-        deletions: pr.deletions,
-        addedAt: new Date().toISOString(),
-        notesCount: 0,
-        prState: pr.state,
-        hasNewCommits: false,
-        lastReviewedSha: null,
-        currentSha: null,
-        hasReview: false,
-        reviewScore: null,
-        reviewId: null,
-        inlineCommentsPosted: false,
-      })
+  const handleQueueToggle = async () => {
+    if (queueLoading) return
+    try {
+      setQueueLoading(true)
+      if (inQueue) {
+        await apiRemoveFromQueue(pr.number, repoFullName)
+      } else {
+        await apiAddToQueue({
+          number: pr.number,
+          title: pr.title,
+          url: pr.url,
+          repo: repoFullName,
+          author: pr.author.login,
+          additions: pr.additions,
+          deletions: pr.deletions,
+        })
+      }
+      // Refresh queue from backend to get accurate state
+      const response = await fetchMergeQueue()
+      setMergeQueue(response.queue)
+    } catch (err) {
+      console.error('Failed to update queue:', err)
+    } finally {
+      setQueueLoading(false)
     }
   }
 
@@ -98,12 +106,31 @@ export function PRCard({ pr }: PRCardProps) {
           variant={inQueue ? 'primary' : 'secondary'}
           size="sm"
           onClick={handleQueueToggle}
+          disabled={queueLoading}
           title={inQueue ? 'Remove from queue' : 'Add to queue'}
         >
-          {inQueue ? '📋 Queued' : '➕ Queue'}
+          {queueLoading ? '...' : inQueue ? '📋 Queued' : '➕ Queue'}
         </Button>
 
         <ReviewButton pr={pr} />
+
+        {reviewInfo && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => openReviewViewer({ id: reviewInfo.reviewId })}
+            title="View review"
+            className={`mx-score-btn mx-score-btn--${
+              reviewInfo.score !== null && reviewInfo.score !== undefined
+                ? reviewInfo.score >= 7 ? 'good' : reviewInfo.score >= 4 ? 'ok' : 'bad'
+                : 'neutral'
+            }`}
+          >
+            {reviewInfo.score !== null && reviewInfo.score !== undefined
+              ? `${reviewInfo.score}/10`
+              : 'Reviewed'}
+          </Button>
+        )}
 
         <Button
           variant="ghost"

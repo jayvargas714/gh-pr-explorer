@@ -1,8 +1,9 @@
 import { useEffect } from 'react'
-import { usePRStore } from '../../stores/usePRStore'
+import { usePRStore, PRReviewInfo } from '../../stores/usePRStore'
 import { useAccountStore } from '../../stores/useAccountStore'
 import { useFilterStore } from '../../stores/useFilterStore'
 import { fetchPRs, fetchDivergence } from '../../api/prs'
+import { fetchReviewHistory } from '../../api/reviews'
 import { PRCard } from './PRCard'
 import { Pagination } from '../common/Pagination'
 import { Spinner } from '../common/Spinner'
@@ -24,6 +25,7 @@ export function PRList() {
     getTotalPages,
     setPRDivergence,
     setDivergenceLoading,
+    setPRReviewScores,
   } = usePRStore()
 
   useEffect(() => {
@@ -52,6 +54,9 @@ export function PRList() {
       if (openPRs.length > 0) {
         loadDivergence(openPRs)
       }
+
+      // Fetch review scores for displayed PRs
+      loadReviewScores()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load pull requests')
     } finally {
@@ -81,6 +86,29 @@ export function PRList() {
       console.error('Failed to load divergence:', err)
     } finally {
       setDivergenceLoading(false)
+    }
+  }
+
+  const loadReviewScores = async () => {
+    if (!selectedRepo) return
+
+    try {
+      const repo = `${selectedRepo.owner.login}/${selectedRepo.name}`
+      const response = await fetchReviewHistory({ repo, limit: 200 })
+
+      // Build a map of pr_number -> latest review info (first match per PR is most recent)
+      const scores: Record<number, PRReviewInfo> = {}
+      for (const review of response.reviews) {
+        if (!scores[review.pr_number]) {
+          scores[review.pr_number] = {
+            reviewId: review.id,
+            score: review.score,
+          }
+        }
+      }
+      setPRReviewScores(scores)
+    } catch (err) {
+      console.error('Failed to load review scores:', err)
     }
   }
 

@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { useQueueStore } from '../../stores/useQueueStore'
+import { useReviewStore } from '../../stores/useReviewStore'
 import { removeFromQueue, reorderQueue } from '../../api/queue'
 import { NotesModal } from './NotesModal'
+import { QueueReviewButton } from '../reviews/QueueReviewButton'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
 import { formatNumber, formatRelativeTime } from '../../utils/formatters'
@@ -18,6 +20,7 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
   const [moving, setMoving] = useState(false)
   const [removing, setRemoving] = useState(false)
   const mergeQueue = useQueueStore((state) => state.mergeQueue)
+  const openReviewViewer = useReviewStore((state) => state.openReviewViewer)
 
   const handleRemove = async () => {
     if (removing) return
@@ -39,7 +42,12 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
 
     try {
       setMoving(true)
-      await reorderQueue(index, toIndex)
+      // Build new order by swapping the items locally, then send full order to backend
+      const newQueue = [...mergeQueue]
+      const [removed] = newQueue.splice(index, 1)
+      newQueue.splice(toIndex, 0, removed)
+      const order = newQueue.map((q) => ({ number: q.number, repo: q.repo }))
+      await reorderQueue(order)
       onRefresh()
     } catch (err) {
       console.error('Failed to reorder queue:', err)
@@ -93,21 +101,30 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
 
         {item.hasReview && (
           <div className="mx-queue-item__badges">
-            {item.reviewScore !== null && item.reviewScore !== undefined && (
-              <Badge
-                variant={
-                  item.reviewScore >= 7 ? 'success' : item.reviewScore >= 4 ? 'warning' : 'error'
-                }
-              >
-                Score: {item.reviewScore}/10
-              </Badge>
-            )}
             {item.hasNewCommits && <Badge variant="warning">New Commits</Badge>}
             {item.inlineCommentsPosted && <Badge variant="info">Posted</Badge>}
           </div>
         )}
 
         <div className="mx-queue-item__actions">
+          {item.hasReview && item.reviewId && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => openReviewViewer({ id: item.reviewId })}
+              title="View review"
+              className={`mx-score-btn mx-score-btn--${
+                item.reviewScore !== null && item.reviewScore !== undefined
+                  ? item.reviewScore >= 7 ? 'good' : item.reviewScore >= 4 ? 'ok' : 'bad'
+                  : 'neutral'
+              }`}
+            >
+              {item.reviewScore !== null && item.reviewScore !== undefined
+                ? `${item.reviewScore}/10`
+                : 'View Review'}
+            </Button>
+          )}
+          <QueueReviewButton item={item} onRefresh={onRefresh} />
           <Button
             variant="ghost"
             size="sm"

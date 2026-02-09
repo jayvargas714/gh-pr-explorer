@@ -204,13 +204,51 @@ def fetch_pr_head_sha(owner, repo, pr_number):
         return None
 
 
+def _parse_location(location):
+    """Parse a location string into (file_path, start_line, end_line) or None.
+
+    Handles multiple formats produced by code reviews:
+      - path/to/file.py:123-456
+      - path/to/file.py:123
+      - `path/to/file.py`:123-456
+      - `path/to/file.py` (description, approximately line 123-456 ...)
+      - `path/to/file.py`, function `foo` (approximately lines 123-456 ...)
+    """
+    if not location:
+        return None
+
+    # Strategy 1: Classic format - file.py:123-456 or `file.py`:123-456
+    # Strip backticks from path portion
+    loc_match = re.match(r'`?([^`:\s]+)`?\s*:\s*(\d+)(?:\s*-\s*(\d+))?', location)
+    if loc_match:
+        file_path = loc_match.group(1).strip()
+        start_line = int(loc_match.group(2))
+        end_line = int(loc_match.group(3)) if loc_match.group(3) else start_line
+        return file_path, start_line, end_line
+
+    # Strategy 2: `file.py` followed by "line(s) N-M" or "line N" somewhere in the string
+    path_match = re.match(r'`([^`]+)`', location)
+    if path_match:
+        file_path = path_match.group(1).strip()
+        # Look for line numbers: "line 123-456", "lines 123-456", "line 123"
+        line_match = re.search(r'lines?\s+(\d+)\s*[-–]\s*(\d+)', location)
+        if line_match:
+            return file_path, int(line_match.group(1)), int(line_match.group(2))
+        line_match = re.search(r'line\s+(\d+)', location)
+        if line_match:
+            line_num = int(line_match.group(1))
+            return file_path, line_num, line_num
+
+    return None
+
+
 def parse_critical_issues(content):
     """Parse critical issues from review markdown content.
 
     Expected format:
     **Critical Issues**
     **1. Issue Title**
-    - Location: path/to/file.py:123-456 or path/to/file.py:123
+    - Location: path/to/file.py:123-456 or `path/to/file.py` (approx line 123-456)
     - Problem: Description
     - Fix: Solution
 
@@ -244,7 +282,6 @@ def parse_critical_issues(content):
     )
 
     for match in issue_pattern.finditer(critical_section):
-        issue_num = match.group(1)
         title = match.group(2).strip()
         location = match.group(3).strip() if match.group(3) else None
         problem = match.group(4).strip() if match.group(4) else None
@@ -253,14 +290,11 @@ def parse_critical_issues(content):
         if not location:
             continue
 
-        # Parse location: file.py:123-456 or file.py:123
-        loc_match = re.match(r'([^:]+):(\d+)(?:-(\d+))?', location)
-        if not loc_match:
+        parsed = _parse_location(location)
+        if not parsed:
             continue
 
-        file_path = loc_match.group(1).strip()
-        start_line = int(loc_match.group(2))
-        end_line = int(loc_match.group(3)) if loc_match.group(3) else start_line
+        file_path, start_line, end_line = parsed
 
         # Build the comment body
         body_parts = [f"**{title}**"]
@@ -2360,7 +2394,6 @@ def post_inline_comments(review_id):
             comments.append(comment)
 
         # Post the review with inline comments using gh api
-        # Build the request body
         review_body = {
             "commit_id": current_sha,
             "event": "COMMENT",
@@ -2369,7 +2402,6 @@ def post_inline_comments(review_id):
         }
 
         try:
-            # Use gh api to post the review
             result = subprocess.run(
                 [
                     "gh", "api",
@@ -2384,11 +2416,44 @@ def post_inline_comments(review_id):
             )
             logger.info(f"Posted inline comments for review {review_id}: {result.stdout[:200]}")
         except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to post inline comments: {e.stderr}")
-            return jsonify({
-                "error": f"Failed to post comments to GitHub: {e.stderr}",
-                "issues_parsed": len(issues)
-            }), 500
+            logger.warning(f"Line-level comments failed, falling back to file-level: {e.stderr[:200]}")
+            # Fallback: post as file-level comments (subject_type: file) when
+            # line numbers are approximate and don't match the actual diff
+            fallback_comments = []
+            for issue in issues:
+                fallback_comments.append({
+                    "path": issue["path"],
+                    "body": issue["body"] + f"\n\n*(Lines ~{issue['start_line']}-{issue['end_line']})*",
+                    "subject_type": "file"
+                })
+
+            review_body_fallback = {
+                "commit_id": current_sha,
+                "event": "COMMENT",
+                "body": f"**Code Review Critical Issues** ({len(issues)} issue(s) flagged)",
+                "comments": fallback_comments
+            }
+
+            try:
+                result = subprocess.run(
+                    [
+                        "gh", "api",
+                        f"repos/{owner}/{repo_name}/pulls/{pr_number}/reviews",
+                        "--method", "POST",
+                        "--input", "-"
+                    ],
+                    input=json.dumps(review_body_fallback),
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                logger.info(f"Posted file-level comments for review {review_id}: {result.stdout[:200]}")
+            except subprocess.CalledProcessError as e2:
+                logger.error(f"Failed to post inline comments (both attempts): {e2.stderr}")
+                return jsonify({
+                    "error": f"Failed to post comments to GitHub: {e2.stderr}",
+                    "issues_parsed": len(issues)
+                }), 500
 
         # Update the review in database
         reviews_db.update_inline_comments_posted(review_id, True)
