@@ -242,6 +242,22 @@ def _parse_location(location):
     return None
 
 
+def _extract_issue_field(content, field_name):
+    """Extract a field's full content from an issue block.
+
+    Captures everything after '- FieldName: ' until the next '- FieldName:' line
+    or end of content. This correctly handles multiline values including code blocks.
+    """
+    pattern = re.compile(
+        rf'-\s*{field_name}:\s*(.*?)(?=\n-\s*(?:Location|Problem|Fix):|\Z)',
+        re.DOTALL
+    )
+    match = pattern.search(content)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
 def parse_critical_issues(content):
     """Parse critical issues from review markdown content.
 
@@ -249,8 +265,8 @@ def parse_critical_issues(content):
     **Critical Issues**
     **1. Issue Title**
     - Location: path/to/file.py:123-456 or `path/to/file.py` (approx line 123-456)
-    - Problem: Description
-    - Fix: Solution
+    - Problem: Description (may span multiple lines)
+    - Fix: Solution (may span multiple lines with code blocks)
 
     Returns:
         List of dicts: [{ title, path, start_line, end_line, body }]
@@ -271,21 +287,21 @@ def parse_critical_issues(content):
 
     critical_section = critical_match.group(1)
 
-    # Find individual issues
-    # Pattern: **N. Title** followed by Location, Problem, Fix
-    issue_pattern = re.compile(
-        r'\*\*(\d+)\.\s*(.+?)\*\*\s*'
-        r'(?:-\s*Location:\s*([^\n]+))?'
-        r'(?:-\s*Problem:\s*([^\n]+(?:\n(?!-).*?)*))?'
-        r'(?:-\s*Fix:\s*([^\n]+(?:\n(?!-).*?)*))?',
-        re.DOTALL
-    )
+    # Split into individual issues by **N. Title** headers
+    issue_headers = list(re.finditer(r'\*\*(\d+)\.\s*(.+?)\*\*', critical_section))
 
-    for match in issue_pattern.finditer(critical_section):
-        title = match.group(2).strip()
-        location = match.group(3).strip() if match.group(3) else None
-        problem = match.group(4).strip() if match.group(4) else None
-        fix = match.group(5).strip() if match.group(5) else None
+    for idx, header_match in enumerate(issue_headers):
+        title = header_match.group(2).strip()
+
+        # Get content between this header and the next (or end of section)
+        start = header_match.end()
+        end = issue_headers[idx + 1].start() if idx + 1 < len(issue_headers) else len(critical_section)
+        issue_content = critical_section[start:end]
+
+        # Extract fields - each captures everything until the next field or end
+        location = _extract_issue_field(issue_content, 'Location')
+        problem = _extract_issue_field(issue_content, 'Problem')
+        fix = _extract_issue_field(issue_content, 'Fix')
 
         if not location:
             continue

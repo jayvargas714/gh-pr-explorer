@@ -1,0 +1,185 @@
+/* GitHub-flavored Markdown rendering styles */
+
+.mx-markdown-body {
+  font-size: var(--mx-font-size-base);
+  line-height: 1.6;
+  color: var(--mx-color-text-primary);
+  word-wrap: break-word;
+}
+
+/* Headings */
+.mx-markdown-body h1,
+.mx-markdown-body h2,
+.mx-markdown-body h3,
+.mx-markdown-body h4,
+.mx-markdown-body h5,
+.mx-markdown-body h6 {
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  font-weight: var(--mx-font-weight-semibold);
+  color: var(--mx-color-text-primary);
+  line-height: 1.25;
+}
+
+.mx-markdown-body h1 { font-size: 1.75em; }
+.mx-markdown-body h2 { font-size: 1.4em; }
+.mx-markdown-body h3 { font-size: 1.17em; }
+.mx-markdown-body h4 { font-size: 1em; }
+
+.mx-markdown-body h1,
+.mx-markdown-body h2 {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--mx-color-border);
+}
+
+.mx-markdown-body h1:first-child,
+.mx-markdown-body h2:first-child,
+.mx-markdown-body h3:first-child {
+  margin-top: 0;
+}
+
+/* Paragraphs */
+.mx-markdown-body p {
+  margin-bottom: 0.75em;
+  line-height: 1.6;
+}
+
+/* Links */
+.mx-markdown-body a {
+  color: var(--mx-color-primary);
+  text-decoration: none;
+}
+
+.mx-markdown-body a:hover {
+  text-decoration: underline;
+}
+
+/* Strong / Emphasis */
+.mx-markdown-body strong {
+  font-weight: var(--mx-font-weight-semibold);
+}
+
+/* Lists */
+.mx-markdown-body ul,
+.mx-markdown-body ol {
+  margin-bottom: 0.75em;
+  padding-left: 2em;
+}
+
+.mx-markdown-body li {
+  margin-bottom: 0.25em;
+  line-height: 1.6;
+}
+
+.mx-markdown-body li > p {
+  margin-bottom: 0.25em;
+}
+
+/* Task lists (GFM) */
+.mx-markdown-body li input[type="checkbox"] {
+  margin-right: 0.4em;
+  vertical-align: middle;
+}
+
+.mx-markdown-body ul:has(> li > input[type="checkbox"]) {
+  list-style: none;
+  padding-left: 1em;
+}
+
+/* Inline code */
+.mx-markdown-body code {
+  background: var(--mx-color-background);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-sm);
+  padding: 0.15em 0.4em;
+  font-family: var(--mx-font-family-mono);
+  font-size: 0.875em;
+}
+
+/* Code blocks */
+.mx-markdown-body pre {
+  background: #0d1117;
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  padding: 1em;
+  overflow-x: auto;
+  margin-bottom: 0.75em;
+  line-height: 1.45;
+}
+
+.mx-markdown-body pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.875em;
+  color: #e6edf3;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+/* Blockquotes */
+.mx-markdown-body blockquote {
+  margin: 0 0 0.75em 0;
+  padding: 0.5em 1em;
+  border-left: 4px solid var(--mx-color-primary);
+  background: var(--mx-color-surface);
+  color: var(--mx-color-text-secondary);
+}
+
+.mx-markdown-body blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* Horizontal rules */
+.mx-markdown-body hr {
+  border: none;
+  border-top: 2px solid var(--mx-color-border);
+  margin: 1.5em 0;
+}
+
+/* Tables (GFM) */
+.mx-markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0.75em;
+  font-size: var(--mx-font-size-sm);
+}
+
+.mx-markdown-body table th,
+.mx-markdown-body table td {
+  padding: 0.5em 0.75em;
+  border: 1px solid var(--mx-color-border);
+  text-align: left;
+}
+
+.mx-markdown-body table th {
+  font-weight: var(--mx-font-weight-semibold);
+  background: var(--mx-color-background);
+}
+
+.mx-markdown-body table tr:nth-child(even) {
+  background: var(--mx-color-surface);
+}
+
+/* Images */
+.mx-markdown-body img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--mx-radius-md);
+}
+
+/* Definition lists */
+.mx-markdown-body dl {
+  margin-bottom: 0.75em;
+}
+
+.mx-markdown-body dt {
+  font-weight: var(--mx-font-weight-semibold);
+  margin-top: 0.5em;
+}
+
+.mx-markdown-body dd {
+  margin-left: 1.5em;
+  margin-bottom: 0.25em;
+}

@@ -1,4 +1,6 @@
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeHighlight from 'rehype-highlight'
 import { Modal } from '../common/Modal'
 import { Badge } from '../common/Badge'
 import type { PullRequest } from '../../api/types'
@@ -42,9 +44,11 @@ export function DescriptionModal({ pr, isOpen, onClose }: DescriptionModalProps)
           <span className="mx-description-modal__branch">{pr.baseRefName}</span>
         </div>
 
-        <div className="mx-description-modal__content">
+        <div className="mx-description-modal__content mx-markdown-body">
           {pr.body ? (
-            <ReactMarkdown>{pr.body}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+              {pr.body}
+            </ReactMarkdown>
           ) : (
             <p className="mx-description-modal__empty">No description provided.</p>
           )}

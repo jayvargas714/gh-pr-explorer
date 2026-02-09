@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeHighlight from 'rehype-highlight'
+import 'highlight.js/styles/github-dark.css'
 import { useReviewStore } from '../../stores/useReviewStore'
 import { fetchReviewById } from '../../api/reviews'
 import { Modal } from '../common/Modal'
@@ -89,8 +92,13 @@ export function ReviewViewer() {
             </Button>
           </div>
 
-          <div className="mx-review-viewer__content">
-            <ReactMarkdown>{reviewViewerContent.content || 'No content available'}</ReactMarkdown>
+          <div className="mx-review-viewer__content mx-markdown-body">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeHighlight]}
+            >
+              {reviewViewerContent.content || 'No content available'}
+            </ReactMarkdown>
           </div>
         </>
       ) : null}
