@@ -13,6 +13,7 @@ import { ReviewErrorModal } from './components/reviews/ReviewErrorModal'
 import { ReviewViewer } from './components/reviews/ReviewViewer'
 import { HistoryPanel } from './components/reviews/HistoryPanel'
 import { ReviewPollingManager } from './components/reviews/ReviewPollingManager'
+import { TooltipProvider } from './components/common/Tooltip'
 import { useAccountStore } from './stores/useAccountStore'
 import { useUIStore } from './stores/useUIStore'
 import { useSettingsPersistence } from './hooks/useSettingsPersistence'
@@ -73,6 +74,7 @@ function App() {
       <ReviewErrorModal />
       <ReviewViewer />
       <ReviewPollingManager />
+      <TooltipProvider />
     </>
   )
 }

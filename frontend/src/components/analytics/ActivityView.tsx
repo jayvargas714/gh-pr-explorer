@@ -191,12 +191,12 @@ export function ActivityView() {
                       <div
                         className="mx-stacked-bar__additions"
                         style={{ flex: addPct }}
-                        title={`+${change.additions}`}
+                        data-tooltip={`+${change.additions}`}
                       />
                       <div
                         className="mx-stacked-bar__deletions"
                         style={{ flex: 100 - addPct }}
-                        title={`-${change.deletions}`}
+                        data-tooltip={`-${change.deletions}`}
                       />
                     </div>
                   )

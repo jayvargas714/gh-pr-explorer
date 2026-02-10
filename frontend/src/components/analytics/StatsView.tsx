@@ -66,6 +66,7 @@ export function StatsView() {
       key: 'login',
       label: 'Developer',
       sortable: true,
+      tooltip: 'GitHub username of the contributor',
       render: (stat) => (
         <div className="mx-stats-developer">
           <img src={stat.avatar_url} alt={stat.login} className="mx-stats-avatar" />

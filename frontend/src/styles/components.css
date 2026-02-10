@@ -726,3 +726,24 @@
 .mx-info-tooltip:hover .mx-info-tooltip__content {
   display: block;
 }
+
+/* ============================================================================
+   Instant Tooltip (portal-based, rendered by TooltipProvider)
+   ============================================================================ */
+
+.mx-tooltip-portal {
+  padding: 4px 10px;
+  background-color: var(--mx-color-bg-elevated);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-sm);
+  box-shadow: var(--mx-shadow-md);
+  font-size: var(--mx-font-size-xs);
+  font-weight: var(--mx-font-weight-normal);
+  color: var(--mx-color-text-secondary);
+  white-space: nowrap;
+  pointer-events: none;
+  max-width: 350px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.4;
+}

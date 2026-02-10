@@ -49,7 +49,7 @@ export function SortableTable<T>({
                 key={column.key}
                 className={column.sortable ? 'mx-table__header--sortable' : ''}
                 onClick={() => handleHeaderClick(column)}
-                title={column.tooltip}
+                data-tooltip={column.tooltip}
               >
                 {column.label}
                 {getSortIcon(column)}

@@ -51,6 +51,7 @@ export function WorkflowTable({ runs }: WorkflowTableProps) {
       key: 'name',
       label: 'Workflow',
       sortable: true,
+      tooltip: 'GitHub Actions workflow name and run title',
       render: (run) => (
         <div className="mx-workflow-cell">
           <a
@@ -69,23 +70,27 @@ export function WorkflowTable({ runs }: WorkflowTableProps) {
       key: 'conclusion',
       label: 'Status',
       sortable: true,
+      tooltip: 'Final outcome of the workflow run',
       render: (run) => getConclusionBadge(run.conclusion, run.status),
     },
     {
       key: 'head_branch',
       label: 'Branch',
       sortable: true,
+      tooltip: 'Branch that triggered the workflow run',
     },
     {
       key: 'event',
       label: 'Event',
       sortable: true,
+      tooltip: 'Trigger event type (push, pull_request, schedule, etc.)',
       render: (run) => <span className="mx-workflow-event">{run.event}</span>,
     },
     {
       key: 'actor_login',
       label: 'Actor',
       sortable: true,
+      tooltip: 'User who triggered the workflow run',
     },
     {
       key: 'duration_seconds',
@@ -100,7 +105,7 @@ export function WorkflowTable({ runs }: WorkflowTableProps) {
       sortable: true,
       tooltip: 'When the workflow run was created',
       render: (run) => (
-        <span title={new Date(run.created_at).toLocaleString()}>
+        <span data-tooltip={new Date(run.created_at).toLocaleString()}>
           {formatRelativeTime(run.created_at)}
         </span>
       ),

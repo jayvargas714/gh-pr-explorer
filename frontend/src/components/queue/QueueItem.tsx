@@ -112,7 +112,7 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
               variant="ghost"
               size="sm"
               onClick={() => openReviewViewer({ id: item.reviewId })}
-              title="View review"
+              data-tooltip="View review"
               className={`mx-score-btn mx-score-btn--${
                 item.reviewScore !== null && item.reviewScore !== undefined
                   ? item.reviewScore >= 7 ? 'good' : item.reviewScore >= 4 ? 'ok' : 'bad'

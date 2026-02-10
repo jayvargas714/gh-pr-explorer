@@ -121,7 +121,7 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
           size="sm"
           onClick={handlePostInlineComments}
           disabled={posting}
-          title="Post critical issues as inline comments on GitHub"
+          data-tooltip="Post critical issues as inline comments on GitHub"
         >
           {posting ? <Spinner size="sm" /> : '💬 Post Comments'}
         </Button>

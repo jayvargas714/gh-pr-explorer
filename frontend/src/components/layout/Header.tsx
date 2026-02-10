@@ -23,7 +23,7 @@ export function Header() {
           size="sm"
           onClick={toggleQueuePanel}
           className="mx-header__action"
-          title="Merge Queue"
+          data-tooltip="Merge Queue"
         >
           <span className="mx-icon">📋</span>
           {queueCount > 0 && (
@@ -39,7 +39,7 @@ export function Header() {
           size="sm"
           onClick={toggleHistoryPanel}
           className="mx-header__action"
-          title="Review History"
+          data-tooltip="Review History"
         >
           <span className="mx-icon">🕒</span>
         </Button>
@@ -50,7 +50,7 @@ export function Header() {
           size="sm"
           onClick={toggleTheme}
           className="mx-header__action"
-          title={`Switch to ${darkMode ? 'light' : 'dark'} mode`}
+          data-tooltip={`Switch to ${darkMode ? 'light' : 'dark'} mode`}
         >
           <span className="mx-icon">{darkMode ? '☀️' : '🌙'}</span>
         </Button>

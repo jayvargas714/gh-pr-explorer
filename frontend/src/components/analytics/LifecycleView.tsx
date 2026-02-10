@@ -65,9 +65,9 @@ export function LifecycleView() {
   const sortedPRs = getSortedLifecyclePRs()
 
   const columns: Column<any>[] = [
-    { key: 'number', label: 'PR#', sortable: true },
-    { key: 'author', label: 'Author', sortable: true },
-    { key: 'state', label: 'State', sortable: true },
+    { key: 'number', label: 'PR#', sortable: true, tooltip: 'Pull request number' },
+    { key: 'author', label: 'Author', sortable: true, tooltip: 'Who opened the pull request' },
+    { key: 'state', label: 'State', sortable: true, tooltip: 'Current PR state: open, merged, or closed' },
     {
       key: 'time_to_first_review_hours',
       label: 'Time to Review',
@@ -82,7 +82,7 @@ export function LifecycleView() {
       tooltip: 'Time from PR creation to merge',
       render: (pr) => formatHours(pr.time_to_merge_hours),
     },
-    { key: 'first_reviewer', label: 'First Reviewer', sortable: true },
+    { key: 'first_reviewer', label: 'First Reviewer', sortable: true, tooltip: 'First person to submit a review' },
   ]
 
   return (

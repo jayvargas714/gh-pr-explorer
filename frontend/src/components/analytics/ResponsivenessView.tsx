@@ -64,7 +64,7 @@ export function ResponsivenessView() {
   const sortedLeaderboard = getSortedReviewerLeaderboard()
 
   const columns: Column<any>[] = [
-    { key: 'reviewer', label: 'Reviewer', sortable: true },
+    { key: 'reviewer', label: 'Reviewer', sortable: true, tooltip: 'GitHub username of the reviewer' },
     {
       key: 'avg_response_time_hours',
       label: 'Avg Response',
@@ -83,24 +83,28 @@ export function ResponsivenessView() {
       key: 'total_reviews',
       label: 'Total Reviews',
       sortable: true,
+      tooltip: 'Total number of reviews submitted by this reviewer',
       render: (r) => formatNumber(r.total_reviews),
     },
     {
       key: 'approvals',
       label: 'Approvals',
       sortable: true,
+      tooltip: 'Number of PRs this reviewer approved',
       render: (r) => formatNumber(r.approvals),
     },
     {
       key: 'changes_requested',
       label: 'Changes Req.',
       sortable: true,
+      tooltip: 'Number of times this reviewer requested changes',
       render: (r) => formatNumber(r.changes_requested),
     },
     {
       key: 'approval_rate',
       label: 'Approval Rate',
       sortable: true,
+      tooltip: 'Percentage of reviews that were approvals',
       render: (r) => `${r.approval_rate.toFixed(1)}%`,
     },
   ]

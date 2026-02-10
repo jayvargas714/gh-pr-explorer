@@ -74,7 +74,7 @@ export function WorkflowFilters({ workflows, onRefreshCache, refreshing }: Workf
           size="sm"
           onClick={onRefreshCache}
           disabled={refreshing}
-          title="Fetch latest workflow runs from GitHub"
+          data-tooltip="Fetch latest workflow runs from GitHub"
         >
           {refreshing ? 'Refreshing...' : 'Refresh Cache'}
         </Button>

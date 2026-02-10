@@ -107,7 +107,7 @@ export function PRCard({ pr }: PRCardProps) {
           size="sm"
           onClick={handleQueueToggle}
           disabled={queueLoading}
-          title={inQueue ? 'Remove from queue' : 'Add to queue'}
+          data-tooltip={inQueue ? 'Remove from queue' : 'Add to queue'}
         >
           {queueLoading ? '...' : inQueue ? '📋 Queued' : '➕ Queue'}
         </Button>
@@ -119,7 +119,7 @@ export function PRCard({ pr }: PRCardProps) {
             variant="ghost"
             size="sm"
             onClick={() => openReviewViewer({ id: reviewInfo.reviewId })}
-            title="View review"
+            data-tooltip="View review"
             className={`mx-score-btn mx-score-btn--${
               reviewInfo.score !== null && reviewInfo.score !== undefined
                 ? reviewInfo.score >= 7 ? 'good' : reviewInfo.score >= 4 ? 'ok' : 'bad'
@@ -136,7 +136,7 @@ export function PRCard({ pr }: PRCardProps) {
           variant="ghost"
           size="sm"
           onClick={() => setShowDescription(true)}
-          title="View description"
+          data-tooltip="View description"
         >
           📝
         </Button>
@@ -145,7 +145,7 @@ export function PRCard({ pr }: PRCardProps) {
           variant="ghost"
           size="sm"
           onClick={() => window.open(pr.url, '_blank')}
-          title="Open on GitHub"
+          data-tooltip="Open on GitHub"
         >
           🔗
         </Button>

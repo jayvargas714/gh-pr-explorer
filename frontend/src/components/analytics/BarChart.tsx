@@ -22,7 +22,7 @@ export function BarChart({ title, data, color = 'var(--mx-color-primary)', toolt
                 height: `${(item.value / maxValue) * 100}%`,
                 backgroundColor: color,
               }}
-              title={`${item.label}: ${item.value}`}
+              data-tooltip={`${item.label}: ${item.value}`}
             />
           </div>
         ))}
