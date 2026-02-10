@@ -1,7 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { usePRStore, PRReviewInfo } from '../../stores/usePRStore'
 import { useAccountStore } from '../../stores/useAccountStore'
-import { useFilterStore } from '../../stores/useFilterStore'
+import { useFilterStore, getFilterParams } from '../../stores/useFilterStore'
 import { fetchPRs, fetchDivergence } from '../../api/prs'
 import { fetchReviewHistory } from '../../api/reviews'
 import { PRCard } from './PRCard'
@@ -11,7 +11,8 @@ import { Alert } from '../common/Alert'
 
 export function PRList() {
   const selectedRepo = useAccountStore((state) => state.selectedRepo)
-  const filters = useFilterStore()
+  const filterState = useFilterStore()
+  const filters = useMemo(() => getFilterParams(filterState), [filterState])
   const {
     prs,
     loading,

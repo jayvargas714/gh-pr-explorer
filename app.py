@@ -695,6 +695,12 @@ def get_prs(owner, repo):
         output = run_gh_command(args)
         prs = parse_json_output(output)
 
+        # Post-filter by draft status (gh search qualifier draft: is unreliable)
+        if draft == "true":
+            prs = [pr for pr in prs if pr.get("isDraft", False)]
+        elif draft == "false":
+            prs = [pr for pr in prs if not pr.get("isDraft", False)]
+
         # Post-process: add review status and CI status summaries
         for pr in prs:
             pr["reviewStatus"] = get_review_status(pr.get("reviewDecision"))

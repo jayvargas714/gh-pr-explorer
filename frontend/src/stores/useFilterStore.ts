@@ -60,6 +60,18 @@ interface FilterState {
   restoreFilters: (saved: Record<string, any>) => void
 }
 
+// Keys that are actual API filter parameters (not actions or internal state)
+const FILTER_KEYS = [
+  'state', 'author', 'assignee', 'labels', 'base', 'head', 'draft',
+  'noAssignee', 'noLabel', 'milestone', 'linked', 'review', 'reviewedBy',
+  'reviewRequested', 'status', 'involves', 'mentions', 'commenter',
+  'createdAfter', 'createdBefore', 'updatedAfter', 'updatedBefore',
+  'mergedAfter', 'mergedBefore', 'closedAfter', 'closedBefore',
+  'search', 'searchIn', 'comments', 'reactions', 'interactions',
+  'teamReviewRequested', 'excludeLabels', 'excludeAuthor', 'excludeMilestone',
+  'sortBy', 'sortDirection', 'limit',
+] as const
+
 const DEFAULT_FILTERS: Omit<FilterState, 'setFilter' | 'resetFilters' | 'getActiveFiltersCount' | 'restoreFilters' | '_skipSave'> = {
   state: 'open',
   author: '',
@@ -113,6 +125,15 @@ export function debouncedSaveSettings(filters: Record<string, any>, accountLogin
       selectedRepoFullName: repoFullName,
     }).catch((err) => console.error('Failed to save settings:', err))
   }, 1000)
+}
+
+/** Extract only API-relevant filter parameters from the store (excludes functions and internal state) */
+export function getFilterParams(state: FilterState): Record<string, any> {
+  const params: Record<string, any> = {}
+  for (const key of FILTER_KEYS) {
+    params[key] = state[key]
+  }
+  return params
 }
 
 export const useFilterStore = create<FilterState>((set, get) => ({
