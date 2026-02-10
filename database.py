@@ -198,6 +198,16 @@ class Database:
                 )
             """)
 
+            # Create contributor_timeseries_cache table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS contributor_timeseries_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo TEXT NOT NULL UNIQUE,
+                    data TEXT NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # Migration: Add new columns to developer_stats for existing databases
             # Check if columns exist before adding them
             cursor.execute("PRAGMA table_info(developer_stats)")
@@ -1279,6 +1289,81 @@ class WorkflowCacheDB:
             conn.close()
 
 
+class ContributorTimeSeriesCacheDB:
+    """Cache for per-contributor weekly time series data in SQLite."""
+
+    def __init__(self, db: Database):
+        self.db = db
+        self._get_connection = db._get_connection
+
+    def get_cached(self, repo: str) -> Optional[Dict[str, Any]]:
+        """Get cached contributor time series data for a repository."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT data, updated_at FROM contributor_timeseries_cache WHERE repo = ?",
+                (repo,)
+            )
+            row = cursor.fetchone()
+            if row:
+                try:
+                    return {
+                        "data": json.loads(row["data"]),
+                        "updated_at": row["updated_at"]
+                    }
+                except json.JSONDecodeError:
+                    logger.warning(f"Corrupt contributor TS cache for {repo}, treating as miss")
+                    return None
+            return None
+        finally:
+            conn.close()
+
+    def save_cache(self, repo: str, data: Any) -> None:
+        """Save contributor time series data to cache."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO contributor_timeseries_cache (repo, data, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(repo) DO UPDATE SET
+                   data = excluded.data, updated_at = CURRENT_TIMESTAMP""",
+                (repo, json.dumps(data))
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def is_stale(self, repo: str, ttl_hours: int = 24) -> bool:
+        """Check if cached data is older than TTL (default 24 hours)."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT updated_at FROM contributor_timeseries_cache WHERE repo = ?",
+                (repo,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return True
+            updated = datetime.strptime(row["updated_at"], "%Y-%m-%d %H:%M:%S")
+            age_hours = (datetime.now() - updated).total_seconds() / 3600
+            return age_hours > ttl_hours
+        finally:
+            conn.close()
+
+    def clear(self) -> None:
+        """Clear all contributor time series cache entries."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM contributor_timeseries_cache")
+            conn.commit()
+        finally:
+            conn.close()
+
+
 # Singleton instances for convenience
 _db_instance: Optional[Database] = None
 _reviews_db: Optional[ReviewsDB] = None
@@ -1287,6 +1372,7 @@ _settings_db: Optional[SettingsDB] = None
 _dev_stats_db: Optional[DeveloperStatsDB] = None
 _lifecycle_cache_db: Optional[LifecycleCacheDB] = None
 _workflow_cache_db: Optional[WorkflowCacheDB] = None
+_contributor_ts_cache_db: Optional[ContributorTimeSeriesCacheDB] = None
 
 
 def get_database() -> Database:
@@ -1343,3 +1429,11 @@ def get_workflow_cache_db() -> WorkflowCacheDB:
     if _workflow_cache_db is None:
         _workflow_cache_db = WorkflowCacheDB(get_database())
     return _workflow_cache_db
+
+
+def get_contributor_ts_cache_db() -> ContributorTimeSeriesCacheDB:
+    """Get the singleton ContributorTimeSeriesCacheDB instance."""
+    global _contributor_ts_cache_db
+    if _contributor_ts_cache_db is None:
+        _contributor_ts_cache_db = ContributorTimeSeriesCacheDB(get_database())
+    return _contributor_ts_cache_db

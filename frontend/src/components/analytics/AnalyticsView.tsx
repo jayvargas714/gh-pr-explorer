@@ -3,6 +3,7 @@ import { StatsView } from './StatsView'
 import { LifecycleView } from './LifecycleView'
 import { ActivityView } from './ActivityView'
 import { ResponsivenessView } from './ResponsivenessView'
+import { ContributorsView } from './ContributorsView'
 
 export function AnalyticsView() {
   const { activeAnalyticsTab, setActiveAnalyticsTab } = useUIStore()
@@ -12,6 +13,7 @@ export function AnalyticsView() {
     { id: 'lifecycle' as const, label: 'Lifecycle', icon: '🔄' },
     { id: 'activity' as const, label: 'Activity', icon: '📈' },
     { id: 'responsiveness' as const, label: 'Reviews', icon: '⏱️' },
+    { id: 'contributors' as const, label: 'Contributors', icon: '👥' },
   ]
 
   const renderContent = () => {
@@ -24,6 +26,8 @@ export function AnalyticsView() {
         return <ActivityView />
       case 'responsiveness':
         return <ResponsivenessView />
+      case 'contributors':
+        return <ContributorsView />
       default:
         return null
     }

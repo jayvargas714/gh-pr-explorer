@@ -1,15 +1,29 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts'
 import { useAnalyticsStore } from '../../stores/useAnalyticsStore'
 import { useAccountStore } from '../../stores/useAccountStore'
-import { fetchCodeActivity } from '../../api/analytics'
-import { BarChart } from './BarChart'
+import { useUIStore } from '../../stores/useUIStore'
+import { fetchCodeActivity, fetchContributorTimeSeries } from '../../api/analytics'
+import { BarChart as CssBarChart } from './BarChart'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 import { InfoTooltip } from '../common/InfoTooltip'
 import { formatNumber } from '../../utils/formatters'
 
+const TOP5_COLORS = ['#00d4aa', '#ff6b6b', '#4ecdc4', '#ffe66d', '#a29bfe']
+
 export function ActivityView() {
   const selectedRepo = useAccountStore((state) => state.selectedRepo)
+  const darkMode = useUIStore((state) => state.darkMode)
   const {
     codeActivity,
     activityLoading,
@@ -19,11 +33,18 @@ export function ActivityView() {
     setActivityLoading,
     setActivityError,
     setActivityTimeframe,
+    contributorTimeSeries,
+    setContributorTimeSeries,
+    setContributorTSLoading,
+    setContributorTSError,
   } = useAnalyticsStore()
 
   useEffect(() => {
     if (selectedRepo) {
       loadActivity()
+      if (contributorTimeSeries.length === 0) {
+        loadContributorData()
+      }
     }
   }, [selectedRepo, activityTimeframe])
 
@@ -45,6 +66,38 @@ export function ActivityView() {
       setActivityLoading(false)
     }
   }
+
+  const loadContributorData = async () => {
+    if (!selectedRepo) return
+    try {
+      setContributorTSLoading(true)
+      setContributorTSError(null)
+      const response = await fetchContributorTimeSeries(
+        selectedRepo.owner.login,
+        selectedRepo.name
+      )
+      setContributorTimeSeries(response.contributors)
+    } catch {
+      // Non-critical: top 5 chart just won't render
+    } finally {
+      setContributorTSLoading(false)
+    }
+  }
+
+  const top5ChartData = useMemo(() => {
+    if (!contributorTimeSeries.length) return []
+    const top5 = contributorTimeSeries.slice(0, 5)
+    const allWeeks = top5[0]?.weeks || []
+    const trimmedWeeks = allWeeks.slice(-activityTimeframe)
+    return trimmedWeeks.map((w) => {
+      const row: Record<string, string | number> = { week: w.week }
+      for (const c of top5) {
+        const match = c.weeks.find((cw) => cw.week === w.week)
+        row[c.login] = match ? match.commits : 0
+      }
+      return row
+    })
+  }, [contributorTimeSeries, activityTimeframe])
 
   if (activityLoading) {
     return (
@@ -113,7 +166,7 @@ export function ActivityView() {
       </div>
 
       <div className="mx-activity__charts">
-        <BarChart
+        <CssBarChart
           title="Weekly Commits"
           tooltip="Total number of commits pushed each week. Each bar represents one week in the selected timeframe. Hover a bar to see the exact week and count."
           data={codeActivity.weekly_commits.map((w) => ({
@@ -153,30 +206,33 @@ export function ActivityView() {
           )
         })()}
 
-        {(() => {
-          const maxTotal = Math.max(1, ...codeActivity.owner_commits.map((c, idx) => c + (codeActivity.community_commits[idx] || 0)))
+        {top5ChartData.length > 0 && (() => {
+          const textColor = darkMode ? '#b0b0b0' : '#666666'
+          const gridColor = darkMode ? '#333333' : '#e0e0e0'
+          const top5 = contributorTimeSeries.slice(0, 5)
+          const formatWeek = (w: string) => { const p = w.split('-'); return `${p[1]}/${p[2]}` }
           return (
-            <div className="mx-activity__chart">
-              <h3>Participation<InfoTooltip text="Compares weekly commits from the repository owner (green) versus all other contributors (purple). Helps identify how much activity comes from the primary maintainer vs the broader team." /></h3>
-              <div className="mx-grouped-chart">
-                {codeActivity.owner_commits.map((ownerCommits, i) => {
-                  const communityCommits = codeActivity.community_commits[i] || 0
-                  return (
-                    <div key={i} className="mx-grouped-bar">
-                      <div
-                        className="mx-grouped-bar__owner"
-                        style={{ height: `${(ownerCommits / maxTotal) * 100}%` }}
-                        title={`Owner: ${ownerCommits}`}
-                      />
-                      <div
-                        className="mx-grouped-bar__community"
-                        style={{ height: `${(communityCommits / maxTotal) * 100}%` }}
-                        title={`Contributors: ${communityCommits}`}
-                      />
-                    </div>
-                  )
-                })}
-              </div>
+            <div className="mx-activity__chart mx-activity__chart--wide">
+              <h3>Top 5 Contributors<InfoTooltip text="Weekly commit counts for the top 5 contributors by total commits. Click a legend entry to toggle visibility." /></h3>
+              <ResponsiveContainer width="100%" height={250}>
+                <LineChart data={top5ChartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+                  <XAxis dataKey="week" tickFormatter={formatWeek} stroke={textColor} fontSize={12} tick={{ fill: textColor }} />
+                  <YAxis stroke={textColor} fontSize={12} tick={{ fill: textColor }} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: darkMode ? '#1a1a2e' : '#ffffff',
+                      border: `1px solid ${gridColor}`,
+                      borderRadius: 8,
+                      color: darkMode ? '#e0e0e0' : '#333333',
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  {top5.map((c, i) => (
+                    <Line key={c.login} type="monotone" dataKey={c.login} stroke={TOP5_COLORS[i]} strokeWidth={2} dot={false} />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           )
         })()}

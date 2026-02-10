@@ -425,6 +425,24 @@
   border-bottom: none;
 }
 
+/* Contributors View */
+.mx-contributors-view {
+  padding: var(--mx-spacing-4);
+}
+
+.mx-contributors__chart {
+  background: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  padding: var(--mx-spacing-4);
+  margin-top: var(--mx-spacing-4);
+}
+
+/* Full-width chart in activity grid */
+.mx-activity__chart--wide {
+  grid-column: 1 / -1;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
   .mx-stat-cards {

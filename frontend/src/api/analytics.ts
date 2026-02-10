@@ -4,6 +4,7 @@ import {
   CodeActivityResponse,
   LifecycleMetricsResponse,
   ReviewResponsivenessResponse,
+  ContributorTimeSeriesResponse,
 } from './types'
 
 /**
@@ -48,5 +49,19 @@ export async function fetchReviewResponsiveness(
 ): Promise<ReviewResponsivenessResponse> {
   return api.get<ReviewResponsivenessResponse>(
     `/repos/${owner}/${repo}/review-responsiveness`
+  )
+}
+
+/**
+ * Fetch per-contributor weekly time series data
+ */
+export async function fetchContributorTimeSeries(
+  owner: string,
+  repo: string,
+  weeks?: number
+): Promise<ContributorTimeSeriesResponse> {
+  const params = weeks ? `?weeks=${weeks}` : ''
+  return api.get<ContributorTimeSeriesResponse>(
+    `/repos/${owner}/${repo}/contributor-timeseries${params}`
   )
 }

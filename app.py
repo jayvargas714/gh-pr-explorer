@@ -17,7 +17,7 @@ from functools import wraps
 from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
 
-from database import get_database, get_reviews_db, get_queue_db, get_settings_db, get_dev_stats_db, get_lifecycle_cache_db, get_workflow_cache_db
+from database import get_database, get_reviews_db, get_queue_db, get_settings_db, get_dev_stats_db, get_lifecycle_cache_db, get_workflow_cache_db, get_contributor_ts_cache_db
 
 # Configure logging
 logging.basicConfig(
@@ -50,10 +50,15 @@ queue_db = get_queue_db()
 settings_db = get_settings_db()
 dev_stats_db = get_dev_stats_db()
 workflow_cache_db = get_workflow_cache_db()
+contributor_ts_cache_db = get_contributor_ts_cache_db()
 
 # Workflow cache background refresh tracking
 _workflow_refresh_in_progress = set()
 _workflow_refresh_lock = threading.Lock()
+
+# Contributor timeseries cache background refresh tracking
+_contributor_ts_refresh_in_progress = set()
+_contributor_ts_refresh_lock = threading.Lock()
 
 # Simple in-memory cache
 cache = {}
@@ -999,17 +1004,30 @@ def get_workflow_runs(owner, repo):
 
 
 @app.route("/api/repos/<owner>/<repo>/code-activity")
-@cached(ttl_seconds=600)
 def get_code_activity(owner, repo):
     """Get code activity stats (commit frequency, code changes, participation)."""
     try:
         weeks = int(request.args.get("weeks", 52))
         weeks = min(max(weeks, 1), 52)
 
+        # Check cache first
+        qs = request.query_string.decode() if request else ''
+        cache_key = f"get_code_activity:{(owner, repo)}:{qs}"
+        now = time.time()
+        if cache_key in cache:
+            result, timestamp = cache[cache_key]
+            if now - timestamp < 600:
+                return result
+
         # Fetch all 3 stats APIs in parallel
-        code_freq = fetch_github_stats_api(owner, repo, "stats/code_frequency")
-        commit_activity = fetch_github_stats_api(owner, repo, "stats/commit_activity")
-        participation = fetch_github_stats_api(owner, repo, "stats/participation")
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            freq_future = executor.submit(fetch_github_stats_api, owner, repo, "stats/code_frequency")
+            commit_future = executor.submit(fetch_github_stats_api, owner, repo, "stats/commit_activity")
+            participation_future = executor.submit(fetch_github_stats_api, owner, repo, "stats/participation")
+
+            code_freq = freq_future.result()
+            commit_activity = commit_future.result()
+            participation = participation_future.result()
 
         # Process code_frequency: [timestamp, additions, deletions]
         code_changes = []
@@ -1066,7 +1084,7 @@ def get_code_activity(owner, repo):
         all_total = sum(owner_commits) + sum(community_commits) if owner_commits else 0
         owner_pct = round(owner_total / all_total * 100, 1) if all_total > 0 else 0
 
-        return jsonify({
+        response = jsonify({
             "weekly_commits": weekly_commits,
             "code_changes": code_changes,
             "owner_commits": owner_commits,
@@ -1082,8 +1100,116 @@ def get_code_activity(owner, repo):
             }
         })
 
+        # Only cache when all 3 data sources returned data to avoid
+        # caching partial results from GitHub 202 "computing" responses
+        if weekly_commits and code_changes and (owner_commits or community_commits):
+            cache[cache_key] = (response, now)
+
+        return response
+
     except Exception as e:
         logger.error(f"Failed to fetch code activity: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+def _fetch_contributor_timeseries(owner, repo):
+    """Fetch and transform per-contributor weekly time series from GitHub stats/contributors API.
+
+    Returns list of contributor objects sorted by total commits descending.
+    """
+    raw = fetch_github_stats_api(owner, repo, "stats/contributors")
+    if not raw or not isinstance(raw, list):
+        return []
+
+    contributors = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+
+        author = entry.get("author") or {}
+        weeks_raw = entry.get("weeks", [])
+        total = entry.get("total", 0)
+
+        weeks = []
+        for w in weeks_raw:
+            if not isinstance(w, dict):
+                continue
+            ts = w.get("w", 0)
+            date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+            weeks.append({
+                "week": date_str,
+                "commits": w.get("c", 0),
+                "additions": w.get("a", 0),
+                "deletions": w.get("d", 0),
+            })
+
+        contributors.append({
+            "login": author.get("login", "unknown"),
+            "avatar_url": author.get("avatar_url", ""),
+            "total": total,
+            "weeks": weeks,
+        })
+
+    contributors.sort(key=lambda c: c["total"], reverse=True)
+    return contributors
+
+
+def _background_refresh_contributor_ts(owner, repo, repo_key):
+    """Background task to refresh contributor time series cache."""
+    try:
+        logger.info(f"Background contributor TS refresh started for {repo_key}")
+        data = _fetch_contributor_timeseries(owner, repo)
+        if data:
+            contributor_ts_cache_db.save_cache(repo_key, data)
+            logger.info(f"Background contributor TS refresh completed for {repo_key}: {len(data)} contributors")
+    except Exception as e:
+        logger.error(f"Background contributor TS refresh failed for {repo_key}: {e}")
+    finally:
+        with _contributor_ts_refresh_lock:
+            _contributor_ts_refresh_in_progress.discard(repo_key)
+
+
+@app.route("/api/repos/<owner>/<repo>/contributor-timeseries")
+def get_contributor_timeseries(owner, repo):
+    """Get per-contributor weekly time series data (commits, additions, deletions).
+
+    Uses SQLite cache with stale-while-revalidate (24-hour TTL).
+    """
+    repo_key = f"{owner}/{repo}"
+    force_refresh = request.args.get("refresh", "").lower() == "true"
+
+    try:
+        if force_refresh:
+            logger.info(f"Force refresh contributor TS for {repo_key}")
+            data = _fetch_contributor_timeseries(owner, repo)
+            if data:
+                contributor_ts_cache_db.save_cache(repo_key, data)
+            return jsonify({"contributors": data})
+
+        cached = contributor_ts_cache_db.get_cached(repo_key)
+        is_stale = contributor_ts_cache_db.is_stale(repo_key)
+
+        if cached:
+            if is_stale:
+                with _contributor_ts_refresh_lock:
+                    if repo_key not in _contributor_ts_refresh_in_progress:
+                        _contributor_ts_refresh_in_progress.add(repo_key)
+                        thread = threading.Thread(
+                            target=_background_refresh_contributor_ts,
+                            args=(owner, repo, repo_key),
+                            daemon=True
+                        )
+                        thread.start()
+            return jsonify({"contributors": cached["data"]})
+
+        # No cache: synchronous fetch
+        data = _fetch_contributor_timeseries(owner, repo)
+        if data:
+            contributor_ts_cache_db.save_cache(repo_key, data)
+        return jsonify({"contributors": data})
+
+    except Exception as e:
+        logger.error(f"Failed to fetch contributor timeseries for {repo_key}: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -1906,10 +2032,11 @@ def fetch_review_stats(owner, repo):
 
 @app.route("/api/clear-cache", methods=["POST"])
 def clear_cache():
-    """Clear the in-memory cache and workflow SQLite cache."""
+    """Clear the in-memory cache and SQLite caches."""
     global cache
     cache = {}
     workflow_cache_db.clear()
+    contributor_ts_cache_db.clear()
     return jsonify({"message": "Cache cleared"})
 
 

@@ -141,6 +141,8 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
 | `fetch_review_stats()` | Collects review activity across PRs |
 | `fetch_github_stats_api()` | Generic GitHub stats API fetcher with 202-retry pattern and configurable retries |
 | `fetch_pr_review_times()` | Enriches PRs with review timing data using ThreadPoolExecutor; cached in SQLite with 2-hour TTL |
+| `_fetch_contributor_timeseries()` | Fetches and transforms per-contributor weekly time series from GitHub stats/contributors API |
+| `_background_refresh_contributor_ts()` | Background daemon thread for stale-while-revalidate contributor TS cache refresh |
 | `_check_review_status()` | Checks and updates status of a review subprocess |
 | `_start_review_process()` | Spawns Claude CLI subprocess for code review |
 
@@ -160,6 +162,7 @@ The database module provides SQLite-based persistence for reviews and merge queu
 | `DevStatsDB` | Caches developer statistics with 4-hour TTL for improved performance |
 | `LifecycleCacheDB` | Caches PR lifecycle and review timing data with 2-hour TTL |
 | `WorkflowCacheDB` | Caches workflow runs data with configurable TTL (default 1 hour) for stale-while-revalidate serving |
+| `ContributorTimeSeriesCacheDB` | Caches per-contributor weekly time series data with 24-hour TTL for stale-while-revalidate serving |
 
 #### Database Schema
 
@@ -260,6 +263,14 @@ CREATE TABLE workflow_cache (
     data TEXT NOT NULL,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Contributor time series cache table: Caches per-contributor weekly stats
+CREATE TABLE contributor_timeseries_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL UNIQUE,
+    data TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
 #### ReviewsDB Methods
@@ -312,6 +323,15 @@ CREATE TABLE workflow_cache (
 | `is_stale()` | Checks if cached data is older than configurable TTL (default 60 minutes) |
 | `get_all_repos()` | Returns list of all repos with cached data (used by startup refresh and seed script) |
 | `clear()` | Removes all workflow cache entries (called by clear-cache endpoint) |
+
+#### ContributorTimeSeriesCacheDB Methods
+
+| Method | Description |
+|--------|-------------|
+| `get_cached()` | Returns cached per-contributor weekly time series data (JSON blob) for a repository |
+| `save_cache()` | Saves contributor time series data with upsert (INSERT ON CONFLICT UPDATE) |
+| `is_stale()` | Checks if cached data is older than TTL (default 24 hours) |
+| `clear()` | Removes all contributor time series cache entries |
 
 **Note**: When returning cached stats, the backend transforms field names to match the frontend expectations:
 - `username` → `login`
@@ -369,7 +389,7 @@ The application uses a 3-tab layout as the primary navigation:
 | Tab | View Key | Description |
 |-----|----------|-------------|
 | Pull Requests | `prs` | PR list with filters, pagination, and action buttons |
-| Analytics | `analytics` | 4 sub-tabs for developer and repository analytics |
+| Analytics | `analytics` | 5 sub-tabs for developer and repository analytics |
 | CI/Workflows | `workflows` | Workflow run history with filters and aggregate stats |
 
 #### Analytics Sub-tabs
@@ -378,8 +398,9 @@ The application uses a 3-tab layout as the primary navigation:
 |---------|---------|-------------|
 | Stats | `stats` | Developer contribution statistics table |
 | Lifecycle | `lifecycle` | PR lifecycle metrics, merge time distribution, stale PR detection |
-| Activity | `activity` | Code activity charts: commits, code changes, participation |
+| Activity | `activity` | Code activity charts: commits, code changes, top 5 contributors |
 | Reviews | `responsiveness` | Per-reviewer response times, leaderboard, bottleneck detection |
+| Contributors | `contributors` | Interactive per-contributor time series charts (commits, additions, deletions) |
 
 ### Styling
 
@@ -391,7 +412,8 @@ The CSS uses a modern design system with:
 - **Dark/Light Mode**: Full theme support via `.dark-mode` class
 - **Responsive Design**: Mobile-first with breakpoint at 768px
 - **Component Styles**: Modular styling for cards, buttons, tables, modals
-- **CSS-only Charts**: Bar charts and stacked charts using pure CSS (no chart library) with native tooltips
+- **CSS-only Charts**: Bar charts and stacked charts using pure CSS with native tooltips
+- **Recharts Line Charts**: Interactive line charts for contributor time series and top-5 activity view
 - **Column Tooltips**: `th[title]` cursor set to `help` for non-sortable headers; sortable headers use `pointer` cursor
 - **Reusable `.stat-cards` Grid**: 4-column responsive grid for summary stat cards
 - **Divergence Badges**: Color-coded branch behind indicators (green/yellow/red)
@@ -573,7 +595,7 @@ Fully sortable table of all analyzed PRs. All six columns (PR#, Author, State, T
 
 ### Code Activity (Analytics > Activity)
 
-The Activity sub-tab visualizes repository code activity over a configurable timeframe using CSS-only bar charts.
+The Activity sub-tab visualizes repository code activity over a configurable timeframe using CSS-only bar charts and a recharts line chart.
 
 #### Timeframe Toggle
 
@@ -594,11 +616,11 @@ Users can select the analysis window: 1 month (4 weeks), 3 months (13 weeks), 6 
 
 | Chart | Type | Description |
 |-------|------|-------------|
-| Weekly Commits | Bar chart | Vertical bars showing commit count per week |
-| Code Changes | Stacked bar chart | Additions (green) and deletions (red) per week |
-| Participation | Grouped bars | Owner commits vs. community commits per week |
+| Weekly Commits | Bar chart (CSS) | Vertical bars showing commit count per week |
+| Code Changes | Stacked bar chart (CSS) | Additions (green) and deletions (red) per week |
+| Top 5 Contributors | Line chart (recharts) | Weekly commit counts for the top 5 contributors by total commits |
 
-All charts are implemented with pure CSS (no JavaScript chart libraries). Bar heights are computed as percentages of the maximum value in each dataset.
+Weekly Commits and Code Changes charts are implemented with pure CSS. The Top 5 Contributors chart uses recharts `LineChart` with interactive tooltip and legend.
 
 #### Data Sources
 
@@ -611,6 +633,23 @@ Uses three GitHub Stats API endpoints fetched via the `fetch_github_stats_api()`
 | `stats/participation` | Owner vs. all-contributor weekly commit counts |
 
 Data is cached in-memory with a 10-minute TTL (via the `@cached(ttl_seconds=600)` decorator).
+
+### Per-Contributor Time Series (Analytics > Contributors)
+
+The Contributors sub-tab provides interactive line charts showing per-contributor weekly activity over time. Data is sourced from the GitHub `stats/contributors` API and cached in SQLite with a 24-hour TTL using stale-while-revalidate.
+
+#### Controls
+
+- **Timeframe Selector**: 1 month (4 weeks), 3 months (13 weeks), 6 months (26 weeks), 1 year (52 weeks)
+- **Metric Selector**: Commits, Lines Added, Lines Deleted
+- **Legend Toggle**: Click a contributor in the legend to show/hide their line
+
+#### Chart
+
+A recharts `LineChart` at 400px height with:
+- One `Line` per contributor with distinct colors from a 10-color palette
+- `CartesianGrid`, `XAxis` (week dates), `YAxis`, interactive `Tooltip`, and clickable `Legend`
+- Theme-aware colors adapting to dark/light mode
 
 ### Review Responsiveness (Analytics > Reviews)
 
@@ -1418,6 +1457,41 @@ Returns code activity statistics including commit frequency, code changes, and o
     "peak_commits": 25,
     "owner_percentage": 65.3
   }
+}
+```
+
+---
+
+### Contributor Time Series
+
+**GET** `/api/repos/<owner>/<repo>/contributor-timeseries`
+
+Returns per-contributor weekly time series data (commits, additions, deletions). Cached in SQLite with 24-hour TTL using stale-while-revalidate pattern.
+
+**Query Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `refresh` | string | - | Set to "true" to force a synchronous refresh |
+
+**Response**:
+```json
+{
+  "contributors": [
+    {
+      "login": "developer1",
+      "avatar_url": "https://...",
+      "total": 150,
+      "weeks": [
+        {
+          "week": "2025-01-06",
+          "commits": 5,
+          "additions": 100,
+          "deletions": 50
+        }
+      ]
+    }
+  ]
 }
 ```
 
@@ -2248,7 +2322,7 @@ process = subprocess.Popen(
 3. **Export Functionality**: Export PR lists and stats to CSV/JSON
 4. **Notification Integration**: Browser notifications for PR updates
 5. **Multi-Repository View**: View PRs across multiple repositories simultaneously
-6. ~~**Custom Dashboards**: User-configurable dashboard widgets~~ **Implemented**: Analytics tab with 4 sub-tabs (Stats, Lifecycle, Activity, Reviews) and CI/Workflows tab
+6. ~~**Custom Dashboards**: User-configurable dashboard widgets~~ **Implemented**: Analytics tab with 5 sub-tabs (Stats, Lifecycle, Activity, Reviews, Contributors) and CI/Workflows tab
 7. **PR Templates**: Quick filter templates (e.g., "My Open PRs", "Needs My Review")
 8. ~~**CI/Workflow Visibility**: View workflow run history and pass/fail rates~~ **Implemented**: CI/Workflows tab with filters, stats cards, and runs table
 9. ~~**PR Lifecycle Metrics**: Time-to-merge and review responsiveness tracking~~ **Implemented**: Lifecycle and Reviews sub-tabs in Analytics
@@ -2288,7 +2362,7 @@ process = subprocess.Popen(
 14. **Lifecycle PR Limit**: Lifecycle and review responsiveness metrics analyze the most recent 50 PRs only
 15. **Divergence API Calls**: Branch divergence fetches one compare API call per open PR, which may be slow for repositories with many open PRs
 16. **Code Activity Max Range**: Code activity is limited to 52 weeks maximum (GitHub API limitation)
-17. **CSS-only Charts**: Visualizations use CSS bars with native browser tooltips on hover but no advanced interactivity (no click handlers, zoom, or drill-down)
+17. **Mixed Chart Rendering**: Activity bar charts use CSS-only rendering (no click handlers, zoom, or drill-down); Contributor time series charts use recharts with interactive tooltips and legend toggling
 
 ---
 
@@ -2306,6 +2380,7 @@ process = subprocess.Popen(
 - React 18 + TypeScript
 - Vite (build tool)
 - Zustand (state management)
+- Recharts (interactive line charts)
 - Node.js 18+
 
 ### File Structure

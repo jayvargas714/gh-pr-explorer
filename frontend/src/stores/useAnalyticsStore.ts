@@ -4,6 +4,7 @@ import {
   CodeActivity,
   LifecycleMetrics,
   ReviewResponsiveness,
+  ContributorTimeSeries,
 } from '../api/types'
 
 interface AnalyticsState {
@@ -34,6 +35,13 @@ interface AnalyticsState {
   responsivenessSortBy: string
   responsivenessSortDirection: 'asc' | 'desc'
 
+  // Contributor time series
+  contributorTimeSeries: ContributorTimeSeries[]
+  contributorTSLoading: boolean
+  contributorTSError: string | null
+  contributorTSTimeframe: number
+  contributorTSMetric: 'commits' | 'additions' | 'deletions'
+
   // Actions
   setDeveloperStats: (stats: DeveloperStats[]) => void
   setStatsLoading: (loading: boolean) => void
@@ -54,6 +62,12 @@ interface AnalyticsState {
   setResponsivenessLoading: (loading: boolean) => void
   setResponsivenessError: (error: string | null) => void
   sortResponsiveness: (column: string) => void
+
+  setContributorTimeSeries: (data: ContributorTimeSeries[]) => void
+  setContributorTSLoading: (loading: boolean) => void
+  setContributorTSError: (error: string | null) => void
+  setContributorTSTimeframe: (timeframe: number) => void
+  setContributorTSMetric: (metric: 'commits' | 'additions' | 'deletions') => void
 
   // Computed
   getSortedStats: () => DeveloperStats[]
@@ -88,6 +102,13 @@ export const useAnalyticsStore = create<AnalyticsState>((set, get) => ({
   responsivenessError: null,
   responsivenessSortBy: '',
   responsivenessSortDirection: 'desc',
+
+  // Contributor time series
+  contributorTimeSeries: [],
+  contributorTSLoading: false,
+  contributorTSError: null,
+  contributorTSTimeframe: 52,
+  contributorTSMetric: 'commits',
 
   // Actions
   setDeveloperStats: (stats) => set({ developerStats: stats }),
@@ -132,6 +153,12 @@ export const useAnalyticsStore = create<AnalyticsState>((set, get) => ({
           ? 'asc'
           : 'desc',
     })),
+
+  setContributorTimeSeries: (data) => set({ contributorTimeSeries: data }),
+  setContributorTSLoading: (loading) => set({ contributorTSLoading: loading }),
+  setContributorTSError: (error) => set({ contributorTSError: error }),
+  setContributorTSTimeframe: (timeframe) => set({ contributorTSTimeframe: timeframe }),
+  setContributorTSMetric: (metric) => set({ contributorTSMetric: metric }),
 
   // Computed
   getSortedStats: () => {

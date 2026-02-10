@@ -185,6 +185,20 @@ export interface Workflow {
 // Analytics Types
 // ============================================================================
 
+export interface ContributorWeek {
+  week: string
+  commits: number
+  additions: number
+  deletions: number
+}
+
+export interface ContributorTimeSeries {
+  login: string
+  avatar_url: string
+  total: number
+  weeks: ContributorWeek[]
+}
+
 export interface CodeActivity {
   weekly_commits: WeeklyCommit[]
   code_changes: CodeChange[]
@@ -464,6 +478,10 @@ export interface WorkflowRunsResponse {
   runs: WorkflowRun[]
   stats: WorkflowStats
   workflows: Workflow[]
+}
+
+export interface ContributorTimeSeriesResponse {
+  contributors: ContributorTimeSeries[]
 }
 
 export interface CodeActivityResponse extends CodeActivity {}
