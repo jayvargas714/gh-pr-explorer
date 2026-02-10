@@ -1,0 +1,199 @@
+/* PR List and Cards Styles - Matrix UI Design System */
+
+/* ============================================================================
+   PR List
+   ============================================================================ */
+
+.mx-pr-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-space-4);
+}
+
+.mx-pr-list--loading,
+.mx-pr-list--empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 40vh;
+  gap: var(--mx-space-4);
+  text-align: center;
+}
+
+.mx-pr-list--loading p,
+.mx-pr-list--empty p {
+  color: var(--mx-color-text-secondary);
+  margin: 0;
+}
+
+.mx-pr-list__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--mx-space-4);
+}
+
+.mx-pr-list__header h2 {
+  font-size: var(--mx-font-size-xl);
+  color: var(--mx-color-text-primary);
+  margin: 0;
+}
+
+.mx-pr-list__items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-space-4);
+}
+
+/* ============================================================================
+   PR Card
+   ============================================================================ */
+
+.mx-pr-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-space-4);
+}
+
+.mx-pr-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-space-3);
+}
+
+.mx-pr-card__title-area {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-space-3);
+  flex-wrap: wrap;
+}
+
+.mx-pr-card__title {
+  font-size: var(--mx-font-size-lg);
+  font-weight: var(--mx-font-weight-semibold);
+  color: var(--mx-color-text-primary);
+  text-decoration: none;
+  transition: color var(--mx-transition-fast);
+}
+
+.mx-pr-card__title:hover {
+  color: var(--mx-color-primary);
+}
+
+.mx-pr-card__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-space-2);
+  font-size: var(--mx-font-size-sm);
+  color: var(--mx-color-text-secondary);
+}
+
+.mx-pr-card__avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+}
+
+.mx-pr-card__author {
+  font-weight: var(--mx-font-weight-medium);
+  color: var(--mx-color-text-primary);
+}
+
+.mx-pr-card__time {
+  color: var(--mx-color-text-muted);
+}
+
+/* ============================================================================
+   PR Badges
+   ============================================================================ */
+
+.mx-pr-card__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mx-space-2);
+}
+
+/* ============================================================================
+   PR Stats
+   ============================================================================ */
+
+.mx-pr-card__stats {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-space-3);
+  flex-wrap: wrap;
+  font-size: var(--mx-font-size-sm);
+  font-family: var(--mx-font-mono);
+  color: var(--mx-color-text-secondary);
+}
+
+.mx-pr-card__stat {
+  padding: var(--mx-space-1) var(--mx-space-2);
+  background-color: var(--mx-color-surface);
+  border-radius: var(--mx-radius-sm);
+}
+
+.mx-pr-card__stat--additions {
+  color: var(--mx-color-success);
+}
+
+.mx-pr-card__stat--deletions {
+  color: var(--mx-color-error);
+}
+
+.mx-pr-card__branches {
+  font-weight: var(--mx-font-weight-medium);
+  color: var(--mx-color-text-muted);
+}
+
+/* ============================================================================
+   PR Actions
+   ============================================================================ */
+
+.mx-pr-card__actions {
+  display: flex;
+  gap: var(--mx-space-2);
+  flex-wrap: wrap;
+  padding-top: var(--mx-space-3);
+  border-top: 1px solid var(--mx-color-border);
+}
+
+/* ============================================================================
+   Placeholder (temp for development)
+   ============================================================================ */
+
+.mx-placeholder {
+  padding: var(--mx-space-6);
+  background-color: var(--mx-color-info-bg);
+  border: 1px solid var(--mx-color-info);
+  border-radius: var(--mx-radius-md);
+  text-align: center;
+}
+
+.mx-placeholder p {
+  margin: var(--mx-space-2) 0;
+  color: var(--mx-color-text-primary);
+}
+
+/* ============================================================================
+   Responsive
+   ============================================================================ */
+
+@media (max-width: 768px) {
+  .mx-pr-card__title {
+    font-size: var(--mx-font-size-base);
+  }
+
+  .mx-pr-card__stats {
+    font-size: var(--mx-font-size-xs);
+  }
+
+  .mx-pr-card__actions {
+    flex-direction: column;
+  }
+
+  .mx-pr-card__actions button {
+    width: 100%;
+  }
+}

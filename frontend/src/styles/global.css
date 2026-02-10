@@ -1,0 +1,179 @@
+/* Global Styles and Reset */
+
+/* CSS Reset */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-family: var(--mx-font-sans);
+  font-size: 16px;
+  line-height: var(--mx-line-height-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--mx-color-bg-primary);
+  color: var(--mx-color-text-primary);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Typography */
+h1, h2 {
+  font-weight: var(--mx-font-weight-bold);
+  line-height: var(--mx-line-height-tight);
+  color: var(--mx-color-text-primary);
+}
+
+h3, h4, h5, h6 {
+  font-weight: var(--mx-font-weight-semibold);
+  line-height: var(--mx-line-height-tight);
+  color: var(--mx-color-text-primary);
+}
+
+h1 {
+  font-size: var(--mx-font-size-4xl);
+  letter-spacing: -0.015em;
+}
+
+h2 {
+  font-size: var(--mx-font-size-3xl);
+  letter-spacing: -0.01em;
+}
+
+h3 {
+  font-size: var(--mx-font-size-xl);
+}
+
+h4 {
+  font-size: var(--mx-font-size-lg);
+}
+
+h5, h6 {
+  font-size: var(--mx-font-size-base);
+}
+
+p {
+  margin-bottom: var(--mx-space-4);
+}
+
+a {
+  color: var(--mx-color-primary);
+  text-decoration: none;
+  transition: color var(--mx-transition-fast);
+}
+
+a:hover {
+  color: var(--mx-color-primary-bright);
+}
+
+code {
+  font-family: var(--mx-font-mono);
+  font-size: var(--mx-font-size-sm);
+  letter-spacing: 0.02em;
+  background-color: var(--mx-color-bg-tertiary);
+  padding: var(--mx-space-1) var(--mx-space-2);
+  border-radius: var(--mx-radius-sm);
+}
+
+pre {
+  font-family: var(--mx-font-mono);
+  font-size: var(--mx-font-size-sm);
+  background-color: var(--mx-color-bg-tertiary);
+  padding: var(--mx-space-4);
+  border-radius: var(--mx-radius-md);
+  overflow-x: auto;
+  margin-bottom: var(--mx-space-4);
+}
+
+pre code {
+  background-color: transparent;
+  padding: 0;
+}
+
+/* Lists */
+ul, ol {
+  padding-left: var(--mx-space-6);
+  margin-bottom: var(--mx-space-4);
+}
+
+/* Buttons Reset */
+button {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+/* Form Elements Reset */
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* Focus Styles */
+:focus-visible {
+  outline: 2px solid var(--mx-color-border-focus);
+  outline-offset: 2px;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--mx-color-bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--mx-color-border);
+  border-radius: var(--mx-radius-sm);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--mx-color-border-hover);
+}
+
+/* Selection */
+::selection {
+  background: rgba(0, 255, 157, 0.25);
+  color: var(--mx-color-text-primary);
+}
+
+.matrix-light ::selection {
+  background: rgba(0, 168, 102, 0.2);
+  color: var(--mx-color-text-primary);
+}
+
+/* Utility Classes */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Root Container */
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}

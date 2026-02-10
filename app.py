@@ -15,9 +15,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, request, send_from_directory
 
-from database import get_database, get_reviews_db, get_queue_db, get_settings_db, get_dev_stats_db, get_lifecycle_cache_db
+from database import get_database, get_reviews_db, get_queue_db, get_settings_db, get_dev_stats_db, get_lifecycle_cache_db, get_workflow_cache_db, get_contributor_ts_cache_db, get_code_activity_cache_db
 
 # Configure logging
 logging.basicConfig(
@@ -49,6 +49,21 @@ reviews_db = get_reviews_db()
 queue_db = get_queue_db()
 settings_db = get_settings_db()
 dev_stats_db = get_dev_stats_db()
+workflow_cache_db = get_workflow_cache_db()
+contributor_ts_cache_db = get_contributor_ts_cache_db()
+code_activity_cache_db = get_code_activity_cache_db()
+
+# Workflow cache background refresh tracking
+_workflow_refresh_in_progress = set()
+_workflow_refresh_lock = threading.Lock()
+
+# Contributor timeseries cache background refresh tracking
+_contributor_ts_refresh_in_progress = set()
+_contributor_ts_refresh_lock = threading.Lock()
+
+# Code activity cache background refresh tracking
+_activity_refresh_in_progress = set()
+_activity_refresh_lock = threading.Lock()
 
 # Simple in-memory cache
 cache = {}
@@ -199,15 +214,92 @@ def fetch_pr_head_sha(owner, repo, pr_number):
         return None
 
 
+def fetch_pr_state_and_sha(owner, repo, pr_number):
+    """Fetch PR state and head SHA in a single gh call.
+
+    Returns:
+        tuple: (state, head_sha) — either may be None on error.
+    """
+    try:
+        output = run_gh_command([
+            "pr", "view", str(pr_number),
+            "-R", f"{owner}/{repo}",
+            "--json", "state,headRefOid",
+        ])
+        data = parse_json_output(output)
+        if isinstance(data, dict):
+            state = data.get("state", "").upper() or None
+            sha = data.get("headRefOid") or None
+            return state, sha
+        return None, None
+    except RuntimeError as e:
+        logger.warning(f"Failed to fetch PR state/SHA for {owner}/{repo}#{pr_number}: {e}")
+        return None, None
+
+
+def _parse_location(location):
+    """Parse a location string into (file_path, start_line, end_line) or None.
+
+    Handles multiple formats produced by code reviews:
+      - path/to/file.py:123-456
+      - path/to/file.py:123
+      - `path/to/file.py`:123-456
+      - `path/to/file.py` (description, approximately line 123-456 ...)
+      - `path/to/file.py`, function `foo` (approximately lines 123-456 ...)
+    """
+    if not location:
+        return None
+
+    # Strategy 1: Classic format - file.py:123-456 or `file.py`:123-456
+    # Strip backticks from path portion
+    loc_match = re.match(r'`?([^`:\s]+)`?\s*:\s*(\d+)(?:\s*-\s*(\d+))?', location)
+    if loc_match:
+        file_path = loc_match.group(1).strip()
+        start_line = int(loc_match.group(2))
+        end_line = int(loc_match.group(3)) if loc_match.group(3) else start_line
+        return file_path, start_line, end_line
+
+    # Strategy 2: `file.py` followed by "line(s) N-M" or "line N" somewhere in the string
+    path_match = re.match(r'`([^`]+)`', location)
+    if path_match:
+        file_path = path_match.group(1).strip()
+        # Look for line numbers: "line 123-456", "lines 123-456", "line 123"
+        line_match = re.search(r'lines?\s+(\d+)\s*[-–]\s*(\d+)', location)
+        if line_match:
+            return file_path, int(line_match.group(1)), int(line_match.group(2))
+        line_match = re.search(r'line\s+(\d+)', location)
+        if line_match:
+            line_num = int(line_match.group(1))
+            return file_path, line_num, line_num
+
+    return None
+
+
+def _extract_issue_field(content, field_name):
+    """Extract a field's full content from an issue block.
+
+    Captures everything after '- FieldName: ' until the next '- FieldName:' line
+    or end of content. This correctly handles multiline values including code blocks.
+    """
+    pattern = re.compile(
+        rf'-\s*{field_name}:\s*(.*?)(?=\n-\s*(?:Location|Problem|Fix):|\Z)',
+        re.DOTALL
+    )
+    match = pattern.search(content)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
 def parse_critical_issues(content):
     """Parse critical issues from review markdown content.
 
     Expected format:
     **Critical Issues**
     **1. Issue Title**
-    - Location: path/to/file.py:123-456 or path/to/file.py:123
-    - Problem: Description
-    - Fix: Solution
+    - Location: path/to/file.py:123-456 or `path/to/file.py` (approx line 123-456)
+    - Problem: Description (may span multiple lines)
+    - Fix: Solution (may span multiple lines with code blocks)
 
     Returns:
         List of dicts: [{ title, path, start_line, end_line, body }]
@@ -228,34 +320,30 @@ def parse_critical_issues(content):
 
     critical_section = critical_match.group(1)
 
-    # Find individual issues
-    # Pattern: **N. Title** followed by Location, Problem, Fix
-    issue_pattern = re.compile(
-        r'\*\*(\d+)\.\s*(.+?)\*\*\s*'
-        r'(?:-\s*Location:\s*([^\n]+))?'
-        r'(?:-\s*Problem:\s*([^\n]+(?:\n(?!-).*?)*))?'
-        r'(?:-\s*Fix:\s*([^\n]+(?:\n(?!-).*?)*))?',
-        re.DOTALL
-    )
+    # Split into individual issues by **N. Title** headers
+    issue_headers = list(re.finditer(r'\*\*(\d+)\.\s*(.+?)\*\*', critical_section))
 
-    for match in issue_pattern.finditer(critical_section):
-        issue_num = match.group(1)
-        title = match.group(2).strip()
-        location = match.group(3).strip() if match.group(3) else None
-        problem = match.group(4).strip() if match.group(4) else None
-        fix = match.group(5).strip() if match.group(5) else None
+    for idx, header_match in enumerate(issue_headers):
+        title = header_match.group(2).strip()
+
+        # Get content between this header and the next (or end of section)
+        start = header_match.end()
+        end = issue_headers[idx + 1].start() if idx + 1 < len(issue_headers) else len(critical_section)
+        issue_content = critical_section[start:end]
+
+        # Extract fields - each captures everything until the next field or end
+        location = _extract_issue_field(issue_content, 'Location')
+        problem = _extract_issue_field(issue_content, 'Problem')
+        fix = _extract_issue_field(issue_content, 'Fix')
 
         if not location:
             continue
 
-        # Parse location: file.py:123-456 or file.py:123
-        loc_match = re.match(r'([^:]+):(\d+)(?:-(\d+))?', location)
-        if not loc_match:
+        parsed = _parse_location(location)
+        if not parsed:
             continue
 
-        file_path = loc_match.group(1).strip()
-        start_line = int(loc_match.group(2))
-        end_line = int(loc_match.group(3)) if loc_match.group(3) else start_line
+        file_path, start_line, end_line = parsed
 
         # Build the comment body
         body_parts = [f"**{title}**"]
@@ -279,8 +367,14 @@ def parse_critical_issues(content):
 
 @app.route("/")
 def index():
-    """Serve the main HTML page."""
-    return render_template("index.html")
+    """Serve the React frontend. Run 'npm run build' in frontend/ first."""
+    return send_from_directory(Path(__file__).parent / "frontend" / "dist", "index.html")
+
+
+@app.route("/assets/<path:filename>")
+def serve_frontend_assets(filename):
+    """Serve static assets from the React build."""
+    return send_from_directory(Path(__file__).parent / "frontend" / "dist" / "assets", filename)
 
 
 @app.route("/api/user")
@@ -601,6 +695,12 @@ def get_prs(owner, repo):
         output = run_gh_command(args)
         prs = parse_json_output(output)
 
+        # Post-filter by draft status (gh search qualifier draft: is unreliable)
+        if draft == "true":
+            prs = [pr for pr in prs if pr.get("isDraft", False)]
+        elif draft == "false":
+            prs = [pr for pr in prs if not pr.get("isDraft", False)]
+
         # Post-process: add review status and CI status summaries
         for pr in prs:
             pr["reviewStatus"] = get_review_status(pr.get("reviewDecision"))
@@ -653,203 +753,581 @@ def get_pr_divergence(owner, repo):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/repos/<owner>/<repo>/workflow-runs")
-@cached()
-def get_workflow_runs(owner, repo):
-    """Get workflow runs with optional filters and aggregate stats."""
-    try:
-        # Fetch workflows list
+def _fetch_workflow_data(owner, repo):
+    """Fetch unfiltered workflow runs in parallel batches.
+
+    Returns dict with keys: runs, workflows, all_time_total
+    """
+    max_runs = config.get("workflow_cache_max_runs", 1000)
+    max_pages = max_runs // 100
+
+    base_url = f"repos/{owner}/{repo}/actions/runs?per_page=100"
+    jq_query = (
+        "[.workflow_runs[] | {"
+        "id, name, display_title, status, conclusion, "
+        "created_at, updated_at, event, head_branch, "
+        "run_attempt, run_number, html_url, "
+        "actor_login: .actor.login, "
+        "workflow_id: .workflow_id"
+        "}]"
+    )
+
+    def fetch_page(page_num):
+        """Fetch a single page of workflow runs."""
+        try:
+            output = run_gh_command(["api", f"{base_url}&page={page_num}", "--jq", jq_query])
+            return parse_json_output(output) or []
+        except RuntimeError:
+            return []
+
+    def fetch_workflows():
+        """Fetch the workflows list."""
         try:
             wf_output = run_gh_command([
                 "api", f"repos/{owner}/{repo}/actions/workflows",
                 "--jq", "[.workflows[] | {id, name, state, path}]"
             ])
-            workflows = parse_json_output(wf_output) or []
+            return parse_json_output(wf_output) or []
         except RuntimeError:
-            workflows = []
+            return []
 
-        # Build runs API query with multi-page fetching (up to 3 pages = 300 runs)
-        base_url = f"repos/{owner}/{repo}/actions/runs?per_page=100"
+    def fetch_total_count():
+        """Fetch unfiltered all-time total count."""
+        try:
+            count_output = run_gh_command([
+                "api", f"repos/{owner}/{repo}/actions/runs?per_page=1&page=1",
+                "--jq", ".total_count"
+            ])
+            return int(count_output.strip()) if count_output.strip() else 0
+        except (RuntimeError, ValueError):
+            return 0
 
-        workflow_id = request.args.get("workflow_id")
-        if workflow_id:
-            base_url += f"&workflow_id={workflow_id}"
+    runs = []
+    workflows = []
+    all_time_total = 0
 
-        branch = request.args.get("branch")
-        if branch:
-            base_url += f"&branch={branch}"
+    # Batch 1: workflows + total count + pages 1-3 in parallel
+    batch1_pages = min(3, max_pages)
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        wf_future = executor.submit(fetch_workflows)
+        count_future = executor.submit(fetch_total_count)
+        page_futures = {executor.submit(fetch_page, p): p for p in range(1, batch1_pages + 1)}
 
-        event = request.args.get("event")
-        if event:
-            base_url += f"&event={event}"
+        workflows = wf_future.result()
+        all_time_total = count_future.result()
 
-        status_filter = request.args.get("status")
-        if status_filter:
-            base_url += f"&status={status_filter}"
+        # Collect page results in order
+        page_results = {}
+        for future in page_futures:
+            page_num = page_futures[future]
+            page_results[page_num] = future.result()
 
-        conclusion = request.args.get("conclusion")
-        if conclusion:
-            base_url += f"&conclusion={conclusion}"
+    # Process batch 1 results in order, stop if a page returned < 100
+    needs_more = True
+    for p in range(1, batch1_pages + 1):
+        page_runs = page_results.get(p, [])
+        runs.extend(page_runs)
+        if len(page_runs) < 100:
+            needs_more = False
+            break
 
-        jq_query = (
-            "[.workflow_runs[] | {"
-            "id, name, display_title, status, conclusion, "
-            "created_at, updated_at, event, head_branch, "
-            "run_attempt, run_number, html_url, "
-            "actor_login: .actor.login"
-            "}]"
-        )
+    # Batch 2: pages 4-8 if all batch 1 pages returned 100
+    if needs_more and max_pages > 3:
+        batch2_end = min(8, max_pages)
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            page_futures = {executor.submit(fetch_page, p): p for p in range(4, batch2_end + 1)}
+            page_results = {}
+            for future in page_futures:
+                page_num = page_futures[future]
+                page_results[page_num] = future.result()
 
-        runs = []
-        for page in range(1, 4):  # Fetch up to 3 pages
-            api_url = f"{base_url}&page={page}"
-            output = run_gh_command(["api", api_url, "--jq", jq_query])
-            page_runs = parse_json_output(output) or []
+        for p in range(4, batch2_end + 1):
+            page_runs = page_results.get(p, [])
+            runs.extend(page_runs)
+            if len(page_runs) < 100:
+                needs_more = False
+                break
+
+    # Batch 3: pages 9-10 if still needed
+    if needs_more and max_pages > 8:
+        batch3_end = min(10, max_pages)
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            page_futures = {executor.submit(fetch_page, p): p for p in range(9, batch3_end + 1)}
+            page_results = {}
+            for future in page_futures:
+                page_num = page_futures[future]
+                page_results[page_num] = future.result()
+
+        for p in range(9, batch3_end + 1):
+            page_runs = page_results.get(p, [])
             runs.extend(page_runs)
             if len(page_runs) < 100:
                 break
 
-        # Compute duration and aggregate stats
-        total_runs = len(runs)
-        success_count = 0
-        failure_count = 0
-        total_duration = 0
-        duration_count = 0
-        runs_by_workflow = {}
-
-        for run in runs:
-            # Compute duration_seconds
-            created = run.get("created_at")
-            updated = run.get("updated_at")
-            if created and updated:
-                try:
-                    c = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                    u = datetime.fromisoformat(updated.replace("Z", "+00:00"))
-                    dur = int((u - c).total_seconds())
-                    run["duration_seconds"] = max(dur, 0)
-                    if run.get("conclusion") in ("success", "failure"):
-                        total_duration += dur
-                        duration_count += 1
-                except (ValueError, TypeError):
-                    run["duration_seconds"] = None
-            else:
+    # Pre-compute duration_seconds on each run before caching
+    for run in runs:
+        created = run.get("created_at")
+        updated = run.get("updated_at")
+        if created and updated:
+            try:
+                c = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                u = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                run["duration_seconds"] = max(int((u - c).total_seconds()), 0)
+            except (ValueError, TypeError):
                 run["duration_seconds"] = None
+        else:
+            run["duration_seconds"] = None
 
-            c = run.get("conclusion")
-            if c == "success":
-                success_count += 1
-            elif c == "failure":
-                failure_count += 1
+    return {"runs": runs, "workflows": workflows, "all_time_total": all_time_total}
 
-            wf_name = run.get("name", "Unknown")
-            if wf_name not in runs_by_workflow:
-                runs_by_workflow[wf_name] = {"total": 0, "failures": 0}
-            runs_by_workflow[wf_name]["total"] += 1
-            if c == "failure":
-                runs_by_workflow[wf_name]["failures"] += 1
 
-        completed_runs = success_count + failure_count
-        stats = {
-            "total_runs": total_runs,
-            "pass_rate": round((success_count / completed_runs * 100), 1) if completed_runs > 0 else 0,
-            "avg_duration": round(total_duration / duration_count) if duration_count > 0 else 0,
-            "failure_count": failure_count,
-            "success_count": success_count,
-            "runs_by_workflow": runs_by_workflow
-        }
+def _filter_and_compute_stats(cached_data, filters):
+    """Apply filters to cached workflow data and compute aggregate stats.
 
-        return jsonify({"runs": runs, "stats": stats, "workflows": workflows})
+    Args:
+        cached_data: dict with keys: runs, workflows, all_time_total
+        filters: dict with optional keys: workflow_id, branch, event, conclusion, status
+    Returns:
+        dict with keys: runs, stats, workflows
+    """
+    runs = cached_data.get("runs", [])
+    workflows = cached_data.get("workflows", [])
+    all_time_total = cached_data.get("all_time_total", 0)
 
-    except RuntimeError as e:
+    # Apply Python-side filters
+    filtered = runs
+    wf_id = filters.get("workflow_id")
+    if wf_id:
+        try:
+            wf_id_int = int(wf_id)
+            filtered = [r for r in filtered if r.get("workflow_id") == wf_id_int]
+        except (ValueError, TypeError):
+            pass
+
+    branch = filters.get("branch")
+    if branch:
+        filtered = [r for r in filtered if r.get("head_branch") == branch]
+
+    event = filters.get("event")
+    if event:
+        filtered = [r for r in filtered if r.get("event") == event]
+
+    conclusion = filters.get("conclusion")
+    status_filter = filters.get("status")
+    if conclusion:
+        filtered = [r for r in filtered if r.get("conclusion") == conclusion]
+    elif status_filter:
+        # status can match either status or conclusion field
+        filtered = [r for r in filtered
+                    if r.get("status") == status_filter or r.get("conclusion") == status_filter]
+
+    # Compute aggregate stats on filtered subset
+    total_runs = len(filtered)
+    success_count = 0
+    failure_count = 0
+    total_duration = 0
+    duration_count = 0
+    runs_by_workflow = {}
+
+    for run in filtered:
+        c = run.get("conclusion")
+        if c == "success":
+            success_count += 1
+        elif c == "failure":
+            failure_count += 1
+
+        dur = run.get("duration_seconds")
+        if dur is not None and c in ("success", "failure"):
+            total_duration += dur
+            duration_count += 1
+
+        wf_name = run.get("name", "Unknown")
+        if wf_name not in runs_by_workflow:
+            runs_by_workflow[wf_name] = {"total": 0, "failures": 0}
+        runs_by_workflow[wf_name]["total"] += 1
+        if c == "failure":
+            runs_by_workflow[wf_name]["failures"] += 1
+
+    completed_runs = success_count + failure_count
+    stats = {
+        "total_runs": total_runs,
+        "all_time_total": all_time_total,
+        "pass_rate": round((success_count / completed_runs * 100), 1) if completed_runs > 0 else 0,
+        "avg_duration": round(total_duration / duration_count) if duration_count > 0 else 0,
+        "failure_count": failure_count,
+        "success_count": success_count,
+        "runs_by_workflow": runs_by_workflow
+    }
+
+    return {"runs": filtered, "stats": stats, "workflows": workflows}
+
+
+def _background_refresh_workflows(owner, repo, repo_key):
+    """Background task to refresh workflow cache for a repository."""
+    try:
+        logger.info(f"Background workflow refresh started for {repo_key}")
+        data = _fetch_workflow_data(owner, repo)
+        workflow_cache_db.save_cache(repo_key, data)
+        logger.info(f"Background workflow refresh completed for {repo_key}: {len(data['runs'])} runs cached")
+    except Exception as e:
+        logger.error(f"Background workflow refresh failed for {repo_key}: {e}")
+    finally:
+        with _workflow_refresh_lock:
+            _workflow_refresh_in_progress.discard(repo_key)
+
+
+@app.route("/api/repos/<owner>/<repo>/workflow-runs")
+def get_workflow_runs(owner, repo):
+    """Get workflow runs with optional filters and aggregate stats.
+
+    Uses SQLite cache with stale-while-revalidate pattern:
+    - Cached + fresh: filter & return instantly
+    - Cached + stale: return stale data, kick off background refresh
+    - No cache: synchronous parallel fetch, save, filter & return
+    """
+    repo_key = f"{owner}/{repo}"
+    ttl_minutes = config.get("workflow_cache_ttl_minutes", 60)
+    force_refresh = request.args.get("refresh", "").lower() == "true"
+
+    # Collect filter params
+    filters = {
+        "workflow_id": request.args.get("workflow_id"),
+        "branch": request.args.get("branch"),
+        "event": request.args.get("event"),
+        "conclusion": request.args.get("conclusion"),
+        "status": request.args.get("status"),
+    }
+
+    try:
+        # Force refresh: synchronous fetch regardless of cache state
+        if force_refresh:
+            logger.info(f"Force refresh requested for {repo_key}")
+            data = _fetch_workflow_data(owner, repo)
+            workflow_cache_db.save_cache(repo_key, data)
+            result = _filter_and_compute_stats(data, filters)
+            return jsonify(result)
+
+        cached = workflow_cache_db.get_cached(repo_key)
+        is_stale = workflow_cache_db.is_stale(repo_key, ttl_minutes)
+
+        if cached:
+            # Stale: return immediately but trigger background refresh
+            if is_stale:
+                with _workflow_refresh_lock:
+                    if repo_key not in _workflow_refresh_in_progress:
+                        _workflow_refresh_in_progress.add(repo_key)
+                        thread = threading.Thread(
+                            target=_background_refresh_workflows,
+                            args=(owner, repo, repo_key),
+                            daemon=True
+                        )
+                        thread.start()
+
+            result = _filter_and_compute_stats(cached["data"], filters)
+            return jsonify(result)
+
+        # No cache: synchronous fetch
+        data = _fetch_workflow_data(owner, repo)
+        workflow_cache_db.save_cache(repo_key, data)
+        result = _filter_and_compute_stats(data, filters)
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Failed to get workflow runs for {repo_key}: {e}")
         return jsonify({"error": str(e)}), 500
 
 
+def _fetch_code_activity_data(owner, repo):
+    """Fetch and process all 52 weeks of code activity data from GitHub stats APIs.
+
+    Returns a dict with weekly_commits, code_changes, owner_commits, community_commits,
+    or None if all data sources are empty.
+    """
+    # Fetch all 3 stats APIs in parallel
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        freq_future = executor.submit(fetch_github_stats_api, owner, repo, "stats/code_frequency")
+        commit_future = executor.submit(fetch_github_stats_api, owner, repo, "stats/commit_activity")
+        participation_future = executor.submit(fetch_github_stats_api, owner, repo, "stats/participation")
+
+        code_freq = freq_future.result()
+        commit_activity = commit_future.result()
+        participation = participation_future.result()
+
+    # Process code_frequency: [timestamp, additions, deletions] — all weeks
+    code_changes = []
+    if isinstance(code_freq, list):
+        for entry in code_freq:
+            if isinstance(entry, list) and len(entry) >= 3:
+                ts = entry[0]
+                date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                code_changes.append({
+                    "week": date_str,
+                    "additions": entry[1],
+                    "deletions": abs(entry[2])
+                })
+
+    # Process commit_activity: {week, total, days[7]} — all weeks
+    weekly_commits = []
+    if isinstance(commit_activity, list):
+        for entry in commit_activity:
+            if isinstance(entry, dict):
+                ts = entry.get("week", 0)
+                date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                weekly_commits.append({
+                    "week": date_str,
+                    "total": entry.get("total", 0),
+                    "days": entry.get("days", [0]*7)
+                })
+
+    # Process participation: {all: [52 weeks], owner: [52 weeks]} — all weeks
+    owner_commits = []
+    community_commits = []
+    if isinstance(participation, dict):
+        all_p = participation.get("all", [])
+        owner_p = participation.get("owner", [])
+        owner_commits = owner_p if owner_p else []
+        community_commits = [
+            (all_p[i] if i < len(all_p) else 0) - (owner_p[i] if i < len(owner_p) else 0)
+            for i in range(len(all_p))
+        ]
+
+    # Only return data if we got meaningful results
+    if not weekly_commits and not code_changes and not owner_commits and not community_commits:
+        return None
+
+    return {
+        "weekly_commits": weekly_commits,
+        "code_changes": code_changes,
+        "owner_commits": owner_commits,
+        "community_commits": community_commits,
+    }
+
+
+def _background_refresh_code_activity(owner, repo, repo_key):
+    """Background task to refresh code activity cache."""
+    try:
+        logger.info(f"Background code activity refresh started for {repo_key}")
+        data = _fetch_code_activity_data(owner, repo)
+        if data:
+            code_activity_cache_db.save_cache(repo_key, data)
+            logger.info(f"Background code activity refresh completed for {repo_key}")
+    except Exception as e:
+        logger.error(f"Background code activity refresh failed for {repo_key}: {e}")
+    finally:
+        with _activity_refresh_lock:
+            _activity_refresh_in_progress.discard(repo_key)
+
+
+def _compute_activity_summary(weekly_commits, code_changes, owner_commits, community_commits):
+    """Compute summary stats from sliced activity data."""
+    total_commits = sum(w.get("total", 0) for w in weekly_commits)
+    total_additions = sum(c.get("additions", 0) for c in code_changes)
+    total_deletions = sum(c.get("deletions", 0) for c in code_changes)
+    avg_weekly = round(total_commits / len(weekly_commits), 1) if weekly_commits else 0
+
+    peak_week = None
+    peak_commits = 0
+    for w in weekly_commits:
+        if w.get("total", 0) > peak_commits:
+            peak_commits = w["total"]
+            peak_week = w["week"]
+
+    owner_total = sum(owner_commits) if owner_commits else 0
+    all_total = sum(owner_commits) + sum(community_commits) if owner_commits else 0
+    owner_pct = round(owner_total / all_total * 100, 1) if all_total > 0 else 0
+
+    return {
+        "total_commits": total_commits,
+        "avg_weekly_commits": avg_weekly,
+        "total_additions": total_additions,
+        "total_deletions": total_deletions,
+        "peak_week": peak_week,
+        "peak_commits": peak_commits,
+        "owner_percentage": owner_pct,
+    }
+
+
 @app.route("/api/repos/<owner>/<repo>/code-activity")
-@cached(ttl_seconds=600)
 def get_code_activity(owner, repo):
-    """Get code activity stats (commit frequency, code changes, participation)."""
+    """Get code activity stats (commit frequency, code changes, participation).
+
+    Uses SQLite cache with 24-hour TTL and stale-while-revalidate.
+    The full 52-week dataset is cached; the ?weeks param slices the cached data.
+    """
     try:
         weeks = int(request.args.get("weeks", 52))
         weeks = min(max(weeks, 1), 52)
+        repo_key = f"{owner}/{repo}"
+        force_refresh = request.args.get("refresh", "").lower() == "true"
 
-        # Fetch all 3 stats APIs in parallel
-        code_freq = fetch_github_stats_api(owner, repo, "stats/code_frequency")
-        commit_activity = fetch_github_stats_api(owner, repo, "stats/commit_activity")
-        participation = fetch_github_stats_api(owner, repo, "stats/participation")
-
-        # Process code_frequency: [timestamp, additions, deletions]
-        code_changes = []
-        if isinstance(code_freq, list):
-            for entry in code_freq[-weeks:]:
-                if isinstance(entry, list) and len(entry) >= 3:
-                    ts = entry[0]
-                    date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
-                    code_changes.append({
-                        "week": date_str,
-                        "additions": entry[1],
-                        "deletions": abs(entry[2])
-                    })
-
-        # Process commit_activity: {week, total, days[7]}
-        weekly_commits = []
-        if isinstance(commit_activity, list):
-            for entry in commit_activity[-weeks:]:
-                if isinstance(entry, dict):
-                    ts = entry.get("week", 0)
-                    date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
-                    weekly_commits.append({
-                        "week": date_str,
-                        "total": entry.get("total", 0),
-                        "days": entry.get("days", [0]*7)
-                    })
-
-        # Process participation: {all: [52 weeks], owner: [52 weeks]}
-        owner_commits = []
-        community_commits = []
-        if isinstance(participation, dict):
-            all_p = participation.get("all", [])
-            owner_p = participation.get("owner", [])
-            owner_commits = owner_p[-weeks:] if owner_p else []
-            community_commits = [
-                (all_p[i] if i < len(all_p) else 0) - (owner_p[i] if i < len(owner_p) else 0)
-                for i in range(len(all_p))
-            ][-weeks:]
-
-        # Compute summary
-        total_commits = sum(w.get("total", 0) for w in weekly_commits)
-        total_additions = sum(c.get("additions", 0) for c in code_changes)
-        total_deletions = sum(c.get("deletions", 0) for c in code_changes)
-        avg_weekly = round(total_commits / len(weekly_commits), 1) if weekly_commits else 0
-
-        peak_week = None
-        peak_commits = 0
-        for w in weekly_commits:
-            if w.get("total", 0) > peak_commits:
-                peak_commits = w["total"]
-                peak_week = w["week"]
-
-        owner_total = sum(owner_commits) if owner_commits else 0
-        all_total = sum(owner_commits) + sum(community_commits) if owner_commits else 0
-        owner_pct = round(owner_total / all_total * 100, 1) if all_total > 0 else 0
-
-        return jsonify({
-            "weekly_commits": weekly_commits,
-            "code_changes": code_changes,
-            "owner_commits": owner_commits,
-            "community_commits": community_commits,
-            "summary": {
-                "total_commits": total_commits,
-                "avg_weekly_commits": avg_weekly,
-                "total_additions": total_additions,
-                "total_deletions": total_deletions,
-                "peak_week": peak_week,
-                "peak_commits": peak_commits,
-                "owner_percentage": owner_pct
+        if force_refresh:
+            logger.info(f"Force refresh code activity for {repo_key}")
+            data = _fetch_code_activity_data(owner, repo)
+            if data:
+                code_activity_cache_db.save_cache(repo_key, data)
+            else:
+                data = {"weekly_commits": [], "code_changes": [], "owner_commits": [], "community_commits": []}
+            sliced = {
+                "weekly_commits": data["weekly_commits"][-weeks:],
+                "code_changes": data["code_changes"][-weeks:],
+                "owner_commits": data["owner_commits"][-weeks:],
+                "community_commits": data["community_commits"][-weeks:],
             }
-        })
+            sliced["summary"] = _compute_activity_summary(
+                sliced["weekly_commits"], sliced["code_changes"],
+                sliced["owner_commits"], sliced["community_commits"]
+            )
+            return jsonify(sliced)
+
+        cached = code_activity_cache_db.get_cached(repo_key)
+        is_stale = code_activity_cache_db.is_stale(repo_key)
+
+        if cached:
+            if is_stale:
+                with _activity_refresh_lock:
+                    if repo_key not in _activity_refresh_in_progress:
+                        _activity_refresh_in_progress.add(repo_key)
+                        thread = threading.Thread(
+                            target=_background_refresh_code_activity,
+                            args=(owner, repo, repo_key),
+                            daemon=True
+                        )
+                        thread.start()
+            data = cached["data"]
+            sliced = {
+                "weekly_commits": data.get("weekly_commits", [])[-weeks:],
+                "code_changes": data.get("code_changes", [])[-weeks:],
+                "owner_commits": data.get("owner_commits", [])[-weeks:],
+                "community_commits": data.get("community_commits", [])[-weeks:],
+            }
+            sliced["summary"] = _compute_activity_summary(
+                sliced["weekly_commits"], sliced["code_changes"],
+                sliced["owner_commits"], sliced["community_commits"]
+            )
+            return jsonify(sliced)
+
+        # No cache: synchronous fetch
+        data = _fetch_code_activity_data(owner, repo)
+        if data:
+            code_activity_cache_db.save_cache(repo_key, data)
+        else:
+            data = {"weekly_commits": [], "code_changes": [], "owner_commits": [], "community_commits": []}
+
+        sliced = {
+            "weekly_commits": data["weekly_commits"][-weeks:],
+            "code_changes": data["code_changes"][-weeks:],
+            "owner_commits": data["owner_commits"][-weeks:],
+            "community_commits": data["community_commits"][-weeks:],
+        }
+        sliced["summary"] = _compute_activity_summary(
+            sliced["weekly_commits"], sliced["code_changes"],
+            sliced["owner_commits"], sliced["community_commits"]
+        )
+        return jsonify(sliced)
 
     except Exception as e:
         logger.error(f"Failed to fetch code activity: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+def _fetch_contributor_timeseries(owner, repo):
+    """Fetch and transform per-contributor weekly time series from GitHub stats/contributors API.
+
+    Returns list of contributor objects sorted by total commits descending.
+    """
+    raw = fetch_github_stats_api(owner, repo, "stats/contributors")
+    if not raw or not isinstance(raw, list):
+        return []
+
+    contributors = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+
+        author = entry.get("author") or {}
+        weeks_raw = entry.get("weeks", [])
+        total = entry.get("total", 0)
+
+        weeks = []
+        for w in weeks_raw:
+            if not isinstance(w, dict):
+                continue
+            ts = w.get("w", 0)
+            date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+            weeks.append({
+                "week": date_str,
+                "commits": w.get("c", 0),
+                "additions": w.get("a", 0),
+                "deletions": w.get("d", 0),
+            })
+
+        contributors.append({
+            "login": author.get("login", "unknown"),
+            "avatar_url": author.get("avatar_url", ""),
+            "total": total,
+            "weeks": weeks,
+        })
+
+    contributors.sort(key=lambda c: c["total"], reverse=True)
+    return contributors
+
+
+def _background_refresh_contributor_ts(owner, repo, repo_key):
+    """Background task to refresh contributor time series cache."""
+    try:
+        logger.info(f"Background contributor TS refresh started for {repo_key}")
+        data = _fetch_contributor_timeseries(owner, repo)
+        if data:
+            contributor_ts_cache_db.save_cache(repo_key, data)
+            logger.info(f"Background contributor TS refresh completed for {repo_key}: {len(data)} contributors")
+    except Exception as e:
+        logger.error(f"Background contributor TS refresh failed for {repo_key}: {e}")
+    finally:
+        with _contributor_ts_refresh_lock:
+            _contributor_ts_refresh_in_progress.discard(repo_key)
+
+
+@app.route("/api/repos/<owner>/<repo>/contributor-timeseries")
+def get_contributor_timeseries(owner, repo):
+    """Get per-contributor weekly time series data (commits, additions, deletions).
+
+    Uses SQLite cache with stale-while-revalidate (24-hour TTL).
+    """
+    repo_key = f"{owner}/{repo}"
+    force_refresh = request.args.get("refresh", "").lower() == "true"
+
+    try:
+        if force_refresh:
+            logger.info(f"Force refresh contributor TS for {repo_key}")
+            data = _fetch_contributor_timeseries(owner, repo)
+            if data:
+                contributor_ts_cache_db.save_cache(repo_key, data)
+            return jsonify({"contributors": data})
+
+        cached = contributor_ts_cache_db.get_cached(repo_key)
+        is_stale = contributor_ts_cache_db.is_stale(repo_key)
+
+        if cached:
+            if is_stale:
+                with _contributor_ts_refresh_lock:
+                    if repo_key not in _contributor_ts_refresh_in_progress:
+                        _contributor_ts_refresh_in_progress.add(repo_key)
+                        thread = threading.Thread(
+                            target=_background_refresh_contributor_ts,
+                            args=(owner, repo, repo_key),
+                            daemon=True
+                        )
+                        thread.start()
+            return jsonify({"contributors": cached["data"]})
+
+        # No cache: synchronous fetch
+        data = _fetch_contributor_timeseries(owner, repo)
+        if data:
+            contributor_ts_cache_db.save_cache(repo_key, data)
+        return jsonify({"contributors": data})
+
+    except Exception as e:
+        logger.error(f"Failed to fetch contributor timeseries for {repo_key}: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -1672,9 +2150,12 @@ def fetch_review_stats(owner, repo):
 
 @app.route("/api/clear-cache", methods=["POST"])
 def clear_cache():
-    """Clear the in-memory cache."""
+    """Clear the in-memory cache and SQLite caches."""
     global cache
     cache = {}
+    workflow_cache_db.clear()
+    contributor_ts_cache_db.clear()
+    code_activity_cache_db.clear()
     return jsonify({"message": "Cache cleared"})
 
 
@@ -1683,13 +2164,12 @@ def get_merge_queue():
     """Get all items in the merge queue with fresh PR states and new commits info."""
     try:
         queue_items = queue_db.get_queue()
-        # Convert to expected format
-        queue = []
-        for item in queue_items:
-            # Get note count for this item
-            notes_count = queue_db.get_notes_count(item["id"])
+        if not queue_items:
+            return jsonify({"queue": []})
 
-            # Fetch fresh PR state from GitHub
+        def enrich_queue_item(item):
+            """Enrich a single queue item with GitHub data and review info."""
+            notes_count = queue_db.get_notes_count(item["id"])
             repo_parts = item["repo"].split("/")
             pr_state = None
             has_new_commits = False
@@ -1697,15 +2177,14 @@ def get_merge_queue():
             current_sha = None
             review_score = None
             has_review = False
-
             review_id = None
             inline_comments_posted = False
 
             if len(repo_parts) == 2:
                 owner, repo = repo_parts
-                pr_state = fetch_pr_state(owner, repo, item["pr_number"])
+                # Single gh call for both state and SHA
+                pr_state, current_sha = fetch_pr_state_and_sha(owner, repo, item["pr_number"])
 
-                # Check for new commits since last review and get review score
                 latest_review = reviews_db.get_latest_review_for_pr(item["repo"], item["pr_number"])
                 if latest_review:
                     has_review = True
@@ -1714,13 +2193,12 @@ def get_merge_queue():
                     inline_comments_posted = latest_review.get("inline_comments_posted", False)
                     if latest_review.get("head_commit_sha"):
                         last_reviewed_sha = latest_review["head_commit_sha"]
-                        current_sha = fetch_pr_head_sha(owner, repo, item["pr_number"])
                         if current_sha and last_reviewed_sha:
                             has_new_commits = current_sha != last_reviewed_sha
             else:
-                pr_state = item.get("pr_state")  # Fall back to stored state
+                pr_state = item.get("pr_state")
 
-            queue.append({
+            return {
                 "id": item["id"],
                 "number": item["pr_number"],
                 "title": item["pr_title"],
@@ -1739,7 +2217,12 @@ def get_merge_queue():
                 "reviewScore": review_score,
                 "reviewId": review_id,
                 "inlineCommentsPosted": inline_comments_posted
-            })
+            }
+
+        # Fetch GitHub data for all queue items in parallel
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            queue = list(executor.map(enrich_queue_item, queue_items))
+
         return jsonify({"queue": queue})
     except Exception as e:
         logger.error(f"Error getting merge queue: {e}")
@@ -1759,11 +2242,11 @@ def add_to_merge_queue():
             if field not in pr_data:
                 return jsonify({"error": f"Missing required field: {field}"}), 400
 
-        # Fetch current PR state
+        # Fetch current PR state and SHA in one call
         repo_parts = pr_data["repo"].split("/")
         pr_state = None
         if len(repo_parts) == 2:
-            pr_state = fetch_pr_state(repo_parts[0], repo_parts[1], pr_data["number"])
+            pr_state, _ = fetch_pr_state_and_sha(repo_parts[0], repo_parts[1], pr_data["number"])
 
         # Add to database
         item = queue_db.add_to_queue(
@@ -2175,7 +2658,6 @@ def post_inline_comments(review_id):
             comments.append(comment)
 
         # Post the review with inline comments using gh api
-        # Build the request body
         review_body = {
             "commit_id": current_sha,
             "event": "COMMENT",
@@ -2184,7 +2666,6 @@ def post_inline_comments(review_id):
         }
 
         try:
-            # Use gh api to post the review
             result = subprocess.run(
                 [
                     "gh", "api",
@@ -2199,11 +2680,44 @@ def post_inline_comments(review_id):
             )
             logger.info(f"Posted inline comments for review {review_id}: {result.stdout[:200]}")
         except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to post inline comments: {e.stderr}")
-            return jsonify({
-                "error": f"Failed to post comments to GitHub: {e.stderr}",
-                "issues_parsed": len(issues)
-            }), 500
+            logger.warning(f"Line-level comments failed, falling back to file-level: {e.stderr[:200]}")
+            # Fallback: post as file-level comments (subject_type: file) when
+            # line numbers are approximate and don't match the actual diff
+            fallback_comments = []
+            for issue in issues:
+                fallback_comments.append({
+                    "path": issue["path"],
+                    "body": issue["body"] + f"\n\n*(Lines ~{issue['start_line']}-{issue['end_line']})*",
+                    "subject_type": "file"
+                })
+
+            review_body_fallback = {
+                "commit_id": current_sha,
+                "event": "COMMENT",
+                "body": f"**Code Review Critical Issues** ({len(issues)} issue(s) flagged)",
+                "comments": fallback_comments
+            }
+
+            try:
+                result = subprocess.run(
+                    [
+                        "gh", "api",
+                        f"repos/{owner}/{repo_name}/pulls/{pr_number}/reviews",
+                        "--method", "POST",
+                        "--input", "-"
+                    ],
+                    input=json.dumps(review_body_fallback),
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                logger.info(f"Posted file-level comments for review {review_id}: {result.stdout[:200]}")
+            except subprocess.CalledProcessError as e2:
+                logger.error(f"Failed to post inline comments (both attempts): {e2.stderr}")
+                return jsonify({
+                    "error": f"Failed to post comments to GitHub: {e2.stderr}",
+                    "issues_parsed": len(issues)
+                }), 500
 
         # Update the review in database
         reviews_db.update_inline_comments_posted(review_id, True)
@@ -2663,7 +3177,37 @@ def get_review_status_endpoint(owner, repo, pr_number):
     })
 
 
+def _startup_refresh_workflow_caches():
+    """Background task: refresh any stale workflow caches on startup."""
+    ttl_minutes = config.get("workflow_cache_ttl_minutes", 60)
+    try:
+        repos = workflow_cache_db.get_all_repos()
+        for repo_key in repos:
+            if workflow_cache_db.is_stale(repo_key, ttl_minutes):
+                parts = repo_key.split("/", 1)
+                if len(parts) == 2:
+                    owner, repo = parts
+                    with _workflow_refresh_lock:
+                        if repo_key not in _workflow_refresh_in_progress:
+                            _workflow_refresh_in_progress.add(repo_key)
+                    try:
+                        logger.info(f"Startup: refreshing stale workflow cache for {repo_key}")
+                        data = _fetch_workflow_data(owner, repo)
+                        workflow_cache_db.save_cache(repo_key, data)
+                        logger.info(f"Startup: refreshed {repo_key} with {len(data['runs'])} runs")
+                    except Exception as e:
+                        logger.error(f"Startup: failed to refresh {repo_key}: {e}")
+                    finally:
+                        with _workflow_refresh_lock:
+                            _workflow_refresh_in_progress.discard(repo_key)
+    except Exception as e:
+        logger.error(f"Startup workflow cache refresh failed: {e}")
+
+
 if __name__ == "__main__":
+    # Refresh stale workflow caches in background on startup
+    threading.Thread(target=_startup_refresh_workflow_caches, daemon=True).start()
+
     app.run(
         host=config.get("host", "127.0.0.1"),
         port=config.get("port", 5050),

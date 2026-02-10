@@ -27,7 +27,7 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
 - **PR Lifecycle Insights**: Track time-to-merge, time-to-first-review, and stale PR detection
 - **Code Activity Visualization**: Weekly commit frequency, code churn, and owner vs. community participation
 - **Zero Authentication Setup**: Leverages existing GitHub CLI (`gh`) authentication
-- **Lightweight Deployment**: Single-file Flask backend with CDN-loaded frontend dependencies
+- **Lightweight Deployment**: React + Vite frontend with Flask API backend
 
 ### Target Users
 
@@ -46,7 +46,7 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
 +-------------------+     +-------------------+     +-------------------+
 |                   |     |                   |     |                   |
 |   Browser/Client  |<--->|   Flask Backend   |<--->|   GitHub CLI      |
-|   (Vue.js 3 SPA)  |     |   (app.py)        |     |   (gh)            |
+|   (React SPA)     |     |   (app.py)        |     |   (gh)            |
 |                   |     |                   |     |                   |
 +-------------------+     +-------------------+     +-------------------+
         |                         |                         |
@@ -54,9 +54,9 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
         v                         v                         v
 +-------------------+     +-------------------+     +-------------------+
 |                   |     |                   |     |                   |
-|   static/         |     |   In-Memory       |     |   GitHub API      |
-|   - js/app.js     |     |   - Cache (TTL)   |     |   (via gh CLI)    |
-|   - css/styles.css|     |   - Active Reviews|     |                   |
+|   frontend/dist/  |     |   In-Memory       |     |   GitHub API      |
+|   (Vite build)    |     |   - Cache (TTL)   |     |   (via gh CLI)    |
+|                   |     |   - Active Reviews|     |                   |
 |                   |     |                   |     |                   |
 +-------------------+     +-------------------+     +-------------------+
         |                         |
@@ -86,8 +86,8 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
 1. User Action (e.g., select repository)
          |
          v
-2. Vue.js Frontend (app.js)
-   - Updates reactive state
+2. React Frontend
+   - Updates Zustand stores
    - Constructs API request with filters
          |
          v
@@ -109,9 +109,9 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
    - Returns JSON to frontend
          |
          v
-6. Vue.js Frontend
-   - Updates reactive state
-   - Renders UI components
+6. React Frontend
+   - Updates Zustand stores
+   - Renders React components
 ```
 
 ### Backend Components (Flask)
@@ -141,6 +141,11 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
 | `fetch_review_stats()` | Collects review activity across PRs |
 | `fetch_github_stats_api()` | Generic GitHub stats API fetcher with 202-retry pattern and configurable retries |
 | `fetch_pr_review_times()` | Enriches PRs with review timing data using ThreadPoolExecutor; cached in SQLite with 2-hour TTL |
+| `_fetch_contributor_timeseries()` | Fetches and transforms per-contributor weekly time series from GitHub stats/contributors API |
+| `_background_refresh_contributor_ts()` | Background daemon thread for stale-while-revalidate contributor TS cache refresh |
+| `_fetch_code_activity_data()` | Fetches and processes all 52 weeks of code activity from 3 GitHub stats APIs in parallel |
+| `_background_refresh_code_activity()` | Background daemon thread for stale-while-revalidate code activity cache refresh |
+| `_compute_activity_summary()` | Computes summary stats (totals, peak week, owner %) from sliced activity data |
 | `_check_review_status()` | Checks and updates status of a review subprocess |
 | `_start_review_process()` | Spawns Claude CLI subprocess for code review |
 
@@ -159,6 +164,9 @@ The database module provides SQLite-based persistence for reviews and merge queu
 | `MergeQueueDB` | Manages merge queue persistence and ordering |
 | `DevStatsDB` | Caches developer statistics with 4-hour TTL for improved performance |
 | `LifecycleCacheDB` | Caches PR lifecycle and review timing data with 2-hour TTL |
+| `WorkflowCacheDB` | Caches workflow runs data with configurable TTL (default 1 hour) for stale-while-revalidate serving |
+| `ContributorTimeSeriesCacheDB` | Caches per-contributor weekly time series data with 24-hour TTL for stale-while-revalidate serving |
+| `CodeActivityCacheDB` | Caches full 52-week code activity data with 24-hour TTL for stale-while-revalidate serving |
 
 #### Database Schema
 
@@ -251,6 +259,30 @@ CREATE TABLE pr_lifecycle_cache (
     data TEXT NOT NULL,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Workflow cache table: Caches unfiltered workflow runs for fast filtered queries
+CREATE TABLE workflow_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL UNIQUE,
+    data TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Contributor time series cache table: Caches per-contributor weekly stats
+CREATE TABLE contributor_timeseries_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL UNIQUE,
+    data TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Code activity cache table: Caches full 52-week code activity data
+CREATE TABLE code_activity_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL UNIQUE,
+    data TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
 #### ReviewsDB Methods
@@ -294,6 +326,34 @@ CREATE TABLE pr_lifecycle_cache (
 | `save_cache()` | Saves enriched PR lifecycle data with upsert (INSERT ON CONFLICT UPDATE) |
 | `is_stale()` | Checks if cached data is older than TTL (default 2 hours) |
 
+#### WorkflowCacheDB Methods
+
+| Method | Description |
+|--------|-------------|
+| `get_cached()` | Returns cached workflow data (JSON blob with runs, workflows, all_time_total) for a repository |
+| `save_cache()` | Saves workflow data with upsert (INSERT ON CONFLICT UPDATE) |
+| `is_stale()` | Checks if cached data is older than configurable TTL (default 60 minutes) |
+| `get_all_repos()` | Returns list of all repos with cached data (used by startup refresh and seed script) |
+| `clear()` | Removes all workflow cache entries (called by clear-cache endpoint) |
+
+#### ContributorTimeSeriesCacheDB Methods
+
+| Method | Description |
+|--------|-------------|
+| `get_cached()` | Returns cached per-contributor weekly time series data (JSON blob) for a repository |
+| `save_cache()` | Saves contributor time series data with upsert (INSERT ON CONFLICT UPDATE) |
+| `is_stale()` | Checks if cached data is older than TTL (default 24 hours) |
+| `clear()` | Removes all contributor time series cache entries |
+
+#### CodeActivityCacheDB Methods
+
+| Method | Description |
+|--------|-------------|
+| `get_cached()` | Returns cached code activity data (JSON blob with weekly_commits, code_changes, owner_commits, community_commits) for a repository |
+| `save_cache()` | Saves code activity data with upsert (INSERT ON CONFLICT UPDATE) |
+| `is_stale()` | Checks if cached data is older than TTL (default 24 hours) |
+| `clear()` | Removes all code activity cache entries |
+
 **Note**: When returning cached stats, the backend transforms field names to match the frontend expectations:
 - `username` → `login`
 - `total_prs` → `prs_authored`
@@ -329,231 +389,19 @@ The migration module handles one-time import of existing data into the SQLite da
 - **Metadata Parsing**: Extracts PR number, repo, and timestamp from file names
 - **Idempotent Execution**: Tracks migrations in `migrations` table to prevent duplicate runs
 
-### Frontend Components (Vue.js 3)
+### Frontend (React + TypeScript)
 
-**File**: `/Users/jvargas714/Documents/dev/gh-pr-explorer/static/js/app.js`
+**Directory**: `/Users/jvargas714/Documents/dev/gh-pr-explorer/frontend/src/`
 
-The frontend uses Vue.js 3 Composition API with the following reactive state structure:
+The frontend uses React 18 with TypeScript, built via Vite. State management uses Zustand stores.
 
-#### State Management
-
-```javascript
-// Theme
-darkMode: ref(true)
-
-// Account/Organization Selection
-accounts: ref([])
-selectedAccount: ref(null)
-
-// Repository Selection
-repos: ref([])
-selectedRepo: ref(null)
-repoSearch: ref('')
-
-// Filter State
-filters: reactive({
-    state: 'open',
-    author: '',
-    assignee: '',
-    labels: [],
-    // ... 40+ filter properties
-})
-
-// Pull Requests
-prs: ref([])
-loading: ref(false)
-error: ref(null)
-
-// Pagination
-currentPage: ref(1)
-prsPerPage: 20  // constant
-
-// View Toggle
-activeView: ref('prs')          // 'prs', 'analytics', 'workflows'
-activeAnalyticsTab: ref('stats') // 'stats', 'lifecycle', 'activity', 'responsiveness'
-
-// Developer Statistics
-developerStats: ref([])
-statsLoading: ref(false)
-statsSortBy: ref('commits')
-
-// Branch Divergence
-prDivergence: ref({})            // key: PR number, value: {status, ahead_by, behind_by}
-divergenceLoading: ref(false)
-
-// CI/Workflows
-workflowRuns: ref([])
-workflowsLoading: ref(false)
-workflowsError: ref(null)
-workflowsList: ref([])
-workflowStats: ref(null)
-workflowFilters: reactive({ workflow: '', branch: '', event: '', conclusion: '' })
-workflowSortBy: ref('created_at')
-workflowSortDirection: ref('desc')
-workflowPage: ref(1)
-workflowsPerPage: 25  // constant
-
-// Code Activity
-codeActivity: ref(null)
-activityLoading: ref(false)
-activityError: ref(null)
-activityTimeframe: ref(52)       // weeks: 4, 13, 26, 52
-
-// PR Lifecycle Metrics
-lifecycleMetrics: ref(null)
-lifecycleLoading: ref(false)
-lifecycleError: ref(null)
-
-// Review Responsiveness
-reviewResponsiveness: ref(null)
-responsivenessLoading: ref(false)
-responsivenessError: ref(null)
-
-// Merge Queue
-mergeQueue: ref([])
-showQueuePanel: ref(false)
-
-// Code Reviews
-activeReviews: ref({})  // key: "owner/repo/pr_number"
-reviewPollingInterval: ref(null)
-reviewErrorModal: reactive({
-    show: false,
-    prNumber: null,
-    prTitle: '',
-    errorOutput: '',
-    exitCode: null
-})
-
-// Review Viewer
-showReviewViewer: ref(false)
-reviewViewerContent: ref(null)
-copySuccess: ref(false)  // Feedback for copy button
-prReviewCache: ref({})   // Cache: "owner/repo/pr_number" -> review info
-
-// Inline Comments
-postingInlineComments: ref({})  // key: review_id, value: boolean (loading state)
-```
-
-#### Computed Properties
-
-| Property | Description |
-|----------|-------------|
-| `activeFiltersCount` | Count of non-default filter values |
-| `sortedDeveloperStats` | Developer stats sorted by selected column |
-| `sortedLifecyclePRs` | Lifecycle PRs sorted by selected column, null values pushed to bottom |
-| `sortedReviewerLeaderboard` | Reviewer leaderboard sorted by selected column |
-| `sortedWorkflowRuns` | Workflow runs sorted by selected column |
-| `paginatedWorkflowRuns` | Slice of sorted workflow runs for current page (25 per page) |
-| `totalWorkflowPages` | Total pages for workflow runs pagination |
-| `filteredRepos` | Repository list filtered by search term |
-| `totalPages` | Total number of pages based on PR count and page size |
-| `paginatedPRs` | Slice of PRs array for current page |
-
-#### Key Methods
-
-| Method | Description |
-|--------|-------------|
-| `fetchAccounts()` | Loads user's personal account and organizations |
-| `fetchRepos()` | Loads repositories for selected account |
-| `fetchPRs()` | Fetches PRs with current filter configuration |
-| `fetchDeveloperStats()` | Loads aggregated developer statistics |
-| `fetchRepoMetadata()` | Parallel fetch of contributors, labels, branches, milestones, teams |
-| `resetFilters()` | Resets all filters to default values |
-| `setActiveView(view)` | Switches main tab (prs, analytics, workflows); lazy-loads data |
-| `setAnalyticsTab(tab)` | Switches analytics sub-tab; lazy-loads data for each sub-tab |
-| `refreshCurrentView()` | Re-fetches data for the currently active view/tab |
-
-**Branch Divergence Methods**:
-
-| Method | Description |
-|--------|-------------|
-| `fetchDivergenceForPRs()` | Batch-fetches ahead/behind data for all open PRs |
-| `getDivergenceInfo(prNumber)` | Returns divergence data for a specific PR |
-| `getDivergenceClass(prNumber)` | Returns CSS class based on behind count (current/slightly-behind/far-behind) |
-
-**CI/Workflow Methods**:
-
-| Method | Description |
-|--------|-------------|
-| `fetchWorkflowRuns()` | Loads workflow runs with current filters |
-| `resetWorkflowFilters()` | Resets workflow filters and re-fetches |
-| `sortWorkflows(column)` | Sorts workflow runs table by column |
-| `formatDuration(seconds)` | Formats seconds into human-readable duration (e.g., "3m 45s") |
-| `getWorkflowConclusionClass(conclusion)` | Returns CSS class for workflow run conclusion |
-
-**Analytics Methods**:
-
-| Method | Description |
-|--------|-------------|
-| `fetchCodeActivity()` | Loads code activity data with timeframe parameter |
-| `fetchLifecycleMetrics()` | Loads PR lifecycle metrics (time-to-merge, stale PRs) |
-| `fetchReviewResponsiveness()` | Loads per-reviewer responsiveness metrics |
-| `formatHours(hours)` | Formats hours into human-readable string (e.g., "2d 5h") |
-| `getBarHeight(value, maxValue)` | Computes CSS bar height for chart visualizations |
-| `sortLifecyclePRs(column)` | Sorts lifecycle PR table by column |
-| `sortResponsiveness(column)` | Sorts responsiveness leaderboard by column |
-
-**Merge Queue Methods**:
-
-| Method | Description |
-|--------|-------------|
-| `fetchMergeQueue()` | Loads merge queue from backend |
-| `addToQueue(pr)` | Adds a PR to the merge queue |
-| `removeFromQueue(prNumber, repo)` | Removes a PR from the queue |
-| `moveQueueItem(index, direction)` | Reorders items in the queue |
-| `isInQueue(prNumber)` | Checks if a PR is already queued |
-
-**Code Review Methods**:
-
-| Method | Description |
-|--------|-------------|
-| `fetchReviews()` | Fetches all active/completed reviews from backend |
-| `startReview(pr)` | Initiates a Claude CLI code review for a PR |
-| `cancelReview(pr)` | Cancels a running review process |
-| `getReviewStatus(prNumber)` | Gets current status of a review |
-| `handleReviewClick(pr)` | Click handler for review button (start/cancel/show error) |
-| `showReviewError(pr)` | Opens modal displaying review error details |
-
-**Review Viewer Methods**:
-
-| Method | Description |
-|--------|-------------|
-| `viewReviewDetail(reviewId)` | Opens review viewer modal with full content |
-| `closeReviewViewer()` | Closes the review viewer modal |
-| `copyReviewContent()` | Copies raw markdown content to clipboard |
-
-**Inline Comments Methods**:
-
-| Method | Description |
-|--------|-------------|
-| `postInlineComments(reviewId)` | Posts critical issues as inline comments on GitHub |
-| `postQueueItemInlineComments(item)` | Posts inline comments for a merge queue item |
-| `isPostingInlineComments(reviewId)` | Checks if inline comments are being posted |
-| `canPostInlineComments(prNumber)` | Checks if inline comments can be posted for a PR |
-| `getLatestReviewId(prNumber)` | Gets the review ID for the latest review of a PR |
-
-### UI Template
-
-**File**: `/Users/jvargas714/Documents/dev/gh-pr-explorer/templates/index.html`
-
-The template is a Jinja2 file containing the Vue.js single-file component structure:
-
-| Section | Description |
-|---------|-------------|
-| Header | Logo, title, merge queue toggle, history toggle, theme toggle button |
-| Account Selector | Buttons for personal account and organizations |
-| Repository Selector | Searchable dropdown with repo list |
-| Filter Panel | Tabbed interface with 5 filter categories |
-| Main View Toggle | 3-tab switcher: Pull Requests, Analytics, CI/Workflows |
-| PR View | PR cards with badges, pagination, divergence indicators |
-| Analytics View | 4 sub-tabs: Stats, Lifecycle, Activity, Reviews |
-| CI/Workflows View | Workflow filter bar, stat cards, and runs table |
-| PR Card Actions | Queue button, review button, description button per PR |
-| Description Modal | Markdown-rendered PR description popup |
-| Review Error Modal | Error details when a code review fails |
-| Queue Panel | Slide-out panel for managing merge queue |
-| History Panel | Slide-out panel for review history browsing |
-| Welcome Section | Onboarding message for unauthenticated users |
+| Directory | Description |
+|-----------|-------------|
+| `api/` | Type-safe API layer matching all backend endpoints |
+| `components/` | React components organized by feature area |
+| `stores/` | Zustand stores for state management |
+| `styles/` | CSS modules and global styles |
+| `types/` | TypeScript type definitions |
 
 #### Main Tab Architecture
 
@@ -562,7 +410,7 @@ The application uses a 3-tab layout as the primary navigation:
 | Tab | View Key | Description |
 |-----|----------|-------------|
 | Pull Requests | `prs` | PR list with filters, pagination, and action buttons |
-| Analytics | `analytics` | 4 sub-tabs for developer and repository analytics |
+| Analytics | `analytics` | 5 sub-tabs for developer and repository analytics |
 | CI/Workflows | `workflows` | Workflow run history with filters and aggregate stats |
 
 #### Analytics Sub-tabs
@@ -571,12 +419,13 @@ The application uses a 3-tab layout as the primary navigation:
 |---------|---------|-------------|
 | Stats | `stats` | Developer contribution statistics table |
 | Lifecycle | `lifecycle` | PR lifecycle metrics, merge time distribution, stale PR detection |
-| Activity | `activity` | Code activity charts: commits, code changes, participation |
+| Activity | `activity` | Code activity charts: commits, code changes, top 5 contributors |
 | Reviews | `responsiveness` | Per-reviewer response times, leaderboard, bottleneck detection |
+| Contributors | `contributors` | Interactive per-contributor time series charts (commits, additions, deletions) |
 
 ### Styling
 
-**File**: `/Users/jvargas714/Documents/dev/gh-pr-explorer/static/css/styles.css`
+**Directory**: `/Users/jvargas714/Documents/dev/gh-pr-explorer/frontend/src/styles/`
 
 The CSS uses a modern design system with:
 
@@ -584,7 +433,8 @@ The CSS uses a modern design system with:
 - **Dark/Light Mode**: Full theme support via `.dark-mode` class
 - **Responsive Design**: Mobile-first with breakpoint at 768px
 - **Component Styles**: Modular styling for cards, buttons, tables, modals
-- **CSS-only Charts**: Bar charts and stacked charts using pure CSS (no chart library) with native tooltips
+- **CSS-only Charts**: Bar charts and stacked charts using pure CSS with native tooltips
+- **Recharts Line Charts**: Interactive line charts for contributor time series and top-5 activity view
 - **Column Tooltips**: `th[title]` cursor set to `help` for non-sortable headers; sortable headers use `pointer` cursor
 - **Reusable `.stat-cards` Grid**: 4-column responsive grid for summary stat cards
 - **Divergence Badges**: Color-coded branch behind indicators (green/yellow/red)
@@ -632,8 +482,8 @@ The PR list implements client-side pagination for improved performance and navig
 
 #### Implementation Details
 
-- **Client-side**: Pagination is handled entirely in the browser using Vue.js computed properties
-- **paginatedPRs**: Computed property that slices the full PR array for current page
+- **Client-side**: Pagination is handled entirely in the browser using React state and memoized selectors
+- **paginatedPRs**: Derived from the full PR array, sliced for the current page
 - **Performance**: Avoids additional API calls when navigating pages
 - **State Reset**: `currentPage` resets to 1 when `fetchPRs()` is called
 
@@ -762,11 +612,11 @@ Identifies open PRs with no activity in the last 14 days. Displays a warning lis
 
 #### PR Lifecycle Table
 
-Fully sortable table of all analyzed PRs. All six columns (PR#, Author, State, Time to Review, Time to Merge, First Reviewer) support click-to-sort with ascending/descending toggle and visual sort indicators. Column headers include tooltips describing each metric. Null values are pushed to the bottom of sorted results. Sorting is performed client-side via the `sortedLifecyclePRs` computed property.
+Fully sortable table of all analyzed PRs. All six columns (PR#, Author, State, Time to Review, Time to Merge, First Reviewer) support click-to-sort with ascending/descending toggle and visual sort indicators. Column headers include tooltips describing each metric. Null values are pushed to the bottom of sorted results. Sorting is performed client-side.
 
 ### Code Activity (Analytics > Activity)
 
-The Activity sub-tab visualizes repository code activity over a configurable timeframe using CSS-only bar charts.
+The Activity sub-tab visualizes repository code activity over a configurable timeframe using CSS-only bar charts and a recharts line chart.
 
 #### Timeframe Toggle
 
@@ -787,11 +637,11 @@ Users can select the analysis window: 1 month (4 weeks), 3 months (13 weeks), 6 
 
 | Chart | Type | Description |
 |-------|------|-------------|
-| Weekly Commits | Bar chart | Vertical bars showing commit count per week |
-| Code Changes | Stacked bar chart | Additions (green) and deletions (red) per week |
-| Participation | Grouped bars | Owner commits vs. community commits per week |
+| Weekly Commits | Bar chart (CSS) | Vertical bars showing commit count per week |
+| Code Changes | Stacked bar chart (CSS) | Additions (green) and deletions (red) per week |
+| Top 5 Contributors | Line chart (recharts) | Weekly commit counts for the top 5 contributors by total commits |
 
-All charts are implemented with pure CSS (no JavaScript chart libraries). Bar heights are computed as percentages of the maximum value in each dataset.
+Weekly Commits and Code Changes charts are implemented with pure CSS. The Top 5 Contributors chart uses recharts `LineChart` with interactive tooltip and legend.
 
 #### Data Sources
 
@@ -803,7 +653,24 @@ Uses three GitHub Stats API endpoints fetched via the `fetch_github_stats_api()`
 | `stats/commit_activity` | Weekly commit totals and per-day breakdowns |
 | `stats/participation` | Owner vs. all-contributor weekly commit counts |
 
-Data is cached in-memory with a 10-minute TTL (via the `@cached(ttl_seconds=600)` decorator).
+Data is cached in SQLite with a 24-hour TTL using stale-while-revalidate. The full 52-week dataset is cached once; the `?weeks=N` parameter slices the cached data in Python, so switching timeframes does not trigger re-fetches.
+
+### Per-Contributor Time Series (Analytics > Contributors)
+
+The Contributors sub-tab provides interactive line charts showing per-contributor weekly activity over time. Data is sourced from the GitHub `stats/contributors` API and cached in SQLite with a 24-hour TTL using stale-while-revalidate.
+
+#### Controls
+
+- **Timeframe Selector**: 1 month (4 weeks), 3 months (13 weeks), 6 months (26 weeks), 1 year (52 weeks)
+- **Metric Selector**: Commits, Lines Added, Lines Deleted
+- **Legend Toggle**: Click a contributor in the legend to show/hide their line
+
+#### Chart
+
+A recharts `LineChart` at 400px height with:
+- One `Line` per contributor with distinct colors from a 10-color palette
+- `CartesianGrid`, `XAxis` (week dates), `YAxis`, interactive `Tooltip`, and clickable `Legend`
+- Theme-aware colors adapting to dark/light mode
 
 ### Review Responsiveness (Analytics > Reviews)
 
@@ -819,7 +686,7 @@ The Reviews sub-tab shows per-reviewer response times and identifies review bott
 
 #### Reviewer Leaderboard
 
-Fully sortable table of all reviewers. All columns support click-to-sort with ascending/descending toggle, visual sort indicators (▼/▲/⇅), and active column highlighting. Column headers include tooltips. Sorting is performed client-side via the `sortedReviewerLeaderboard` computed property. Columns:
+Fully sortable table of all reviewers. All columns support click-to-sort with ascending/descending toggle, visual sort indicators, and active column highlighting. Column headers include tooltips. Sorting is performed client-side. Columns:
 
 | Column | Description |
 |--------|-------------|
@@ -1616,6 +1483,41 @@ Returns code activity statistics including commit frequency, code changes, and o
 
 ---
 
+### Contributor Time Series
+
+**GET** `/api/repos/<owner>/<repo>/contributor-timeseries`
+
+Returns per-contributor weekly time series data (commits, additions, deletions). Cached in SQLite with 24-hour TTL using stale-while-revalidate pattern.
+
+**Query Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `refresh` | string | - | Set to "true" to force a synchronous refresh |
+
+**Response**:
+```json
+{
+  "contributors": [
+    {
+      "login": "developer1",
+      "avatar_url": "https://...",
+      "total": 150,
+      "weeks": [
+        {
+          "week": "2025-01-06",
+          "commits": 5,
+          "additions": 100,
+          "deletions": 50
+        }
+      ]
+    }
+  ]
+}
+```
+
+---
+
 ### PR Lifecycle Metrics
 
 **GET** `/api/repos/<owner>/<repo>/lifecycle-metrics`
@@ -2151,21 +2053,27 @@ Clears the in-memory cache.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `port` | integer | 5050 | HTTP server port |
-| `host` | string | "127.0.0.1" | HTTP server bind address |
+| `port` | integer | 5714 | HTTP server port (Flask API) |
+| `host` | string | "localhost" | HTTP server bind address |
+| `frontend_port` | integer | 3050 | Vite dev server port |
 | `debug` | boolean | false | Flask debug mode |
 | `default_per_page` | integer | 30 | Default PR results limit |
 | `cache_ttl_seconds` | integer | 300 | Cache time-to-live in seconds (5 minutes) |
+| `workflow_cache_ttl_minutes` | integer | 60 | Workflow cache TTL in minutes (stale-while-revalidate) |
+| `workflow_cache_max_runs` | integer | 1000 | Maximum unfiltered workflow runs to cache per repo |
 
 ### Example Configuration
 
 ```json
 {
-  "port": 5050,
-  "host": "127.0.0.1",
+  "port": 5714,
+  "host": "localhost",
+  "frontend_port": 3050,
   "debug": false,
   "default_per_page": 30,
-  "cache_ttl_seconds": 300
+  "cache_ttl_seconds": 300,
+  "workflow_cache_ttl_minutes": 60,
+  "workflow_cache_max_runs": 1000
 }
 ```
 
@@ -2262,6 +2170,36 @@ def cached(ttl_seconds=None):
 - **TTL**: Configurable, default 5 minutes
 - **Key Generation**: Function name + arguments + keyword arguments + request query string
 - **Invalidation**: Manual via `/api/clear-cache` endpoint or process restart
+
+### Workflow Cache (SQLite + Stale-While-Revalidate)
+
+The CI/Workflows endpoint uses a dedicated SQLite cache for persistent, filter-independent caching of workflow runs.
+
+**Strategy**: Cache 1000 unfiltered runs per repo in SQLite. Apply filters in Python on every request. Background refresh on a configurable interval (default 1 hour) keeps data fresh.
+
+**How It Works**:
+1. On first request for a repo, fetch up to 1000 unfiltered runs via parallel API calls (10 pages max, batched through `ThreadPoolExecutor(max_workers=5)`), save to SQLite
+2. On subsequent requests, serve from SQLite cache (~5-10ms) with Python-side filtering
+3. When cache is stale, return stale data immediately and trigger background refresh
+4. Changing filters does not trigger a re-fetch — all filtering happens on the cached data
+5. On server startup, a daemon thread checks for stale cached repos and refreshes them
+
+**Parallel Fetching**: Pages are fetched in 3 batches (pages 1-3, 4-8, 9-10) to minimize wall-clock time. Each batch uses up to 5 parallel workers. Fetching stops early if any page returns < 100 runs.
+
+**Pre-seeding**: The `seed_workflow_cache.py` script can pre-populate the cache before launching the app:
+```bash
+python seed_workflow_cache.py owner/repo1 owner/repo2    # seed specific repos
+python seed_workflow_cache.py --refresh                   # re-seed all cached repos
+```
+
+**Performance Impact**:
+
+| Scenario | Before | After |
+|----------|--------|-------|
+| Cold fetch | 4-5 sequential calls (~4-8s) | 12 calls in parallel batches (~3-5s) |
+| Same filters (cached) | In-memory hit (~0ms) | SQLite hit + filter (~5-10ms) |
+| Different filters (cached) | Full re-fetch (~4-8s) | SQLite hit + filter (~5-10ms) |
+| After process restart | Full re-fetch per combo | SQLite hit (~5-10ms) |
 
 ### Error Handling
 
@@ -2405,7 +2343,7 @@ process = subprocess.Popen(
 3. **Export Functionality**: Export PR lists and stats to CSV/JSON
 4. **Notification Integration**: Browser notifications for PR updates
 5. **Multi-Repository View**: View PRs across multiple repositories simultaneously
-6. ~~**Custom Dashboards**: User-configurable dashboard widgets~~ **Implemented**: Analytics tab with 4 sub-tabs (Stats, Lifecycle, Activity, Reviews) and CI/Workflows tab
+6. ~~**Custom Dashboards**: User-configurable dashboard widgets~~ **Implemented**: Analytics tab with 5 sub-tabs (Stats, Lifecycle, Activity, Reviews, Contributors) and CI/Workflows tab
 7. **PR Templates**: Quick filter templates (e.g., "My Open PRs", "Needs My Review")
 8. ~~**CI/Workflow Visibility**: View workflow run history and pass/fail rates~~ **Implemented**: CI/Workflows tab with filters, stats cards, and runs table
 9. ~~**PR Lifecycle Metrics**: Time-to-merge and review responsiveness tracking~~ **Implemented**: Lifecycle and Reviews sub-tabs in Analytics
@@ -2420,7 +2358,7 @@ process = subprocess.Popen(
 
 #### Technical
 
-1. **TypeScript**: Add type safety to frontend code
+1. ~~**TypeScript**: Add type safety to frontend code~~ **Implemented**: Frontend rewritten in React + TypeScript
 2. **Testing**: Add unit and integration tests
 3. **Docker Support**: Containerized deployment option
 4. **Authentication Options**: Support for multiple authentication methods
@@ -2445,7 +2383,7 @@ process = subprocess.Popen(
 14. **Lifecycle PR Limit**: Lifecycle and review responsiveness metrics analyze the most recent 50 PRs only
 15. **Divergence API Calls**: Branch divergence fetches one compare API call per open PR, which may be slow for repositories with many open PRs
 16. **Code Activity Max Range**: Code activity is limited to 52 weeks maximum (GitHub API limitation)
-17. **CSS-only Charts**: Visualizations use CSS bars with native browser tooltips on hover but no advanced interactivity (no click handlers, zoom, or drill-down)
+17. **Mixed Chart Rendering**: Activity bar charts use CSS-only rendering (no click handlers, zoom, or drill-down); Contributor time series charts use recharts with interactive tooltips and legend toggling
 
 ---
 
@@ -2459,56 +2397,81 @@ process = subprocess.Popen(
 - GitHub CLI (`gh`) - required for GitHub API access
 - Claude CLI (`claude`) - optional, required for code review feature
 
-**Frontend (CDN)**:
-- Vue.js 3 (production build)
-- marked.js 12.0.0 (Markdown rendering)
+**Frontend**:
+- React 18 + TypeScript
+- Vite (build tool)
+- Zustand (state management)
+- Recharts (interactive line charts)
+- Node.js 18+
 
 ### File Structure
 
 ```
 gh-pr-explorer/
 ├── app.py                 # Flask backend (main application)
-├── database.py            # SQLite database module (Reviews, MergeQueue, LifecycleCache, Migrations)
+├── database.py            # SQLite database module (Reviews, MergeQueue, LifecycleCache, WorkflowCache, Migrations)
 ├── migrate_data.py        # Data migration script for legacy JSON/markdown files
+├── seed_workflow_cache.py # Pre-seeds workflow cache for faster first load
 ├── pr_explorer.db         # SQLite database file (auto-created)
 ├── config.json            # Application configuration
 ├── requirements.txt       # Python dependencies
 ├── CLAUDE.md              # Development instructions
 ├── docs/
 │   └── DESIGN.md          # This document
-├── static/
-│   ├── css/
-│   │   └── styles.css     # Application styles
-│   └── js/
-│       └── app.js         # Vue.js application
-└── templates/
-    └── index.html         # Jinja2/Vue.js template
+├── frontend/
+│   ├── src/
+│   │   ├── api/           # Type-safe API modules
+│   │   ├── components/    # React components by feature
+│   │   ├── stores/        # Zustand state management
+│   │   ├── styles/        # CSS styles
+│   │   ├── types/         # TypeScript types
+│   │   ├── App.tsx        # Root component
+│   │   └── main.tsx       # Entry point
+│   ├── dist/              # Production build output (generated)
+│   ├── vite.config.ts     # Vite configuration
+│   ├── tsconfig.json      # TypeScript config
+│   └── package.json       # Frontend dependencies
 
 External Dependencies:
 ├── /Users/jvargas714/Documents/code-reviews/              # Code review output directory
 └── /Users/jvargas714/Documents/code-reviews/past-reviews/ # Historical reviews (migrated)
 ```
 
-**Note**: The `MQ/` folder with `merge_queue.json` has been deprecated. Merge queue data is now stored in the SQLite database.
+**Note**: The `MQ/` folder with `merge_queue.json` has been deprecated. Merge queue data is now stored in the SQLite database. The legacy `static/` and `templates/` directories have been removed as part of the migration to React + TypeScript.
 
 ### Running the Application
 
+#### Development Mode (two terminals)
+
 ```bash
-# Install dependencies
+# Terminal 1: Start the Flask API backend
 pip install -r requirements.txt
-
-# Ensure gh CLI is authenticated
 gh auth login
-
-# (Optional) For code review feature, ensure Claude CLI is available
-# See: https://claude.ai/claude-code
-
-# Start the server
 python app.py
+# API runs on http://127.0.0.1:5714
 
-# Access the application
-open http://127.0.0.1:5050
+# Terminal 2: Start the Vite dev server
+cd frontend
+npm install
+npm run dev
+# Frontend runs on http://localhost:3050 (proxies API to :5714)
 ```
+
+#### Production Mode
+
+```bash
+# Build the frontend
+cd frontend
+npm install
+npm run build
+
+# Start the Flask backend (serves built frontend from frontend/dist/)
+cd ..
+python app.py
+# Access at http://127.0.0.1:5714
+```
+
+**Note**: Ensure `gh` CLI is authenticated via `gh auth login`. For the code review feature, Claude CLI must also be installed and authenticated.
 
 ### Using the Code Review Feature
 

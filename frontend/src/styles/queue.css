@@ -1,0 +1,292 @@
+/* Merge Queue Panel Styles */
+
+/* Queue Overlay */
+.mx-queue-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 998;
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Queue Panel */
+.mx-queue-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 500px;
+  max-width: 90vw;
+  background: var(--mx-color-background);
+  border-left: 1px solid var(--mx-color-border);
+  box-shadow: var(--mx-shadow-lg);
+  z-index: 999;
+  display: flex;
+  flex-direction: column;
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* Panel Header */
+.mx-queue-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--mx-spacing-4);
+  border-bottom: 1px solid var(--mx-color-border);
+  background: var(--mx-color-surface);
+}
+
+.mx-queue-panel__title {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-spacing-2);
+}
+
+.mx-queue-panel__title h2 {
+  font-size: var(--mx-font-size-xl);
+  font-weight: var(--mx-font-weight-bold);
+  color: var(--mx-color-text-primary);
+  margin: 0;
+}
+
+.mx-queue-panel__count {
+  font-size: var(--mx-font-size-sm);
+  color: var(--mx-color-text-secondary);
+  background: var(--mx-color-background);
+  padding: 2px 8px;
+  border-radius: var(--mx-radius-full);
+}
+
+/* Panel Content */
+.mx-queue-panel__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--mx-spacing-4);
+}
+
+.mx-queue-panel__loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--mx-spacing-3);
+  padding: var(--mx-spacing-8);
+}
+
+.mx-queue-panel__loading p {
+  color: var(--mx-color-text-secondary);
+}
+
+/* Queue List */
+.mx-queue-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-spacing-3);
+}
+
+/* Queue Item */
+.mx-queue-item {
+  background: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  padding: var(--mx-spacing-3);
+  transition: var(--mx-transition-base);
+}
+
+.mx-queue-item:hover {
+  border-color: var(--mx-color-border-hover);
+  box-shadow: var(--mx-shadow-sm);
+}
+
+.mx-queue-item__header {
+  display: flex;
+  gap: var(--mx-spacing-3);
+  margin-bottom: var(--mx-spacing-2);
+}
+
+.mx-queue-item__position {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: var(--mx-color-primary);
+  color: white;
+  font-weight: var(--mx-font-weight-bold);
+  border-radius: var(--mx-radius-full);
+  flex-shrink: 0;
+}
+
+.mx-queue-item__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.mx-queue-item__title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-spacing-2);
+  margin-bottom: var(--mx-spacing-1);
+  flex-wrap: wrap;
+}
+
+.mx-queue-item__title {
+  font-size: var(--mx-font-size-base);
+  font-weight: var(--mx-font-weight-medium);
+  color: var(--mx-color-text-primary);
+  text-decoration: none;
+  transition: var(--mx-transition-base);
+}
+
+.mx-queue-item__title:hover {
+  color: var(--mx-color-primary);
+  text-decoration: underline;
+}
+
+.mx-queue-item__meta {
+  display: flex;
+  gap: var(--mx-spacing-2);
+  font-size: var(--mx-font-size-sm);
+  color: var(--mx-color-text-secondary);
+  flex-wrap: wrap;
+}
+
+.mx-queue-item__repo {
+  font-family: var(--mx-font-family-mono);
+}
+
+.mx-queue-item__stats {
+  display: flex;
+  gap: var(--mx-spacing-2);
+  margin-bottom: var(--mx-spacing-2);
+  font-size: var(--mx-font-size-sm);
+  font-weight: var(--mx-font-weight-medium);
+}
+
+.mx-queue-item__badges {
+  display: flex;
+  gap: var(--mx-spacing-2);
+  margin-bottom: var(--mx-spacing-2);
+  flex-wrap: wrap;
+}
+
+.mx-queue-item__actions {
+  display: flex;
+  gap: var(--mx-spacing-2);
+  padding-top: var(--mx-spacing-2);
+  border-top: 1px solid var(--mx-color-border);
+  flex-wrap: wrap;
+}
+
+/* Notes Modal */
+.mx-notes-modal__loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--mx-spacing-3);
+  padding: var(--mx-spacing-6);
+}
+
+.mx-notes-modal__list {
+  max-height: 400px;
+  overflow-y: auto;
+  margin-bottom: var(--mx-spacing-4);
+}
+
+.mx-notes-modal__empty {
+  text-align: center;
+  padding: var(--mx-spacing-6);
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-sm);
+}
+
+.mx-notes-modal__item {
+  background: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  padding: var(--mx-spacing-3);
+  margin-bottom: var(--mx-spacing-2);
+}
+
+.mx-notes-modal__item-content {
+  color: var(--mx-color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-bottom: var(--mx-spacing-2);
+}
+
+.mx-notes-modal__item-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.mx-notes-modal__item-time {
+  font-size: var(--mx-font-size-sm);
+  color: var(--mx-color-text-secondary);
+}
+
+.mx-notes-modal__add {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-spacing-2);
+  padding-top: var(--mx-spacing-3);
+  border-top: 1px solid var(--mx-color-border);
+}
+
+.mx-notes-modal__textarea {
+  width: 100%;
+  padding: var(--mx-spacing-2);
+  background: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  color: var(--mx-color-text-primary);
+  font-family: inherit;
+  font-size: var(--mx-font-size-sm);
+  resize: vertical;
+  min-height: 60px;
+  transition: var(--mx-transition-base);
+}
+
+.mx-notes-modal__textarea:focus {
+  outline: none;
+  border-color: var(--mx-color-primary);
+  box-shadow: 0 0 0 3px var(--mx-color-primary-alpha);
+}
+
+.mx-notes-modal__textarea::placeholder {
+  color: var(--mx-color-text-tertiary);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .mx-queue-panel {
+    width: 100vw;
+    max-width: 100vw;
+  }
+
+  .mx-queue-item__actions {
+    flex-direction: column;
+  }
+}

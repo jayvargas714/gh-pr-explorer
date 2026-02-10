@@ -18,3 +18,7 @@ pr_explorer.db
 
 # OS
 .DS_Store
+
+# Frontend (Node/React)
+node_modules/
+frontend/dist/

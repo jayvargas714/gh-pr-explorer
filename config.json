@@ -1,7 +1,10 @@
 {
-  "port": 5050,
-  "host": "127.0.0.1",
+  "port": 5714,
+  "host": "localhost",
+  "frontend_port": 3050,
   "debug": false,
   "default_per_page": 30,
-  "cache_ttl_seconds": 300
+  "cache_ttl_seconds": 300,
+  "workflow_cache_ttl_minutes": 60,
+  "workflow_cache_max_runs": 1000
 }
