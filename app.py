@@ -17,7 +17,7 @@ from functools import wraps
 from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
 
-from database import get_database, get_reviews_db, get_queue_db, get_settings_db, get_dev_stats_db, get_lifecycle_cache_db, get_workflow_cache_db, get_contributor_ts_cache_db
+from database import get_database, get_reviews_db, get_queue_db, get_settings_db, get_dev_stats_db, get_lifecycle_cache_db, get_workflow_cache_db, get_contributor_ts_cache_db, get_code_activity_cache_db
 
 # Configure logging
 logging.basicConfig(
@@ -51,6 +51,7 @@ settings_db = get_settings_db()
 dev_stats_db = get_dev_stats_db()
 workflow_cache_db = get_workflow_cache_db()
 contributor_ts_cache_db = get_contributor_ts_cache_db()
+code_activity_cache_db = get_code_activity_cache_db()
 
 # Workflow cache background refresh tracking
 _workflow_refresh_in_progress = set()
@@ -59,6 +60,10 @@ _workflow_refresh_lock = threading.Lock()
 # Contributor timeseries cache background refresh tracking
 _contributor_ts_refresh_in_progress = set()
 _contributor_ts_refresh_lock = threading.Lock()
+
+# Code activity cache background refresh tracking
+_activity_refresh_in_progress = set()
+_activity_refresh_lock = threading.Lock()
 
 # Simple in-memory cache
 cache = {}
@@ -1003,109 +1008,193 @@ def get_workflow_runs(owner, repo):
         return jsonify({"error": str(e)}), 500
 
 
+def _fetch_code_activity_data(owner, repo):
+    """Fetch and process all 52 weeks of code activity data from GitHub stats APIs.
+
+    Returns a dict with weekly_commits, code_changes, owner_commits, community_commits,
+    or None if all data sources are empty.
+    """
+    # Fetch all 3 stats APIs in parallel
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        freq_future = executor.submit(fetch_github_stats_api, owner, repo, "stats/code_frequency")
+        commit_future = executor.submit(fetch_github_stats_api, owner, repo, "stats/commit_activity")
+        participation_future = executor.submit(fetch_github_stats_api, owner, repo, "stats/participation")
+
+        code_freq = freq_future.result()
+        commit_activity = commit_future.result()
+        participation = participation_future.result()
+
+    # Process code_frequency: [timestamp, additions, deletions] — all weeks
+    code_changes = []
+    if isinstance(code_freq, list):
+        for entry in code_freq:
+            if isinstance(entry, list) and len(entry) >= 3:
+                ts = entry[0]
+                date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                code_changes.append({
+                    "week": date_str,
+                    "additions": entry[1],
+                    "deletions": abs(entry[2])
+                })
+
+    # Process commit_activity: {week, total, days[7]} — all weeks
+    weekly_commits = []
+    if isinstance(commit_activity, list):
+        for entry in commit_activity:
+            if isinstance(entry, dict):
+                ts = entry.get("week", 0)
+                date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                weekly_commits.append({
+                    "week": date_str,
+                    "total": entry.get("total", 0),
+                    "days": entry.get("days", [0]*7)
+                })
+
+    # Process participation: {all: [52 weeks], owner: [52 weeks]} — all weeks
+    owner_commits = []
+    community_commits = []
+    if isinstance(participation, dict):
+        all_p = participation.get("all", [])
+        owner_p = participation.get("owner", [])
+        owner_commits = owner_p if owner_p else []
+        community_commits = [
+            (all_p[i] if i < len(all_p) else 0) - (owner_p[i] if i < len(owner_p) else 0)
+            for i in range(len(all_p))
+        ]
+
+    # Only return data if we got meaningful results
+    if not weekly_commits and not code_changes and not owner_commits and not community_commits:
+        return None
+
+    return {
+        "weekly_commits": weekly_commits,
+        "code_changes": code_changes,
+        "owner_commits": owner_commits,
+        "community_commits": community_commits,
+    }
+
+
+def _background_refresh_code_activity(owner, repo, repo_key):
+    """Background task to refresh code activity cache."""
+    try:
+        logger.info(f"Background code activity refresh started for {repo_key}")
+        data = _fetch_code_activity_data(owner, repo)
+        if data:
+            code_activity_cache_db.save_cache(repo_key, data)
+            logger.info(f"Background code activity refresh completed for {repo_key}")
+    except Exception as e:
+        logger.error(f"Background code activity refresh failed for {repo_key}: {e}")
+    finally:
+        with _activity_refresh_lock:
+            _activity_refresh_in_progress.discard(repo_key)
+
+
+def _compute_activity_summary(weekly_commits, code_changes, owner_commits, community_commits):
+    """Compute summary stats from sliced activity data."""
+    total_commits = sum(w.get("total", 0) for w in weekly_commits)
+    total_additions = sum(c.get("additions", 0) for c in code_changes)
+    total_deletions = sum(c.get("deletions", 0) for c in code_changes)
+    avg_weekly = round(total_commits / len(weekly_commits), 1) if weekly_commits else 0
+
+    peak_week = None
+    peak_commits = 0
+    for w in weekly_commits:
+        if w.get("total", 0) > peak_commits:
+            peak_commits = w["total"]
+            peak_week = w["week"]
+
+    owner_total = sum(owner_commits) if owner_commits else 0
+    all_total = sum(owner_commits) + sum(community_commits) if owner_commits else 0
+    owner_pct = round(owner_total / all_total * 100, 1) if all_total > 0 else 0
+
+    return {
+        "total_commits": total_commits,
+        "avg_weekly_commits": avg_weekly,
+        "total_additions": total_additions,
+        "total_deletions": total_deletions,
+        "peak_week": peak_week,
+        "peak_commits": peak_commits,
+        "owner_percentage": owner_pct,
+    }
+
+
 @app.route("/api/repos/<owner>/<repo>/code-activity")
 def get_code_activity(owner, repo):
-    """Get code activity stats (commit frequency, code changes, participation)."""
+    """Get code activity stats (commit frequency, code changes, participation).
+
+    Uses SQLite cache with 24-hour TTL and stale-while-revalidate.
+    The full 52-week dataset is cached; the ?weeks param slices the cached data.
+    """
     try:
         weeks = int(request.args.get("weeks", 52))
         weeks = min(max(weeks, 1), 52)
+        repo_key = f"{owner}/{repo}"
+        force_refresh = request.args.get("refresh", "").lower() == "true"
 
-        # Check cache first
-        qs = request.query_string.decode() if request else ''
-        cache_key = f"get_code_activity:{(owner, repo)}:{qs}"
-        now = time.time()
-        if cache_key in cache:
-            result, timestamp = cache[cache_key]
-            if now - timestamp < 600:
-                return result
-
-        # Fetch all 3 stats APIs in parallel
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            freq_future = executor.submit(fetch_github_stats_api, owner, repo, "stats/code_frequency")
-            commit_future = executor.submit(fetch_github_stats_api, owner, repo, "stats/commit_activity")
-            participation_future = executor.submit(fetch_github_stats_api, owner, repo, "stats/participation")
-
-            code_freq = freq_future.result()
-            commit_activity = commit_future.result()
-            participation = participation_future.result()
-
-        # Process code_frequency: [timestamp, additions, deletions]
-        code_changes = []
-        if isinstance(code_freq, list):
-            for entry in code_freq[-weeks:]:
-                if isinstance(entry, list) and len(entry) >= 3:
-                    ts = entry[0]
-                    date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
-                    code_changes.append({
-                        "week": date_str,
-                        "additions": entry[1],
-                        "deletions": abs(entry[2])
-                    })
-
-        # Process commit_activity: {week, total, days[7]}
-        weekly_commits = []
-        if isinstance(commit_activity, list):
-            for entry in commit_activity[-weeks:]:
-                if isinstance(entry, dict):
-                    ts = entry.get("week", 0)
-                    date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
-                    weekly_commits.append({
-                        "week": date_str,
-                        "total": entry.get("total", 0),
-                        "days": entry.get("days", [0]*7)
-                    })
-
-        # Process participation: {all: [52 weeks], owner: [52 weeks]}
-        owner_commits = []
-        community_commits = []
-        if isinstance(participation, dict):
-            all_p = participation.get("all", [])
-            owner_p = participation.get("owner", [])
-            owner_commits = owner_p[-weeks:] if owner_p else []
-            community_commits = [
-                (all_p[i] if i < len(all_p) else 0) - (owner_p[i] if i < len(owner_p) else 0)
-                for i in range(len(all_p))
-            ][-weeks:]
-
-        # Compute summary
-        total_commits = sum(w.get("total", 0) for w in weekly_commits)
-        total_additions = sum(c.get("additions", 0) for c in code_changes)
-        total_deletions = sum(c.get("deletions", 0) for c in code_changes)
-        avg_weekly = round(total_commits / len(weekly_commits), 1) if weekly_commits else 0
-
-        peak_week = None
-        peak_commits = 0
-        for w in weekly_commits:
-            if w.get("total", 0) > peak_commits:
-                peak_commits = w["total"]
-                peak_week = w["week"]
-
-        owner_total = sum(owner_commits) if owner_commits else 0
-        all_total = sum(owner_commits) + sum(community_commits) if owner_commits else 0
-        owner_pct = round(owner_total / all_total * 100, 1) if all_total > 0 else 0
-
-        response = jsonify({
-            "weekly_commits": weekly_commits,
-            "code_changes": code_changes,
-            "owner_commits": owner_commits,
-            "community_commits": community_commits,
-            "summary": {
-                "total_commits": total_commits,
-                "avg_weekly_commits": avg_weekly,
-                "total_additions": total_additions,
-                "total_deletions": total_deletions,
-                "peak_week": peak_week,
-                "peak_commits": peak_commits,
-                "owner_percentage": owner_pct
+        if force_refresh:
+            logger.info(f"Force refresh code activity for {repo_key}")
+            data = _fetch_code_activity_data(owner, repo)
+            if data:
+                code_activity_cache_db.save_cache(repo_key, data)
+            else:
+                data = {"weekly_commits": [], "code_changes": [], "owner_commits": [], "community_commits": []}
+            sliced = {
+                "weekly_commits": data["weekly_commits"][-weeks:],
+                "code_changes": data["code_changes"][-weeks:],
+                "owner_commits": data["owner_commits"][-weeks:],
+                "community_commits": data["community_commits"][-weeks:],
             }
-        })
+            sliced["summary"] = _compute_activity_summary(
+                sliced["weekly_commits"], sliced["code_changes"],
+                sliced["owner_commits"], sliced["community_commits"]
+            )
+            return jsonify(sliced)
 
-        # Only cache when all 3 data sources returned data to avoid
-        # caching partial results from GitHub 202 "computing" responses
-        if weekly_commits and code_changes and (owner_commits or community_commits):
-            cache[cache_key] = (response, now)
+        cached = code_activity_cache_db.get_cached(repo_key)
+        is_stale = code_activity_cache_db.is_stale(repo_key)
 
-        return response
+        if cached:
+            if is_stale:
+                with _activity_refresh_lock:
+                    if repo_key not in _activity_refresh_in_progress:
+                        _activity_refresh_in_progress.add(repo_key)
+                        thread = threading.Thread(
+                            target=_background_refresh_code_activity,
+                            args=(owner, repo, repo_key),
+                            daemon=True
+                        )
+                        thread.start()
+            data = cached["data"]
+            sliced = {
+                "weekly_commits": data.get("weekly_commits", [])[-weeks:],
+                "code_changes": data.get("code_changes", [])[-weeks:],
+                "owner_commits": data.get("owner_commits", [])[-weeks:],
+                "community_commits": data.get("community_commits", [])[-weeks:],
+            }
+            sliced["summary"] = _compute_activity_summary(
+                sliced["weekly_commits"], sliced["code_changes"],
+                sliced["owner_commits"], sliced["community_commits"]
+            )
+            return jsonify(sliced)
+
+        # No cache: synchronous fetch
+        data = _fetch_code_activity_data(owner, repo)
+        if data:
+            code_activity_cache_db.save_cache(repo_key, data)
+        else:
+            data = {"weekly_commits": [], "code_changes": [], "owner_commits": [], "community_commits": []}
+
+        sliced = {
+            "weekly_commits": data["weekly_commits"][-weeks:],
+            "code_changes": data["code_changes"][-weeks:],
+            "owner_commits": data["owner_commits"][-weeks:],
+            "community_commits": data["community_commits"][-weeks:],
+        }
+        sliced["summary"] = _compute_activity_summary(
+            sliced["weekly_commits"], sliced["code_changes"],
+            sliced["owner_commits"], sliced["community_commits"]
+        )
+        return jsonify(sliced)
 
     except Exception as e:
         logger.error(f"Failed to fetch code activity: {e}")
@@ -2037,6 +2126,7 @@ def clear_cache():
     cache = {}
     workflow_cache_db.clear()
     contributor_ts_cache_db.clear()
+    code_activity_cache_db.clear()
     return jsonify({"message": "Cache cleared"})
 
 

@@ -143,6 +143,9 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
 | `fetch_pr_review_times()` | Enriches PRs with review timing data using ThreadPoolExecutor; cached in SQLite with 2-hour TTL |
 | `_fetch_contributor_timeseries()` | Fetches and transforms per-contributor weekly time series from GitHub stats/contributors API |
 | `_background_refresh_contributor_ts()` | Background daemon thread for stale-while-revalidate contributor TS cache refresh |
+| `_fetch_code_activity_data()` | Fetches and processes all 52 weeks of code activity from 3 GitHub stats APIs in parallel |
+| `_background_refresh_code_activity()` | Background daemon thread for stale-while-revalidate code activity cache refresh |
+| `_compute_activity_summary()` | Computes summary stats (totals, peak week, owner %) from sliced activity data |
 | `_check_review_status()` | Checks and updates status of a review subprocess |
 | `_start_review_process()` | Spawns Claude CLI subprocess for code review |
 
@@ -163,6 +166,7 @@ The database module provides SQLite-based persistence for reviews and merge queu
 | `LifecycleCacheDB` | Caches PR lifecycle and review timing data with 2-hour TTL |
 | `WorkflowCacheDB` | Caches workflow runs data with configurable TTL (default 1 hour) for stale-while-revalidate serving |
 | `ContributorTimeSeriesCacheDB` | Caches per-contributor weekly time series data with 24-hour TTL for stale-while-revalidate serving |
+| `CodeActivityCacheDB` | Caches full 52-week code activity data with 24-hour TTL for stale-while-revalidate serving |
 
 #### Database Schema
 
@@ -271,6 +275,14 @@ CREATE TABLE contributor_timeseries_cache (
     data TEXT NOT NULL,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Code activity cache table: Caches full 52-week code activity data
+CREATE TABLE code_activity_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL UNIQUE,
+    data TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
 #### ReviewsDB Methods
@@ -332,6 +344,15 @@ CREATE TABLE contributor_timeseries_cache (
 | `save_cache()` | Saves contributor time series data with upsert (INSERT ON CONFLICT UPDATE) |
 | `is_stale()` | Checks if cached data is older than TTL (default 24 hours) |
 | `clear()` | Removes all contributor time series cache entries |
+
+#### CodeActivityCacheDB Methods
+
+| Method | Description |
+|--------|-------------|
+| `get_cached()` | Returns cached code activity data (JSON blob with weekly_commits, code_changes, owner_commits, community_commits) for a repository |
+| `save_cache()` | Saves code activity data with upsert (INSERT ON CONFLICT UPDATE) |
+| `is_stale()` | Checks if cached data is older than TTL (default 24 hours) |
+| `clear()` | Removes all code activity cache entries |
 
 **Note**: When returning cached stats, the backend transforms field names to match the frontend expectations:
 - `username` → `login`
@@ -632,7 +653,7 @@ Uses three GitHub Stats API endpoints fetched via the `fetch_github_stats_api()`
 | `stats/commit_activity` | Weekly commit totals and per-day breakdowns |
 | `stats/participation` | Owner vs. all-contributor weekly commit counts |
 
-Data is cached in-memory with a 10-minute TTL (via the `@cached(ttl_seconds=600)` decorator).
+Data is cached in SQLite with a 24-hour TTL using stale-while-revalidate. The full 52-week dataset is cached once; the `?weeks=N` parameter slices the cached data in Python, so switching timeframes does not trigger re-fetches.
 
 ### Per-Contributor Time Series (Analytics > Contributors)
 
