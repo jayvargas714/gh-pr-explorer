@@ -24,7 +24,7 @@ export function PRCard({ pr }: PRCardProps) {
   const prDivergence = usePRStore((state) => state.prDivergence)
   const prReviewScores = usePRStore((state) => state.prReviewScores)
   const selectedRepo = useAccountStore((state) => state.selectedRepo)
-  const { isInQueue, setMergeQueue } = useQueueStore()
+  const { isInQueue, setMergeQueue, addToQueue: addToQueueStore, removeFromQueue: removeFromQueueStore } = useQueueStore()
   const openReviewViewer = useReviewStore((state) => state.openReviewViewer)
 
   const reviewInfo = prReviewScores[pr.number]
@@ -38,8 +38,31 @@ export function PRCard({ pr }: PRCardProps) {
     try {
       setQueueLoading(true)
       if (inQueue) {
+        // Optimistic removal
+        removeFromQueueStore(pr.number, repoFullName)
         await apiRemoveFromQueue(pr.number, repoFullName)
       } else {
+        // Optimistic add with placeholder item
+        addToQueueStore({
+          id: Date.now(),
+          number: pr.number,
+          title: pr.title,
+          url: pr.url,
+          repo: repoFullName,
+          author: pr.author.login,
+          additions: pr.additions,
+          deletions: pr.deletions,
+          addedAt: new Date().toISOString(),
+          notesCount: 0,
+          prState: pr.state,
+          hasNewCommits: false,
+          lastReviewedSha: null,
+          currentSha: null,
+          hasReview: false,
+          reviewScore: null,
+          reviewId: null,
+          inlineCommentsPosted: false,
+        })
         await apiAddToQueue({
           number: pr.number,
           title: pr.title,
@@ -50,11 +73,12 @@ export function PRCard({ pr }: PRCardProps) {
           deletions: pr.deletions,
         })
       }
-      // Refresh queue from backend to get accurate state
-      const response = await fetchMergeQueue()
-      setMergeQueue(response.queue)
+      // Background refresh for accurate server state (don't await)
+      fetchMergeQueue().then((response) => setMergeQueue(response.queue)).catch(() => {})
     } catch (err) {
       console.error('Failed to update queue:', err)
+      // Revert on failure
+      fetchMergeQueue().then((response) => setMergeQueue(response.queue)).catch(() => {})
     } finally {
       setQueueLoading(false)
     }

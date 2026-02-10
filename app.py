@@ -214,6 +214,29 @@ def fetch_pr_head_sha(owner, repo, pr_number):
         return None
 
 
+def fetch_pr_state_and_sha(owner, repo, pr_number):
+    """Fetch PR state and head SHA in a single gh call.
+
+    Returns:
+        tuple: (state, head_sha) — either may be None on error.
+    """
+    try:
+        output = run_gh_command([
+            "pr", "view", str(pr_number),
+            "-R", f"{owner}/{repo}",
+            "--json", "state,headRefOid",
+        ])
+        data = parse_json_output(output)
+        if isinstance(data, dict):
+            state = data.get("state", "").upper() or None
+            sha = data.get("headRefOid") or None
+            return state, sha
+        return None, None
+    except RuntimeError as e:
+        logger.warning(f"Failed to fetch PR state/SHA for {owner}/{repo}#{pr_number}: {e}")
+        return None, None
+
+
 def _parse_location(location):
     """Parse a location string into (file_path, start_line, end_line) or None.
 
@@ -2135,13 +2158,12 @@ def get_merge_queue():
     """Get all items in the merge queue with fresh PR states and new commits info."""
     try:
         queue_items = queue_db.get_queue()
-        # Convert to expected format
-        queue = []
-        for item in queue_items:
-            # Get note count for this item
-            notes_count = queue_db.get_notes_count(item["id"])
+        if not queue_items:
+            return jsonify({"queue": []})
 
-            # Fetch fresh PR state from GitHub
+        def enrich_queue_item(item):
+            """Enrich a single queue item with GitHub data and review info."""
+            notes_count = queue_db.get_notes_count(item["id"])
             repo_parts = item["repo"].split("/")
             pr_state = None
             has_new_commits = False
@@ -2149,15 +2171,14 @@ def get_merge_queue():
             current_sha = None
             review_score = None
             has_review = False
-
             review_id = None
             inline_comments_posted = False
 
             if len(repo_parts) == 2:
                 owner, repo = repo_parts
-                pr_state = fetch_pr_state(owner, repo, item["pr_number"])
+                # Single gh call for both state and SHA
+                pr_state, current_sha = fetch_pr_state_and_sha(owner, repo, item["pr_number"])
 
-                # Check for new commits since last review and get review score
                 latest_review = reviews_db.get_latest_review_for_pr(item["repo"], item["pr_number"])
                 if latest_review:
                     has_review = True
@@ -2166,13 +2187,12 @@ def get_merge_queue():
                     inline_comments_posted = latest_review.get("inline_comments_posted", False)
                     if latest_review.get("head_commit_sha"):
                         last_reviewed_sha = latest_review["head_commit_sha"]
-                        current_sha = fetch_pr_head_sha(owner, repo, item["pr_number"])
                         if current_sha and last_reviewed_sha:
                             has_new_commits = current_sha != last_reviewed_sha
             else:
-                pr_state = item.get("pr_state")  # Fall back to stored state
+                pr_state = item.get("pr_state")
 
-            queue.append({
+            return {
                 "id": item["id"],
                 "number": item["pr_number"],
                 "title": item["pr_title"],
@@ -2191,7 +2211,12 @@ def get_merge_queue():
                 "reviewScore": review_score,
                 "reviewId": review_id,
                 "inlineCommentsPosted": inline_comments_posted
-            })
+            }
+
+        # Fetch GitHub data for all queue items in parallel
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            queue = list(executor.map(enrich_queue_item, queue_items))
+
         return jsonify({"queue": queue})
     except Exception as e:
         logger.error(f"Error getting merge queue: {e}")
@@ -2211,11 +2236,11 @@ def add_to_merge_queue():
             if field not in pr_data:
                 return jsonify({"error": f"Missing required field: {field}"}), 400
 
-        # Fetch current PR state
+        # Fetch current PR state and SHA in one call
         repo_parts = pr_data["repo"].split("/")
         pr_state = None
         if len(repo_parts) == 2:
-            pr_state = fetch_pr_state(repo_parts[0], repo_parts[1], pr_data["number"])
+            pr_state, _ = fetch_pr_state_and_sha(repo_parts[0], repo_parts[1], pr_data["number"])
 
         # Add to database
         item = queue_db.add_to_queue(
