@@ -1,0 +1,36 @@
+"""Shared singletons: DB instances, logger, in-memory cache dict.
+
+All global state used across modules lives here to avoid circular imports.
+"""
+
+import logging
+import threading
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger("gh_pr_explorer")
+
+# Simple in-memory cache (function results with TTL)
+cache = {}
+
+# In-memory tracking of active review processes
+# key: "owner/repo/pr_number", value: {"process": Popen, "status": str, ...}
+active_reviews = {}
+reviews_lock = threading.Lock()
+
+# Background refresh tracking sets + locks for stale-while-revalidate caches
+workflow_refresh_in_progress = set()
+workflow_refresh_lock = threading.Lock()
+
+contributor_ts_refresh_in_progress = set()
+contributor_ts_refresh_lock = threading.Lock()
+
+activity_refresh_in_progress = set()
+activity_refresh_lock = threading.Lock()
+
+stats_refresh_in_progress = set()
+stats_refresh_lock = threading.Lock()

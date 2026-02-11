@@ -46,7 +46,7 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
 +-------------------+     +-------------------+     +-------------------+
 |                   |     |                   |     |                   |
 |   Browser/Client  |<--->|   Flask Backend   |<--->|   GitHub CLI      |
-|   (React SPA)     |     |   (app.py)        |     |   (gh)            |
+|   (React SPA)     |     |   (backend/)      |     |   (gh)            |
 |                   |     |                   |     |                   |
 +-------------------+     +-------------------+     +-------------------+
         |                         |                         |
@@ -64,7 +64,7 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
         |                 +-------------------+     +-------------------+
         |                 |                   |     |                   |
         |                 |   SQLite Database |     |   Claude CLI      |
-        |                 |   (database.py)   |<----|   (code reviews)  |
+        |                 |   (backend/db/)   |<----|   (code reviews)  |
         |                 |   - reviews       |     |                   |
         |                 |   - merge_queue   |     |                   |
         |                 |   - lifecycle_cache|    |                   |
@@ -91,10 +91,10 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
    - Constructs API request with filters
          |
          v
-3. Flask Backend (app.py)
-   - Receives HTTP request
+3. Flask Backend (backend/ package)
+   - Receives HTTP request via Blueprint route
    - Checks in-memory cache
-   - If cache miss: builds gh CLI command
+   - If cache miss: service layer builds gh CLI command
          |
          v
 4. GitHub CLI (gh)
@@ -116,44 +116,74 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
 
 ### Backend Components (Flask)
 
-**File**: `/Users/jvargas714/Documents/dev/gh-pr-explorer/app.py`
+**Package**: `/Users/jvargas714/Documents/dev/gh-pr-explorer/backend/`
 
-| Component | Description |
-|-----------|-------------|
-| `app` | Flask application instance |
-| `config` | Configuration loaded from `config.json` |
-| `cache` | In-memory dictionary for caching API responses |
-| `active_reviews` | In-memory dictionary tracking running code review processes |
-| `reviews_lock` | Threading lock for thread-safe review state access |
-| `logger` | Python logging instance for application logging |
-| `cached()` | Decorator function implementing TTL-based caching |
-| `run_gh_command()` | Executes GitHub CLI commands via subprocess |
-| `parse_json_output()` | Parses JSON output from gh CLI |
-| `get_review_status()` | Maps GitHub review decision to human-readable status |
-| `fetch_github_stats_api()` | Reusable helper for GitHub stats endpoints with 202-retry logic |
+The backend is organized as a Python package with clear separation of concerns:
 
-**Helper Functions**:
+| Module | Description |
+|--------|-------------|
+| `backend/__init__.py` | `create_app()` factory, `startup_refresh_workflow_caches()` |
+| `backend/config.py` | `load_config()`, `get_config()`, `PROJECT_ROOT`, `REVIEWS_DIR`, `DB_PATH` |
+| `backend/extensions.py` | Shared singletons: `logger`, `cache`, `active_reviews`, `reviews_lock`, refresh tracking sets/locks |
 
-| Function | Purpose |
-|----------|---------|
-| `fetch_contributor_stats()` | Retrieves commit statistics with retry logic for 202 responses |
-| `fetch_pr_stats()` | Aggregates PR counts by author |
-| `fetch_review_stats()` | Collects review activity across PRs |
-| `fetch_github_stats_api()` | Generic GitHub stats API fetcher with 202-retry pattern and configurable retries |
-| `fetch_pr_review_times()` | Enriches PRs with review timing data using ThreadPoolExecutor; cached in SQLite with 2-hour TTL |
-| `_fetch_contributor_timeseries()` | Fetches and transforms per-contributor weekly time series from GitHub stats/contributors API |
-| `_background_refresh_contributor_ts()` | Background daemon thread for stale-while-revalidate contributor TS cache refresh |
-| `_fetch_code_activity_data()` | Fetches and processes all 52 weeks of code activity from 3 GitHub stats APIs in parallel |
-| `_background_refresh_code_activity()` | Background daemon thread for stale-while-revalidate code activity cache refresh |
-| `_compute_activity_summary()` | Computes summary stats (totals, peak week, owner %) from sliced activity data |
-| `_check_review_status()` | Checks and updates status of a review subprocess |
-| `_start_review_process()` | Spawns Claude CLI subprocess for code review |
+**Services** (`backend/services/`):
+
+| Module | Key Functions |
+|--------|--------------|
+| `github_service.py` | `run_gh_command()`, `parse_json_output()`, `fetch_github_stats_api()`, `fetch_pr_state()`, `fetch_pr_head_sha()`, `fetch_pr_state_and_sha()` |
+| `pr_service.py` | `get_review_status()`, `get_ci_status()` |
+| `stats_service.py` | `fetch_and_compute_stats()`, `add_avg_pr_scores()`, `stats_to_cache_format()`, `cached_stats_to_api_format()` |
+| `review_service.py` | `save_review_to_db()`, `check_review_status()`, `start_review_process()` |
+| `inline_comments_service.py` | `parse_critical_issues()`, `post_inline_comments()` |
+| `lifecycle_service.py` | `fetch_pr_review_times()` |
+| `workflow_service.py` | `fetch_workflow_data()` |
+| `activity_service.py` | `fetch_code_activity_data()` |
+| `contributor_service.py` | `fetch_contributor_timeseries()` |
+
+**Filters** (`backend/filters/`):
+
+| Module | Key Components |
+|--------|---------------|
+| `pr_filter_builder.py` | `PRFilterParams` dataclass + `PRFilterBuilder` class for translating request args to gh CLI args |
+
+**Visualizers** (`backend/visualizers/`):
+
+| Module | Key Functions |
+|--------|--------------|
+| `activity_visualizer.py` | `compute_activity_summary()`, `slice_and_summarize()` |
+| `workflow_visualizer.py` | `filter_and_compute_stats()` |
+| `lifecycle_visualizer.py` | `compute_lifecycle_metrics()` |
+| `responsiveness_visualizer.py` | `compute_responsiveness_metrics()` |
+
+**Cache** (`backend/cache/`):
+
+| Module | Key Components |
+|--------|---------------|
+| `memory_cache.py` | `@cached(ttl_seconds=N)` decorator for in-memory TTL caching |
+
+**Routes** (`backend/routes/`):
+
+11 Flask Blueprints organized by domain. Each route handler is thin (parse request → call service → convert → jsonify).
+
+| Blueprint | Routes |
+|-----------|--------|
+| `static_bp` | `/`, `/assets/<path>` |
+| `auth_bp` | `/api/user`, `/api/orgs` |
+| `repo_bp` | `/api/repos`, contributors, labels, branches, milestones, teams |
+| `pr_bp` | `/api/repos/.../prs`, `/api/repos/.../prs/divergence` |
+| `analytics_bp` | `/api/repos/.../stats`, lifecycle-metrics, review-responsiveness, code-activity, contributor-timeseries |
+| `workflow_bp` | `/api/repos/.../workflow-runs` |
+| `queue_bp` | `/api/merge-queue` CRUD, reorder, notes |
+| `review_bp` | `/api/reviews` CRUD, status, inline-comments, check-new-commits |
+| `history_bp` | `/api/review-history` list, detail, PR reviews, stats, check |
+| `settings_bp` | `/api/settings` CRUD |
+| `cache_bp` | `/api/clear-cache` |
 
 ### Database Module
 
-**File**: `/Users/jvargas714/Documents/dev/gh-pr-explorer/database.py`
+**Package**: `/Users/jvargas714/Documents/dev/gh-pr-explorer/backend/database/`
 
-The database module provides SQLite-based persistence for reviews and merge queue data, replacing the previous JSON file storage.
+The database module provides SQLite-based persistence for reviews and merge queue data, replacing the previous JSON file storage. A thin re-export layer at `database.py` (root) provides backward compatibility for scripts.
 
 #### Database Classes
 
@@ -2408,36 +2438,88 @@ process = subprocess.Popen(
 
 ```
 gh-pr-explorer/
-├── app.py                 # Flask backend (main application)
-├── database.py            # SQLite database module (Reviews, MergeQueue, LifecycleCache, WorkflowCache, Migrations)
-├── migrate_data.py        # Data migration script for legacy JSON/markdown files
-├── seed_workflow_cache.py # Pre-seeds workflow cache for faster first load
-├── pr_explorer.db         # SQLite database file (auto-created)
-├── config.json            # Application configuration
-├── requirements.txt       # Python dependencies
-├── CLAUDE.md              # Development instructions
+├── app.py                          # Thin launcher: create_app() + app.run()
+├── database.py                     # Thin re-export layer for backward compat with scripts
+├── migrate_data.py                 # Data migration script for legacy JSON/markdown files
+├── seed_workflow_cache.py          # Pre-seeds workflow cache for faster first load
+├── pr_explorer.db                  # SQLite database file (auto-created)
+├── config.json                     # Application configuration
+├── requirements.txt                # Python dependencies
+├── CLAUDE.md                       # Development instructions
 ├── docs/
-│   └── DESIGN.md          # This document
-├── frontend/
+│   └── DESIGN.md                   # This document
+│
+├── backend/                        # Flask backend package
+│   ├── __init__.py                 # create_app() factory, startup_refresh_workflow_caches()
+│   ├── config.py                   # AppConfig loading, PROJECT_ROOT, REVIEWS_DIR, DB_PATH
+│   ├── extensions.py               # Shared singletons: logger, cache, active_reviews, locks
+│   │
+│   ├── database/                   # SQLite database layer
+│   │   ├── __init__.py             # Singleton factory functions (get_reviews_db, etc.)
+│   │   ├── base.py                 # Database base class (connection, schema, migrations)
+│   │   ├── reviews.py              # ReviewsDB
+│   │   ├── merge_queue.py          # MergeQueueDB
+│   │   ├── settings.py             # SettingsDB
+│   │   ├── dev_stats.py            # DeveloperStatsDB
+│   │   └── cache_stores.py         # LifecycleCacheDB, WorkflowCacheDB, ContributorTSCacheDB, CodeActivityCacheDB
+│   │
+│   ├── services/                   # Business logic layer
+│   │   ├── github_service.py       # gh CLI wrapper: run_command, parse_json, fetch_stats_api
+│   │   ├── pr_service.py           # PR post-processing: review_status, ci_status
+│   │   ├── stats_service.py        # Dev stats aggregation from 3 sources
+│   │   ├── review_service.py       # Claude CLI subprocess management
+│   │   ├── inline_comments_service.py  # Critical issue parsing + posting to GitHub
+│   │   ├── lifecycle_service.py    # PR review times fetch (ThreadPoolExecutor)
+│   │   ├── workflow_service.py     # Parallel batch workflow data fetching
+│   │   ├── activity_service.py     # Code activity data from 3 stats APIs
+│   │   └── contributor_service.py  # Contributor time series transform
+│   │
+│   ├── filters/                    # Request parameter processing
+│   │   └── pr_filter_builder.py    # PRFilterParams dataclass + PRFilterBuilder -> gh CLI args
+│   │
+│   ├── cache/                      # Caching infrastructure
+│   │   └── memory_cache.py         # In-memory TTL cache decorator (@cached)
+│   │
+│   ├── visualizers/                # Data transformation for charts/tables
+│   │   ├── activity_visualizer.py  # Slice 52-week data by timeframe, compute summary stats
+│   │   ├── workflow_visualizer.py  # Apply filters to cached runs, compute aggregate stats
+│   │   ├── lifecycle_visualizer.py # Merge time distribution, stale PR detection, pr_table
+│   │   └── responsiveness_visualizer.py  # Reviewer leaderboard, bottleneck detection
+│   │
+│   └── routes/                     # Flask Blueprints (11 blueprints)
+│       ├── __init__.py             # register_blueprints(app)
+│       ├── static_routes.py        # / and /assets/<path>
+│       ├── auth_routes.py          # /api/user, /api/orgs
+│       ├── repo_routes.py          # /api/repos, contributors, labels, branches, milestones, teams
+│       ├── pr_routes.py            # /api/repos/.../prs, prs/divergence
+│       ├── analytics_routes.py     # /api/repos/.../stats, lifecycle, responsiveness, activity, contributors
+│       ├── workflow_routes.py      # /api/repos/.../workflow-runs
+│       ├── queue_routes.py         # /api/merge-queue CRUD + reorder + notes
+│       ├── review_routes.py        # /api/reviews CRUD + status + inline-comments + check-new-commits
+│       ├── history_routes.py       # /api/review-history list, detail, PR reviews, stats, check
+│       ├── settings_routes.py      # /api/settings CRUD
+│       └── cache_routes.py         # /api/clear-cache
+│
+├── frontend/                       # React + TypeScript frontend
 │   ├── src/
-│   │   ├── api/           # Type-safe API modules
-│   │   ├── components/    # React components by feature
-│   │   ├── stores/        # Zustand state management
-│   │   ├── styles/        # CSS styles
-│   │   ├── types/         # TypeScript types
-│   │   ├── App.tsx        # Root component
-│   │   └── main.tsx       # Entry point
-│   ├── dist/              # Production build output (generated)
-│   ├── vite.config.ts     # Vite configuration
-│   ├── tsconfig.json      # TypeScript config
-│   └── package.json       # Frontend dependencies
+│   │   ├── api/                    # Type-safe API modules
+│   │   ├── components/             # React components by feature
+│   │   ├── stores/                 # Zustand state management
+│   │   ├── styles/                 # CSS styles
+│   │   ├── types/                  # TypeScript types
+│   │   ├── App.tsx                 # Root component
+│   │   └── main.tsx                # Entry point
+│   ├── dist/                       # Production build output (generated)
+│   ├── vite.config.ts              # Vite configuration
+│   ├── tsconfig.json               # TypeScript config
+│   └── package.json                # Frontend dependencies
 
 External Dependencies:
 ├── /Users/jvargas714/Documents/code-reviews/              # Code review output directory
 └── /Users/jvargas714/Documents/code-reviews/past-reviews/ # Historical reviews (migrated)
 ```
 
-**Note**: The `MQ/` folder with `merge_queue.json` has been deprecated. Merge queue data is now stored in the SQLite database. The legacy `static/` and `templates/` directories have been removed as part of the migration to React + TypeScript.
+**Note**: The `MQ/` folder with `merge_queue.json` has been deprecated. Merge queue data is now stored in the SQLite database. The legacy `static/` and `templates/` directories have been removed as part of the migration to React + TypeScript. The root `database.py` is a thin re-export layer for backward compatibility with `migrate_data.py` and `seed_workflow_cache.py`.
 
 ### Running the Application
 
