@@ -1,17 +1,32 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useReviewStore } from '../../stores/useReviewStore'
 import { fetchActiveReviews } from '../../api/reviews'
 
 export function ReviewPollingManager() {
   const { activeReviews, setActiveReviews } = useReviewStore()
+  const initialFetchDone = useRef(false)
 
+  // Fetch active reviews once on mount to recover from page refresh
   useEffect(() => {
-    // Poll every 5 seconds if there are any active reviews
-    const hasActiveReviews = Object.values(activeReviews).some(
+    if (initialFetchDone.current) return
+    initialFetchDone.current = true
+
+    fetchActiveReviews()
+      .then((response) => {
+        if (response.reviews.length > 0) {
+          setActiveReviews(response.reviews)
+        }
+      })
+      .catch(() => {})
+  }, [setActiveReviews])
+
+  // Poll every 5 seconds while there are running reviews
+  useEffect(() => {
+    const hasRunning = Object.values(activeReviews).some(
       (review) => review.status === 'running'
     )
 
-    if (!hasActiveReviews) return
+    if (!hasRunning) return
 
     const pollReviews = async () => {
       try {
@@ -25,8 +40,7 @@ export function ReviewPollingManager() {
     const interval = setInterval(pollReviews, 5000)
 
     return () => clearInterval(interval)
-  }, [activeReviews])
+  }, [activeReviews, setActiveReviews])
 
-  // This component doesn't render anything
   return null
 }
