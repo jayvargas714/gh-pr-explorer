@@ -177,13 +177,9 @@ class PRFilterBuilder:
             search_parts.append(f"reviewed-by:{p.reviewed_by}")
         if p.review_requested:
             search_parts.append(f"review-requested:{p.review_requested}")
-        if p.status:
-            values = [s.strip() for s in p.status.split(",") if s.strip()]
-            if len(values) == 1:
-                search_parts.append(f"status:{values[0]}")
-            elif len(values) > 1:
-                parts = [f"status:{s}" for s in values]
-                search_parts.append(f"({' OR '.join(parts)})")
+        # Note: CI status filtering (params.status) is handled via Python post-filter
+        # in pr_routes.py because gh search doesn't support the status: qualifier
+        # for CI check results.
 
     def _add_people_qualifiers(self, search_parts):
         p = self.params

@@ -36,6 +36,11 @@ def get_prs(owner, repo):
             pr["reviewStatus"] = get_review_status(pr.get("reviewDecision"))
             pr["ciStatus"] = get_ci_status(pr.get("statusCheckRollup"))
 
+        # Post-filter by CI status (gh search doesn't support status: qualifier for CI checks)
+        if params.status:
+            selected_statuses = {s.strip() for s in params.status.split(",") if s.strip()}
+            prs = [pr for pr in prs if pr.get("ciStatus") in selected_statuses]
+
         return jsonify({"prs": prs})
 
     except RuntimeError as e:
