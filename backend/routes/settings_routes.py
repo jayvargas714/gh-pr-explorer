@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify, request
 
 from backend.extensions import logger
 from backend.database import get_settings_db
+from backend.routes import error_response
 
 settings_bp = Blueprint("settings", __name__)
 
@@ -16,8 +17,7 @@ def get_all_settings():
         settings = settings_db.get_all_settings()
         return jsonify({"settings": settings})
     except Exception as e:
-        logger.error(f"Error getting settings: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error getting settings: {e}")
 
 
 @settings_bp.route("/api/settings/<key>", methods=["GET"])
@@ -30,8 +30,7 @@ def get_setting(key):
             return jsonify({"error": "Setting not found"}), 404
         return jsonify({"key": key, "value": value})
     except Exception as e:
-        logger.error(f"Error getting setting {key}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error getting setting {key}: {e}")
 
 
 @settings_bp.route("/api/settings/<key>", methods=["PUT", "POST"])
@@ -46,8 +45,7 @@ def set_setting(key):
         settings_db.set_setting(key, data["value"])
         return jsonify({"key": key, "value": data["value"], "message": "Setting saved"})
     except Exception as e:
-        logger.error(f"Error setting {key}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error setting {key}: {e}")
 
 
 @settings_bp.route("/api/settings/<key>", methods=["DELETE"])
@@ -60,5 +58,4 @@ def delete_setting(key):
             return jsonify({"error": "Setting not found"}), 404
         return jsonify({"message": "Setting deleted"})
     except Exception as e:
-        logger.error(f"Error deleting setting {key}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error deleting setting {key}: {e}")

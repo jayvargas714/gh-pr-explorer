@@ -7,7 +7,7 @@ import threading
 
 from flask import Flask
 
-from backend.config import get_config, PROJECT_ROOT, REVIEWS_DIR
+from backend.config import get_config, PROJECT_ROOT
 from backend.extensions import logger
 from backend.database import get_workflow_cache_db, get_dev_stats_db
 from backend.routes import register_blueprints

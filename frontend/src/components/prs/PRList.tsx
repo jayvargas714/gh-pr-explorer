@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { usePRStore, PRReviewInfo } from '../../stores/usePRStore'
 import { useAccountStore } from '../../stores/useAccountStore'
 import { useFilterStore, getFilterParams } from '../../stores/useFilterStore'
@@ -30,13 +30,7 @@ export function PRList() {
     setPRReviewScores,
   } = usePRStore()
 
-  useEffect(() => {
-    if (selectedRepo) {
-      loadPRs()
-    }
-  }, [selectedRepo, filters])
-
-  const loadPRs = async () => {
+  const loadPRs = useCallback(async () => {
     if (!selectedRepo) return
 
     try {
@@ -64,7 +58,14 @@ export function PRList() {
     } finally {
       setLoading(false)
     }
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRepo, filters])
+
+  useEffect(() => {
+    if (selectedRepo) {
+      loadPRs()
+    }
+  }, [selectedRepo, filters, loadPRs])
 
   const loadDivergence = async (openPRs: any[]) => {
     if (!selectedRepo) return

@@ -6,6 +6,8 @@ All global state used across modules lives here to avoid circular imports.
 import logging
 import threading
 
+from cachetools import TTLCache
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -14,8 +16,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("gh_pr_explorer")
 
-# Simple in-memory cache (function results with TTL)
-cache = {}
+# Bounded in-memory cache with TTL eviction (max 256 entries, 5-minute default TTL)
+cache = TTLCache(maxsize=256, ttl=300)
 
 # In-memory tracking of active review processes
 # key: "owner/repo/pr_number", value: {"process": Popen, "status": str, ...}

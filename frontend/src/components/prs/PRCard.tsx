@@ -82,11 +82,11 @@ export function PRCard({ pr }: PRCardProps) {
         })
       }
       // Background refresh for accurate server state (don't await)
-      fetchMergeQueue().then((response) => setMergeQueue(response.queue)).catch(() => {})
+      fetchMergeQueue().then((response) => setMergeQueue(response.queue)).catch((err) => console.error('Queue refresh failed:', err))
     } catch (err) {
       console.error('Failed to update queue:', err)
       // Revert on failure
-      fetchMergeQueue().then((response) => setMergeQueue(response.queue)).catch(() => {})
+      fetchMergeQueue().then((response) => setMergeQueue(response.queue)).catch((err) => console.error('Queue refresh failed:', err))
     } finally {
       setQueueLoading(false)
     }

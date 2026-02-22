@@ -7,6 +7,7 @@ from flask import Blueprint, jsonify, request
 from backend.config import get_config
 from backend.extensions import logger
 from backend.filters.pr_filter_builder import PRFilterParams, PRFilterBuilder
+from backend.routes import error_response
 from backend.services.github_service import run_gh_command, parse_json_output
 from backend.services.pr_service import get_review_status, get_ci_status
 
@@ -84,5 +85,4 @@ def get_pr_divergence(owner, repo):
         return jsonify({"divergence": divergence})
 
     except Exception as e:
-        logger.error(f"Failed to fetch divergence: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Failed to fetch divergence: {e}")

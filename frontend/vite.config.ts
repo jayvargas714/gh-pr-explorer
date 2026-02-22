@@ -15,7 +15,7 @@ const FRONTEND_PORT = config.frontend_port || 3000
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: '0.0.0.0', // Listen on all network interfaces
+    host: 'localhost',
     port: Number(FRONTEND_PORT),
     proxy: {
       '/api': {

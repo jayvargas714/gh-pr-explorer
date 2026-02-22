@@ -1,7 +1,6 @@
 """ReviewsDB - Database operations for code reviews."""
 
 import re
-import sqlite3
 import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -14,9 +13,6 @@ class ReviewsDB:
 
     def __init__(self, db):
         self.db = db
-
-    def _get_connection(self) -> sqlite3.Connection:
-        return self.db._get_connection()
 
     def save_review(
         self,
@@ -36,8 +32,7 @@ class ReviewsDB:
         pr_state_at_review: Optional[str] = None
     ) -> int:
         """Save a review to the database. Returns the review ID."""
-        conn = self._get_connection()
-        try:
+        with self.db.connection() as conn:
             cursor = conn.cursor()
 
             if score is None and content:
@@ -59,12 +54,9 @@ class ReviewsDB:
                 head_commit_sha, pr_state_at_review
             ))
 
-            conn.commit()
             review_id = cursor.lastrowid
             logger.info(f"Saved review {review_id} for PR #{pr_number} in {repo}")
             return review_id
-        finally:
-            conn.close()
 
     def update_review(
         self,
@@ -74,8 +66,7 @@ class ReviewsDB:
         content: Optional[str] = None
     ):
         """Update an existing review."""
-        conn = self._get_connection()
-        try:
+        with self.db.connection() as conn:
             cursor = conn.cursor()
 
             updates = []
@@ -101,24 +92,17 @@ class ReviewsDB:
             params.append(review_id)
             query = f"UPDATE reviews SET {', '.join(updates)} WHERE id = ?"
             cursor.execute(query, params)
-            conn.commit()
             logger.info(f"Updated review {review_id}")
-        finally:
-            conn.close()
 
     def update_inline_comments_posted(self, review_id: int, posted: bool = True):
         """Update the inline_comments_posted flag for a review."""
-        conn = self._get_connection()
-        try:
+        with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE reviews SET inline_comments_posted = ? WHERE id = ?",
                 (posted, review_id)
             )
-            conn.commit()
             logger.info(f"Updated inline_comments_posted for review {review_id} to {posted}")
-        finally:
-            conn.close()
 
     def update_section_posted(
         self, review_id: int, section: str, posted: bool = True,
@@ -142,8 +126,7 @@ class ReviewsDB:
         if not column:
             raise ValueError(f"Unknown section: {section}")
 
-        conn = self._get_connection()
-        try:
+        with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 f"UPDATE reviews SET {column} = ?, "
@@ -151,10 +134,7 @@ class ReviewsDB:
                 f"WHERE id = ?",
                 (posted, posted_count, found_count, review_id)
             )
-            conn.commit()
             logger.info(f"Updated {column} for review {review_id}: {posted_count}/{found_count} posted")
-        finally:
-            conn.close()
 
     def _extract_score(self, content: str) -> Optional[float]:
         """Extract score from review content."""
@@ -177,19 +157,15 @@ class ReviewsDB:
 
     def get_review(self, review_id: int) -> Optional[Dict[str, Any]]:
         """Get a single review by ID."""
-        conn = self._get_connection()
-        try:
+        with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM reviews WHERE id = ?", (review_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
-        finally:
-            conn.close()
 
     def get_reviews_for_pr(self, repo: str, pr_number: int) -> List[Dict[str, Any]]:
         """Get all reviews for a specific PR (review chain)."""
-        conn = self._get_connection()
-        try:
+        with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT * FROM reviews
@@ -197,13 +173,10 @@ class ReviewsDB:
                 ORDER BY review_timestamp DESC
             """, (repo, pr_number))
             return [dict(row) for row in cursor.fetchall()]
-        finally:
-            conn.close()
 
     def get_latest_review_for_pr(self, repo: str, pr_number: int) -> Optional[Dict[str, Any]]:
         """Get the most recent review for a PR."""
-        conn = self._get_connection()
-        try:
+        with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT * FROM reviews
@@ -213,8 +186,6 @@ class ReviewsDB:
             """, (repo, pr_number))
             row = cursor.fetchone()
             return dict(row) if row else None
-        finally:
-            conn.close()
 
     def list_reviews(
         self,
@@ -226,8 +197,7 @@ class ReviewsDB:
         offset: int = 0
     ) -> List[Dict[str, Any]]:
         """List reviews with optional filtering."""
-        conn = self._get_connection()
-        try:
+        with self.db.connection() as conn:
             cursor = conn.cursor()
 
             conditions = []
@@ -258,13 +228,10 @@ class ReviewsDB:
 
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
-        finally:
-            conn.close()
 
     def get_review_stats(self) -> Dict[str, Any]:
         """Get review statistics."""
-        conn = self._get_connection()
-        try:
+        with self.db.connection() as conn:
             cursor = conn.cursor()
 
             cursor.execute("SELECT COUNT(*) as total FROM reviews")
@@ -299,13 +266,10 @@ class ReviewsDB:
                 "average_score": round(avg_score, 1) if avg_score else None,
                 "followup_count": followup_count
             }
-        finally:
-            conn.close()
 
     def search_reviews(self, search_text: str, limit: int = 20) -> List[Dict[str, Any]]:
         """Search reviews by title or content."""
-        conn = self._get_connection()
-        try:
+        with self.db.connection() as conn:
             cursor = conn.cursor()
             search_pattern = f"%{search_text}%"
             cursor.execute("""
@@ -315,5 +279,3 @@ class ReviewsDB:
                 LIMIT ?
             """, (search_pattern, search_pattern, limit))
             return [dict(row) for row in cursor.fetchall()]
-        finally:
-            conn.close()

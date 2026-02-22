@@ -26,6 +26,7 @@ from backend.services.contributor_service import fetch_contributor_timeseries
 from backend.visualizers.lifecycle_visualizer import compute_lifecycle_metrics
 from backend.visualizers.responsiveness_visualizer import compute_responsiveness_metrics
 from backend.visualizers.activity_visualizer import slice_and_summarize
+from backend.routes import error_response
 
 analytics_bp = Blueprint("analytics", __name__)
 
@@ -120,7 +121,7 @@ def get_developer_stats(owner, repo):
         })
 
     except RuntimeError as e:
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Failed to fetch developer stats for {full_repo}: {e}")
 
 
 # --- Lifecycle Metrics ---
@@ -134,8 +135,7 @@ def get_lifecycle_metrics(owner, repo):
         metrics = compute_lifecycle_metrics(prs)
         return jsonify(metrics)
     except Exception as e:
-        logger.error(f"Failed to fetch lifecycle metrics: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Failed to fetch lifecycle metrics: {e}")
 
 
 # --- Review Responsiveness ---
@@ -149,8 +149,7 @@ def get_review_responsiveness(owner, repo):
         metrics = compute_responsiveness_metrics(prs)
         return jsonify(metrics)
     except Exception as e:
-        logger.error(f"Failed to fetch review responsiveness: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Failed to fetch review responsiveness: {e}")
 
 
 # --- Code Activity ---
@@ -215,8 +214,7 @@ def get_code_activity(owner, repo):
         return jsonify(slice_and_summarize(data, weeks))
 
     except Exception as e:
-        logger.error(f"Failed to fetch code activity: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Failed to fetch code activity: {e}")
 
 
 # --- Contributor Time Series ---
@@ -275,5 +273,4 @@ def get_contributor_timeseries(owner, repo):
         return jsonify({"contributors": data})
 
     except Exception as e:
-        logger.error(f"Failed to fetch contributor timeseries for {repo_key}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Failed to fetch contributor timeseries for {repo_key}: {e}")

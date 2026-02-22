@@ -7,6 +7,7 @@ from flask import Blueprint, jsonify, request
 from backend.extensions import logger
 from backend.database import get_queue_db, get_reviews_db
 from backend.services.github_service import fetch_pr_state_and_sha
+from backend.routes import error_response
 
 queue_bp = Blueprint("queue", __name__)
 
@@ -100,8 +101,7 @@ def get_merge_queue():
 
         return jsonify({"queue": queue})
     except Exception as e:
-        logger.error(f"Error getting merge queue: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error getting merge queue: {e}")
 
 
 @queue_bp.route("/api/merge-queue", methods=["POST"])
@@ -153,8 +153,7 @@ def add_to_merge_queue():
     except ValueError as e:
         return jsonify({"error": str(e)}), 409
     except Exception as e:
-        logger.error(f"Error adding to merge queue: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error adding to merge queue: {e}")
 
 
 @queue_bp.route("/api/merge-queue/<int:pr_number>", methods=["DELETE"])
@@ -171,8 +170,7 @@ def remove_from_merge_queue(pr_number):
         return jsonify({"message": "PR removed from queue"})
 
     except Exception as e:
-        logger.error(f"Error removing from merge queue: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error removing from merge queue: {e}")
 
 
 @queue_bp.route("/api/merge-queue/reorder", methods=["POST"])
@@ -203,8 +201,7 @@ def reorder_merge_queue():
         return jsonify({"message": "Queue reordered", "queue": new_queue})
 
     except Exception as e:
-        logger.error(f"Error reordering merge queue: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error reordering merge queue: {e}")
 
 
 # --- Queue Notes ---
@@ -235,8 +232,7 @@ def get_queue_notes(pr_number):
         return jsonify({"notes": formatted_notes})
 
     except Exception as e:
-        logger.error(f"Error getting queue notes: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error getting queue notes: {e}")
 
 
 @queue_bp.route("/api/merge-queue/<int:pr_number>/notes", methods=["POST"])
@@ -274,8 +270,7 @@ def add_queue_note(pr_number):
     except ValueError as e:
         return jsonify({"error": str(e)}), 404
     except Exception as e:
-        logger.error(f"Error adding queue note: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error adding queue note: {e}")
 
 
 @queue_bp.route("/api/merge-queue/notes/<int:note_id>", methods=["DELETE"])
@@ -290,5 +285,4 @@ def delete_queue_note(note_id):
         return jsonify({"message": "Note deleted"})
 
     except Exception as e:
-        logger.error(f"Error deleting queue note: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error deleting queue note: {e}")

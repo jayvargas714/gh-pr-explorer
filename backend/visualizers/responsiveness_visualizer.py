@@ -2,15 +2,7 @@
 
 from datetime import datetime, timezone
 
-
-def _safe_median(lst):
-    """Compute median of a list."""
-    if not lst:
-        return None
-    s = sorted(lst)
-    n = len(s)
-    mid = n // 2
-    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2
+from backend.utils.math import median
 
 
 def compute_responsiveness_metrics(prs):
@@ -82,7 +74,7 @@ def compute_responsiveness_metrics(prs):
         leaderboard.append({
             "reviewer": reviewer,
             "avg_response_time_hours": round(sum(times) / len(times), 2) if times else None,
-            "median_response_time_hours": round(_safe_median(times), 2) if times else None,
+            "median_response_time_hours": round(median(times), 2) if times else None,
             "total_reviews": total,
             "approvals": approvals,
             "changes_requested": data["changes_requested"],

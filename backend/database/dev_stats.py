@@ -1,6 +1,5 @@
 """DeveloperStatsDB - Database operations for cached developer statistics."""
 
-import sqlite3
 import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -16,13 +15,9 @@ class DeveloperStatsDB:
     def __init__(self, db):
         self.db = db
 
-    def _get_connection(self) -> sqlite3.Connection:
-        return self.db._get_connection()
-
     def get_last_updated(self, repo: str) -> Optional[datetime]:
         """Get the last update timestamp for a repo's stats."""
-        conn = self._get_connection()
-        try:
+        with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT last_updated FROM stats_metadata WHERE repo = ?",
@@ -32,8 +27,6 @@ class DeveloperStatsDB:
             if row and row["last_updated"]:
                 return datetime.fromisoformat(row["last_updated"])
             return None
-        finally:
-            conn.close()
 
     def is_stale(self, repo: str) -> bool:
         """Check if stats for a repo are stale (older than TTL)."""
@@ -45,8 +38,7 @@ class DeveloperStatsDB:
 
     def get_stats(self, repo: str) -> List[Dict[str, Any]]:
         """Get cached stats for a repository."""
-        conn = self._get_connection()
-        try:
+        with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT username, total_prs, open_prs, merged_prs, closed_prs,
@@ -58,18 +50,13 @@ class DeveloperStatsDB:
                 ORDER BY total_prs DESC
             """, (repo,))
             return [dict(row) for row in cursor.fetchall()]
-        finally:
-            conn.close()
 
     def get_all_repos(self) -> List[str]:
         """Return all repos that have cached stats."""
-        conn = self._get_connection()
-        try:
+        with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT repo FROM stats_metadata")
             return [row["repo"] for row in cursor.fetchall()]
-        finally:
-            conn.close()
 
     def save_stats(self, repo: str, stats: List[Dict[str, Any]]) -> None:
         """Save developer stats for a repository. Skips save if stats list is empty."""
@@ -77,8 +64,7 @@ class DeveloperStatsDB:
             logger.warning(f"Skipping save_stats for {repo}: empty stats list")
             return
 
-        conn = self._get_connection()
-        try:
+        with self.db.connection() as conn:
             cursor = conn.cursor()
 
             cursor.execute("DELETE FROM developer_stats WHERE repo = ?", (repo,))
@@ -116,17 +102,9 @@ class DeveloperStatsDB:
                     last_updated = CURRENT_TIMESTAMP
             """, (repo,))
 
-            conn.commit()
-        finally:
-            conn.close()
-
     def clear_stats(self, repo: str) -> None:
         """Clear cached stats for a repository."""
-        conn = self._get_connection()
-        try:
+        with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM developer_stats WHERE repo = ?", (repo,))
             cursor.execute("DELETE FROM stats_metadata WHERE repo = ?", (repo,))
-            conn.commit()
-        finally:
-            conn.close()

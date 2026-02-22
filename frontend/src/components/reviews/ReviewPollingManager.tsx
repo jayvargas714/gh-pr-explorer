@@ -1,10 +1,18 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useReviewStore } from '../../stores/useReviewStore'
 import { fetchActiveReviews } from '../../api/reviews'
 
 export function ReviewPollingManager() {
-  const { activeReviews, setActiveReviews } = useReviewStore()
+  const activeReviews = useReviewStore((state) => state.activeReviews)
   const initialFetchDone = useRef(false)
+
+  const hasRunning = useMemo(
+    () =>
+      Object.values(activeReviews).some(
+        (review) => review.status === 'running'
+      ),
+    [activeReviews]
+  )
 
   // Fetch active reviews once on mount to recover from page refresh
   useEffect(() => {
@@ -14,24 +22,20 @@ export function ReviewPollingManager() {
     fetchActiveReviews()
       .then((response) => {
         if (response.reviews.length > 0) {
-          setActiveReviews(response.reviews)
+          useReviewStore.getState().setActiveReviews(response.reviews)
         }
       })
-      .catch(() => {})
-  }, [setActiveReviews])
+      .catch((err) => console.error('Failed to fetch active reviews:', err))
+  }, [])
 
   // Poll every 5 seconds while there are running reviews
   useEffect(() => {
-    const hasRunning = Object.values(activeReviews).some(
-      (review) => review.status === 'running'
-    )
-
     if (!hasRunning) return
 
     const pollReviews = async () => {
       try {
         const response = await fetchActiveReviews()
-        setActiveReviews(response.reviews)
+        useReviewStore.getState().setActiveReviews(response.reviews)
       } catch (err) {
         console.error('Failed to poll reviews:', err)
       }
@@ -40,7 +44,7 @@ export function ReviewPollingManager() {
     const interval = setInterval(pollReviews, 5000)
 
     return () => clearInterval(interval)
-  }, [activeReviews, setActiveReviews])
+  }, [hasRunning])
 
   return null
 }

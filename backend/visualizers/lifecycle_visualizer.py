@@ -2,15 +2,7 @@
 
 from datetime import datetime, timezone
 
-
-def _median(lst):
-    """Compute median of a sorted list."""
-    if not lst:
-        return None
-    s = sorted(lst)
-    n = len(s)
-    mid = n // 2
-    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2
+from backend.utils.math import median
 
 
 def compute_lifecycle_metrics(prs):
@@ -93,9 +85,9 @@ def compute_lifecycle_metrics(prs):
         })
 
     return {
-        "median_time_to_merge": round(_median(merge_times), 2) if merge_times else None,
+        "median_time_to_merge": round(median(merge_times), 2) if merge_times else None,
         "avg_time_to_merge": round(sum(merge_times) / len(merge_times), 2) if merge_times else None,
-        "median_time_to_first_review": round(_median(review_times), 2) if review_times else None,
+        "median_time_to_first_review": round(median(review_times), 2) if review_times else None,
         "avg_time_to_first_review": round(sum(review_times) / len(review_times), 2) if review_times else None,
         "stale_prs": stale_prs,
         "stale_count": len(stale_prs),

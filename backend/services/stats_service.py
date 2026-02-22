@@ -1,6 +1,7 @@
 """Developer stats aggregation from 3 sources (contributors, PRs, reviews)."""
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from backend.services.github_service import (
     run_gh_command, parse_json_output, fetch_github_stats_api,
@@ -70,7 +71,7 @@ def fetch_pr_stats(owner, repo):
 
 
 def fetch_review_stats(owner, repo):
-    """Fetch review statistics by reviewer."""
+    """Fetch review statistics by reviewer using parallel API calls."""
     try:
         output = run_gh_command([
             "pr", "list", "-R", f"{owner}/{repo}",
@@ -79,46 +80,46 @@ def fetch_review_stats(owner, repo):
             "--json", "number",
         ])
         prs = parse_json_output(output)
+        pr_numbers = [pr["number"] for pr in prs[:100] if pr.get("number")]
 
-        stats = {}
-        for pr in prs[:100]:
-            pr_number = pr.get("number")
-            if not pr_number:
-                continue
-
+        def fetch_pr_reviews(pr_number):
             try:
                 reviews_output = run_gh_command([
                     "api",
                     f"repos/{owner}/{repo}/pulls/{pr_number}/reviews",
                     "--jq", "[.[] | {login: .user.login, avatar_url: .user.avatar_url, state: .state}]",
                 ])
-                reviews = parse_json_output(reviews_output)
-
-                for review in reviews:
-                    login = review.get("login", "")
-                    if not login:
-                        continue
-
-                    if login not in stats:
-                        stats[login] = {
-                            "avatar_url": review.get("avatar_url", ""),
-                            "total": 0,
-                            "approved": 0,
-                            "changes_requested": 0,
-                            "commented": 0,
-                        }
-
-                    stats[login]["total"] += 1
-                    state = review.get("state", "").upper()
-                    if state == "APPROVED":
-                        stats[login]["approved"] += 1
-                    elif state == "CHANGES_REQUESTED":
-                        stats[login]["changes_requested"] += 1
-                    elif state == "COMMENTED":
-                        stats[login]["commented"] += 1
-
+                return parse_json_output(reviews_output)
             except RuntimeError:
-                continue
+                return []
+
+        stats = {}
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            results = executor.map(fetch_pr_reviews, pr_numbers)
+
+        for reviews in results:
+            for review in reviews:
+                login = review.get("login", "")
+                if not login:
+                    continue
+
+                if login not in stats:
+                    stats[login] = {
+                        "avatar_url": review.get("avatar_url", ""),
+                        "total": 0,
+                        "approved": 0,
+                        "changes_requested": 0,
+                        "commented": 0,
+                    }
+
+                stats[login]["total"] += 1
+                state = review.get("state", "").upper()
+                if state == "APPROVED":
+                    stats[login]["approved"] += 1
+                elif state == "CHANGES_REQUESTED":
+                    stats[login]["changes_requested"] += 1
+                elif state == "COMMENTED":
+                    stats[login]["commented"] += 1
 
         return stats
     except RuntimeError:
@@ -186,8 +187,7 @@ def fetch_and_compute_stats(owner, repo):
 
 def add_avg_pr_scores(stats_list, full_repo, reviews_db):
     """Add average PR scores from reviews database to stats list."""
-    conn = reviews_db._get_connection()
-    try:
+    with reviews_db.db.connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT pr_author, AVG(score) as avg_score, COUNT(*) as review_count
@@ -200,8 +200,6 @@ def add_avg_pr_scores(stats_list, full_repo, reviews_db):
             "avg_score": round(row["avg_score"], 1) if row["avg_score"] else None,
             "review_count": row["review_count"]
         } for row in cursor.fetchall()}
-    finally:
-        conn.close()
 
     for stat in stats_list:
         login = stat.get("login") or stat.get("username")

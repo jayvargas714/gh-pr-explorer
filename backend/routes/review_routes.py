@@ -10,6 +10,7 @@ from backend.database import get_reviews_db
 from backend.services.github_service import fetch_pr_head_sha
 from backend.services.review_service import save_review_to_db, check_review_status, start_review_process
 from backend.services.inline_comments_service import post_inline_comments
+from backend.routes import error_response
 
 review_bp = Blueprint("review", __name__)
 
@@ -19,36 +20,16 @@ def get_reviews():
     """Get all active/recent reviews with updated statuses."""
     reviews_db = get_reviews_db()
     reviews_list = []
+
     with reviews_lock:
-        for key, review in active_reviews.items():
-            process = review.get("process")
-            if process and review["status"] == "running":
-                exit_code = process.poll()
-                if exit_code is not None:
-                    try:
-                        stdout, stderr = process.communicate(timeout=1)
-                        if stderr:
-                            review["error_output"] = stderr.strip()[-2000:]
-                        if stdout:
-                            review["stdout"] = stdout.strip()[-500:]
-                    except subprocess.TimeoutExpired:
-                        pass
-                    except Exception as e:
-                        logger.error(f"Error reading process output for {key}: {e}")
+        keys = list(active_reviews.keys())
 
-                    status = "completed" if exit_code == 0 else "failed"
-                    review["status"] = status
-                    review["exit_code"] = exit_code
-                    review["completed_at"] = datetime.now(timezone.utc).isoformat()
-
-                    if exit_code == 0:
-                        logger.info(f"Review completed successfully: {key}")
-                    else:
-                        error_msg = review.get("error_output", "Unknown error")
-                        logger.error(f"Review failed: {key} (exit code: {exit_code})\nError: {error_msg}")
-
-                    save_review_to_db(key, review, status, reviews_db)
-
+    for key in keys:
+        check_review_status(key, active_reviews, reviews_lock, reviews_db)
+        with reviews_lock:
+            review = active_reviews.get(key)
+            if review is None:
+                continue
             parts = key.split("/")
             reviews_list.append({
                 "key": key,
@@ -156,7 +137,7 @@ def start_review():
 
     except Exception as e:
         logger.exception(f"Unexpected error starting review: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500)
 
 
 @review_bp.route("/api/reviews/<owner>/<repo>/<int:pr_number>", methods=["DELETE"])
@@ -185,8 +166,7 @@ def cancel_review(owner, repo, pr_number):
                     logger.warning(f"Review process killed (did not terminate gracefully) for {key}")
                 review["status"] = "cancelled"
             except Exception as e:
-                logger.error(f"Failed to terminate review process for {key}: {e}")
-                return jsonify({"error": f"Failed to terminate process: {e}"}), 500
+                return error_response("Failed to terminate review process", 500, f"Failed to terminate review process for {key}: {e}")
 
         del active_reviews[key]
         logger.info(f"Review cancelled and removed: {key}")
@@ -226,8 +206,7 @@ def post_inline_comments_endpoint(review_id):
         result, status_code = post_inline_comments(reviews_db, review_id, section=section)
         return jsonify(result), status_code
     except Exception as e:
-        logger.error(f"Error posting inline comments for review {review_id}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error posting inline comments for review {review_id}: {e}")
 
 
 @review_bp.route("/api/reviews/check-new-commits/<owner>/<repo>/<int:pr_number>", methods=["GET"])
@@ -257,5 +236,4 @@ def check_new_commits(owner, repo, pr_number):
         })
 
     except Exception as e:
-        logger.error(f"Error checking new commits for PR #{pr_number}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error checking new commits for PR #{pr_number}: {e}")

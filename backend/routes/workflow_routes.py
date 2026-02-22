@@ -12,6 +12,7 @@ from backend.extensions import (
 from backend.database import get_workflow_cache_db
 from backend.services.workflow_service import fetch_workflow_data
 from backend.visualizers.workflow_visualizer import filter_and_compute_stats
+from backend.routes import error_response
 
 workflow_bp = Blueprint("workflow", __name__)
 
@@ -81,5 +82,4 @@ def get_workflow_runs(owner, repo):
         return jsonify(result)
 
     except Exception as e:
-        logger.error(f"Failed to get workflow runs for {repo_key}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Failed to get workflow runs for {repo_key}: {e}")

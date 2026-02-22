@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backend.config import REVIEWS_DIR
+from backend.config import get_reviews_dir
 from backend.services.github_service import fetch_pr_head_sha, fetch_pr_state
 
 logger = logging.getLogger(__name__)
@@ -110,15 +110,16 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
     Returns:
         tuple: (process, review_file_path_or_error, is_followup)
     """
-    REVIEWS_DIR.mkdir(parents=True, exist_ok=True)
+    reviews_dir = get_reviews_dir()
+    reviews_dir.mkdir(parents=True, exist_ok=True)
 
     repo_safe = repo.replace("/", "-")
     suffix = "-followup" if is_followup else ""
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S") if is_followup else ""
     if is_followup:
-        review_file = REVIEWS_DIR / f"{owner}-{repo_safe}-pr-{pr_number}{suffix}-{timestamp}.md"
+        review_file = reviews_dir / f"{owner}-{repo_safe}-pr-{pr_number}{suffix}-{timestamp}.md"
     else:
-        review_file = REVIEWS_DIR / f"{owner}-{repo_safe}-pr-{pr_number}.md"
+        review_file = reviews_dir / f"{owner}-{repo_safe}-pr-{pr_number}.md"
 
     if is_followup and previous_review_content:
         prompt = (
@@ -138,10 +139,18 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
             f"IMPORTANT: Include a final score from 0-10 in the review."
         )
 
+    # --dangerously-skip-permissions is required for non-interactive subprocess execution.
+    # This app is single-user/local-only; the flag does not expose a network attack surface.
+    # allowedTools is restricted to read-only git/gh commands + file tools.
     cmd = [
         "claude",
         "-p", prompt,
-        "--allowedTools", "Bash(git*),Bash(gh*),Read,Glob,Grep,Write,Task",
+        "--allowedTools", (
+            "Bash(git status*),Bash(git log*),Bash(git show*),"
+            "Bash(git diff*),Bash(git blame*),Bash(git branch*),"
+            "Bash(gh pr view*),Bash(gh pr diff*),Bash(gh pr checks*),"
+            "Bash(gh api*),Read,Glob,Grep,Write,Task"
+        ),
         "--dangerously-skip-permissions"
     ]
 

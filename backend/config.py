@@ -7,8 +7,17 @@ from typing import Any, Dict
 # Project root is one level up from backend/
 PROJECT_ROOT = Path(__file__).parent.parent
 
-# Code reviews directory
+# Default code reviews directory (overridden by config.json "reviews_dir")
 REVIEWS_DIR = Path("/Users/jvargas714/Documents/code-reviews")
+
+
+def get_reviews_dir() -> Path:
+    """Get the reviews directory from config, with fallback to PROJECT_ROOT/reviews."""
+    config = get_config()
+    reviews_path = config.get("reviews_dir")
+    if reviews_path:
+        return Path(reviews_path)
+    return PROJECT_ROOT / "reviews"
 
 # Database file path
 DB_PATH = PROJECT_ROOT / "pr_explorer.db"

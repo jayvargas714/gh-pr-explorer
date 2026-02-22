@@ -2,6 +2,7 @@
 
 import sqlite3
 import logging
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -24,10 +25,22 @@ class Database:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
-    def _init_db(self):
-        """Initialize database schema."""
+    @contextmanager
+    def connection(self):
+        """Context manager that yields a connection, commits on success, rollbacks on exception."""
         conn = self._get_connection()
         try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _init_db(self):
+        """Initialize database schema."""
+        with self.connection() as conn:
             cursor = conn.cursor()
 
             # Create reviews table
@@ -244,30 +257,20 @@ class Database:
                     except sqlite3.OperationalError:
                         pass
 
-            conn.commit()
             logger.info(f"Database initialized at {self.db_path}")
-        finally:
-            conn.close()
 
     def is_migration_done(self, name: str) -> bool:
         """Check if a migration has been executed."""
-        conn = self._get_connection()
-        try:
+        with self.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT 1 FROM migrations WHERE name = ?", (name,))
             return cursor.fetchone() is not None
-        finally:
-            conn.close()
 
     def mark_migration_done(self, name: str):
         """Mark a migration as completed."""
-        conn = self._get_connection()
-        try:
+        with self.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "INSERT OR IGNORE INTO migrations (name) VALUES (?)",
                 (name,)
             )
-            conn.commit()
-        finally:
-            conn.close()

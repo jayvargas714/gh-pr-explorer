@@ -1,5 +1,17 @@
 """Route blueprints registration."""
 
+from flask import jsonify
+
+from backend.extensions import logger
+
+
+def error_response(message, status_code, log_error=None):
+    """Return a sanitized JSON error response, logging the real error internally."""
+    if log_error:
+        logger.error(log_error)
+    return jsonify({"error": message}), status_code
+
+
 from backend.routes.static_routes import static_bp
 from backend.routes.auth_routes import auth_bp
 from backend.routes.repo_routes import repo_bp

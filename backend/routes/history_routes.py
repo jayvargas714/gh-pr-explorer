@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify, request
 
 from backend.extensions import logger
 from backend.database import get_reviews_db
+from backend.routes import error_response
 
 history_bp = Blueprint("history", __name__)
 
@@ -53,8 +54,7 @@ def get_review_history():
         return jsonify({"reviews": formatted})
 
     except Exception as e:
-        logger.error(f"Error getting review history: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error getting review history: {e}")
 
 
 @history_bp.route("/api/review-history/<int:review_id>", methods=["GET"])
@@ -69,8 +69,7 @@ def get_review_detail(review_id):
         return jsonify({"review": dict(review)})
 
     except Exception as e:
-        logger.error(f"Error getting review {review_id}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error getting review {review_id}: {e}")
 
 
 @history_bp.route("/api/review-history/pr/<owner>/<repo>/<int:pr_number>", methods=["GET"])
@@ -101,8 +100,7 @@ def get_pr_reviews(owner, repo, pr_number):
         return jsonify({"reviews": formatted})
 
     except Exception as e:
-        logger.error(f"Error getting reviews for PR #{pr_number}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error getting reviews for PR #{pr_number}: {e}")
 
 
 @history_bp.route("/api/review-history/stats", methods=["GET"])
@@ -114,8 +112,7 @@ def get_review_stats():
         return jsonify({"stats": stats})
 
     except Exception as e:
-        logger.error(f"Error getting review stats: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error getting review stats: {e}")
 
 
 @history_bp.route("/api/review-history/check/<owner>/<repo>/<int:pr_number>", methods=["GET"])
@@ -142,5 +139,4 @@ def check_pr_review_exists(owner, repo, pr_number):
             return jsonify({"has_review": False})
 
     except Exception as e:
-        logger.error(f"Error checking review for PR #{pr_number}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response("Internal server error", 500, f"Error checking review for PR #{pr_number}: {e}")
