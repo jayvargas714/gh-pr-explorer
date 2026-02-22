@@ -5,7 +5,18 @@ import {
   LifecycleMetrics,
   ReviewResponsiveness,
   ContributorTimeSeries,
+  CacheMeta,
 } from '../api/types'
+
+interface AnalyticsCacheMeta {
+  lastUpdated: string | null
+  stale: boolean
+  refreshing: boolean
+}
+
+const emptyCacheMeta: AnalyticsCacheMeta = { lastUpdated: null, stale: false, refreshing: false }
+
+type AnalyticsTab = 'stats' | 'lifecycle' | 'responsiveness' | 'activity' | 'contributors'
 
 interface AnalyticsState {
   // Developer stats
@@ -42,6 +53,9 @@ interface AnalyticsState {
   contributorTSTimeframe: number
   contributorTSMetric: 'commits' | 'additions' | 'deletions'
 
+  // Cache metadata per sub-tab
+  cacheMeta: Record<AnalyticsTab, AnalyticsCacheMeta>
+
   // Actions
   setDeveloperStats: (stats: DeveloperStats[]) => void
   setStatsLoading: (loading: boolean) => void
@@ -68,6 +82,8 @@ interface AnalyticsState {
   setContributorTSError: (error: string | null) => void
   setContributorTSTimeframe: (timeframe: number) => void
   setContributorTSMetric: (metric: 'commits' | 'additions' | 'deletions') => void
+
+  setCacheMeta: (tab: AnalyticsTab, meta: CacheMeta) => void
 
   // Computed
   getSortedStats: () => DeveloperStats[]
@@ -109,6 +125,15 @@ export const useAnalyticsStore = create<AnalyticsState>((set, get) => ({
   contributorTSError: null,
   contributorTSTimeframe: 52,
   contributorTSMetric: 'commits',
+
+  // Cache metadata per sub-tab
+  cacheMeta: {
+    stats: { ...emptyCacheMeta },
+    lifecycle: { ...emptyCacheMeta },
+    responsiveness: { ...emptyCacheMeta },
+    activity: { ...emptyCacheMeta },
+    contributors: { ...emptyCacheMeta },
+  },
 
   // Actions
   setDeveloperStats: (stats) => set({ developerStats: stats }),
@@ -159,6 +184,18 @@ export const useAnalyticsStore = create<AnalyticsState>((set, get) => ({
   setContributorTSError: (error) => set({ contributorTSError: error }),
   setContributorTSTimeframe: (timeframe) => set({ contributorTSTimeframe: timeframe }),
   setContributorTSMetric: (metric) => set({ contributorTSMetric: metric }),
+
+  setCacheMeta: (tab, meta) =>
+    set((state) => ({
+      cacheMeta: {
+        ...state.cacheMeta,
+        [tab]: {
+          lastUpdated: meta.last_updated,
+          stale: meta.stale,
+          refreshing: meta.refreshing,
+        },
+      },
+    })),
 
   // Computed
   getSortedStats: () => {

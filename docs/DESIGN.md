@@ -2091,6 +2091,7 @@ Clears the in-memory cache.
 | `cache_ttl_seconds` | integer | 300 | Cache time-to-live in seconds (5 minutes) |
 | `workflow_cache_ttl_minutes` | integer | 60 | Workflow cache TTL in minutes (stale-while-revalidate) |
 | `workflow_cache_max_runs` | integer | 1000 | Maximum unfiltered workflow runs to cache per repo |
+| `review_sample_limit` | integer | 250 | Maximum PRs to sample for review statistics and lifecycle metrics |
 
 ### Example Configuration
 
@@ -2103,7 +2104,8 @@ Clears the in-memory cache.
   "default_per_page": 30,
   "cache_ttl_seconds": 300,
   "workflow_cache_ttl_minutes": 60,
-  "workflow_cache_max_runs": 1000
+  "workflow_cache_max_runs": 1000,
+  "review_sample_limit": 250
 }
 ```
 
@@ -2200,6 +2202,21 @@ def cached(ttl_seconds=None):
 - **TTL**: Configurable, default 5 minutes
 - **Key Generation**: Function name + arguments + keyword arguments + request query string
 - **Invalidation**: Manual via `/api/clear-cache` endpoint or process restart
+
+### Cache Timestamps
+
+All cached endpoints include metadata fields so the frontend can show data freshness:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `last_updated` | string (ISO 8601) | UTC timestamp of when the cached data was last fetched, with "Z" suffix |
+| `cached` | boolean | Whether the response was served from cache |
+| `stale` | boolean | Whether the cached data has exceeded its TTL |
+| `refreshing` | boolean | Whether a background refresh is currently in progress |
+
+**Endpoints with cache metadata**: `/stats`, `/lifecycle-metrics`, `/review-responsiveness`, `/code-activity`, `/contributor-timeseries`, `/workflow-runs`
+
+The frontend displays a subtle "Updated X ago" indicator on each cached view using the `CacheTimestamp` component. When data is stale and a background refresh is in progress, the indicator shows "Updated X ago · refreshing..."
 
 ### Workflow Cache (SQLite + Stale-While-Revalidate)
 
@@ -2402,7 +2419,7 @@ process = subprocess.Popen(
 3. **Rate Limits**: Subject to GitHub API rate limits via gh CLI
 4. **Large Repositories**: Stats fetching may be slow for repos with many PRs
 5. **Teams Endpoint**: May fail for personal repositories (non-fatal)
-6. **Review Stats Sampling**: Reviews fetched for first 100 PRs only
+6. **Review Stats Sampling**: Reviews fetched for a configurable number of PRs (default 250, set via `review_sample_limit` in config.json)
 7. **Claude CLI Required**: Code review feature requires Claude CLI installed and authenticated
 8. **One Review Per PR**: Cannot run multiple concurrent reviews for the same PR
 9. **Active Review Volatility**: In-progress reviews lost if server restarts mid-review (completed reviews are persisted)
@@ -2410,7 +2427,7 @@ process = subprocess.Popen(
 11. **Score Extraction Heuristic**: Score parsing relies on regex patterns; unusual formats may not be detected
 12. **Migration One-Time**: Data migration from legacy JSON/markdown runs once; subsequent manual additions to old format not auto-imported
 13. **Stats API Availability**: GitHub stats endpoints return 202 while computing; data may be unavailable for first request on cold repositories
-14. **Lifecycle PR Limit**: Lifecycle and review responsiveness metrics analyze the most recent 50 PRs only
+14. **Lifecycle PR Limit**: Lifecycle and review responsiveness metrics analyze the most recent PRs (default 250, configurable via `review_sample_limit`)
 15. **Divergence API Calls**: Branch divergence fetches one compare API call per open PR, which may be slow for repositories with many open PRs
 16. **Code Activity Max Range**: Code activity is limited to 52 weeks maximum (GitHub API limitation)
 17. **Mixed Chart Rendering**: Activity bar charts use CSS-only rendering (no click handlers, zoom, or drill-down); Contributor time series charts use recharts with interactive tooltips and legend toggling

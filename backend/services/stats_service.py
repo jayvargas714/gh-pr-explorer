@@ -3,6 +3,7 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
+from backend.config import get_config
 from backend.services.github_service import (
     run_gh_command, parse_json_output, fetch_github_stats_api,
 )
@@ -73,14 +74,16 @@ def fetch_pr_stats(owner, repo):
 def fetch_review_stats(owner, repo):
     """Fetch review statistics by reviewer using parallel API calls."""
     try:
+        config = get_config()
+        review_limit = config.get("review_sample_limit", 250)
         output = run_gh_command([
             "pr", "list", "-R", f"{owner}/{repo}",
             "--state", "all",
-            "--limit", "100",
+            "--limit", str(review_limit),
             "--json", "number",
         ])
         prs = parse_json_output(output)
-        pr_numbers = [pr["number"] for pr in prs[:100] if pr.get("number")]
+        pr_numbers = [pr["number"] for pr in prs[:review_limit] if pr.get("number")]
 
         def fetch_pr_reviews(pr_number):
             try:
@@ -94,8 +97,8 @@ def fetch_review_stats(owner, repo):
                 return []
 
         stats = {}
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            results = executor.map(fetch_pr_reviews, pr_numbers)
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(fetch_pr_reviews, pr_numbers))
 
         for reviews in results:
             for review in reviews:

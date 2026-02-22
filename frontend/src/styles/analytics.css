@@ -73,6 +73,19 @@
   font-size: var(--mx-font-size-base);
 }
 
+/* Cache Timestamp */
+.mx-cache-timestamp {
+  display: inline-block;
+  font-size: var(--mx-font-size-xs, 0.75rem);
+  font-style: italic;
+  color: var(--mx-color-text-secondary);
+  margin-bottom: var(--mx-spacing-4);
+}
+
+.mx-cache-timestamp--stale {
+  color: var(--mx-color-warning, #e2b93d);
+}
+
 /* Stat Cards Grid */
 .mx-stat-cards {
   display: grid;

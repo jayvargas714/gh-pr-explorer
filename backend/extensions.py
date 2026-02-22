@@ -36,3 +36,6 @@ activity_refresh_lock = threading.Lock()
 
 stats_refresh_in_progress = set()
 stats_refresh_lock = threading.Lock()
+
+lifecycle_refresh_in_progress = set()
+lifecycle_refresh_lock = threading.Lock()

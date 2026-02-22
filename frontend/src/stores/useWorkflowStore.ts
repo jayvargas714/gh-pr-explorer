@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { WorkflowRun, WorkflowStats, Workflow } from '../api/types'
+import { WorkflowRun, WorkflowStats, Workflow, CacheMeta } from '../api/types'
 
 interface WorkflowState {
   // Workflows
@@ -9,6 +9,11 @@ interface WorkflowState {
   loading: boolean
   refreshing: boolean
   error: string | null
+
+  // Cache metadata
+  lastUpdated: string | null
+  stale: boolean
+  cacheRefreshing: boolean
 
   // Filters
   workflowFilter: string
@@ -29,6 +34,8 @@ interface WorkflowState {
   setLoading: (loading: boolean) => void
   setRefreshing: (refreshing: boolean) => void
   setError: (error: string | null) => void
+
+  setCacheMeta: (meta: CacheMeta) => void
 
   setWorkflowFilter: (filter: string) => void
   setBranchFilter: (filter: string) => void
@@ -55,6 +62,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   refreshing: false,
   error: null,
 
+  // Cache metadata
+  lastUpdated: null,
+  stale: false,
+  cacheRefreshing: false,
+
   // Filters
   workflowFilter: '',
   branchFilter: '',
@@ -74,6 +86,12 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   setLoading: (loading) => set({ loading }),
   setRefreshing: (refreshing) => set({ refreshing }),
   setError: (error) => set({ error }),
+
+  setCacheMeta: (meta) => set({
+    lastUpdated: meta.last_updated,
+    stale: meta.stale,
+    cacheRefreshing: meta.refreshing,
+  }),
 
   setWorkflowFilter: (filter) => set({ workflowFilter: filter }),
   setBranchFilter: (filter) => set({ branchFilter: filter }),

@@ -3,6 +3,7 @@ import { useAnalyticsStore } from '../../stores/useAnalyticsStore'
 import { useAccountStore } from '../../stores/useAccountStore'
 import { fetchDeveloperStats } from '../../api/analytics'
 import { SortableTable, Column } from '../common/SortableTable'
+import { CacheTimestamp } from '../common/CacheTimestamp'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 import { formatNumber, calculatePercentage } from '../../utils/formatters'
@@ -15,11 +16,13 @@ export function StatsView() {
     statsError,
     statsSortBy,
     statsSortDirection,
+    cacheMeta,
     setDeveloperStats,
     setStatsLoading,
     setStatsError,
     sortStats,
     getSortedStats,
+    setCacheMeta,
   } = useAnalyticsStore()
 
   useEffect(() => {
@@ -39,6 +42,7 @@ export function StatsView() {
         selectedRepo.name
       )
       setDeveloperStats(response.stats)
+      setCacheMeta('stats', response)
     } catch (err) {
       setStatsError(err instanceof Error ? err.message : 'Failed to load stats')
     } finally {
@@ -153,8 +157,15 @@ export function StatsView() {
     },
   ]
 
+  const statsCacheMeta = cacheMeta.stats
+
   return (
     <div className="mx-stats-view">
+      <CacheTimestamp
+        lastUpdated={statsCacheMeta.lastUpdated}
+        stale={statsCacheMeta.stale}
+        refreshing={statsCacheMeta.refreshing}
+      />
       <SortableTable
         columns={columns}
         data={sortedStats}

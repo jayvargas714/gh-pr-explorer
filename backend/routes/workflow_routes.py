@@ -17,6 +17,18 @@ from backend.routes import error_response
 workflow_bp = Blueprint("workflow", __name__)
 
 
+def _normalize_timestamp(ts):
+    """Normalize SQLite CURRENT_TIMESTAMP to ISO 8601 with Z suffix."""
+    if ts is None:
+        return None
+    s = str(ts)
+    if "T" not in s:
+        s = s.replace(" ", "T")
+    if not s.endswith("Z"):
+        s += "Z"
+    return s
+
+
 def _background_refresh_workflows(owner, repo, repo_key):
     """Background task to refresh workflow cache for a repository."""
     try:
@@ -54,13 +66,19 @@ def get_workflow_runs(owner, repo):
             logger.info(f"Force refresh requested for {repo_key}")
             data = fetch_workflow_data(owner, repo)
             workflow_cache_db.save_cache(repo_key, data)
+            fresh_cached = workflow_cache_db.get_cached(repo_key)
             result = filter_and_compute_stats(data, filters)
+            result["last_updated"] = _normalize_timestamp(fresh_cached["updated_at"]) if fresh_cached else None
+            result["cached"] = False
+            result["stale"] = False
+            result["refreshing"] = False
             return jsonify(result)
 
         cached = workflow_cache_db.get_cached(repo_key)
         is_stale = workflow_cache_db.is_stale(repo_key, ttl_minutes)
 
         if cached:
+            refreshing = False
             if is_stale:
                 with workflow_refresh_lock:
                     if repo_key not in workflow_refresh_in_progress:
@@ -71,14 +89,26 @@ def get_workflow_runs(owner, repo):
                             daemon=True
                         )
                         thread.start()
+                        refreshing = True
+                    else:
+                        refreshing = True
 
             result = filter_and_compute_stats(cached["data"], filters)
+            result["last_updated"] = _normalize_timestamp(cached["updated_at"])
+            result["cached"] = True
+            result["stale"] = is_stale
+            result["refreshing"] = refreshing
             return jsonify(result)
 
         # No cache: synchronous fetch
         data = fetch_workflow_data(owner, repo)
         workflow_cache_db.save_cache(repo_key, data)
+        fresh_cached = workflow_cache_db.get_cached(repo_key)
         result = filter_and_compute_stats(data, filters)
+        result["last_updated"] = _normalize_timestamp(fresh_cached["updated_at"]) if fresh_cached else None
+        result["cached"] = False
+        result["stale"] = False
+        result["refreshing"] = False
         return jsonify(result)
 
     except Exception as e:

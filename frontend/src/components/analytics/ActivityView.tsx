@@ -14,6 +14,7 @@ import { useAccountStore } from '../../stores/useAccountStore'
 import { useUIStore } from '../../stores/useUIStore'
 import { fetchCodeActivity, fetchContributorTimeSeries } from '../../api/analytics'
 import { BarChart as CssBarChart } from './BarChart'
+import { CacheTimestamp } from '../common/CacheTimestamp'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 import { InfoTooltip } from '../common/InfoTooltip'
@@ -29,6 +30,7 @@ export function ActivityView() {
     activityLoading,
     activityError,
     activityTimeframe,
+    cacheMeta,
     setCodeActivity,
     setActivityLoading,
     setActivityError,
@@ -37,6 +39,7 @@ export function ActivityView() {
     setContributorTimeSeries,
     setContributorTSLoading,
     setContributorTSError,
+    setCacheMeta,
   } = useAnalyticsStore()
 
   useEffect(() => {
@@ -60,6 +63,7 @@ export function ActivityView() {
         activityTimeframe
       )
       setCodeActivity(response)
+      setCacheMeta('activity', response)
     } catch (err) {
       setActivityError(err instanceof Error ? err.message : 'Failed to load activity data')
     } finally {
@@ -121,8 +125,15 @@ export function ActivityView() {
     { value: 52, label: '1 Year' },
   ]
 
+  const activityCacheMeta = cacheMeta.activity
+
   return (
     <div className="mx-activity-view">
+      <CacheTimestamp
+        lastUpdated={activityCacheMeta.lastUpdated}
+        stale={activityCacheMeta.stale}
+        refreshing={activityCacheMeta.refreshing}
+      />
       <div className="mx-activity__controls">
         <label>Timeframe:</label>
         {timeframeOptions.map((option) => (

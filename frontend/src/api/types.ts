@@ -435,6 +435,17 @@ export interface Settings {
 }
 
 // ============================================================================
+// Cache Metadata
+// ============================================================================
+
+export interface CacheMeta {
+  last_updated: string | null
+  cached: boolean
+  stale: boolean
+  refreshing: boolean
+}
+
+// ============================================================================
 // API Response Types
 // ============================================================================
 
@@ -474,7 +485,7 @@ export interface TeamsResponse {
   teams: Team[]
 }
 
-export interface StatsResponse {
+export interface StatsResponse extends CacheMeta {
   stats: DeveloperStats[]
 }
 
@@ -482,21 +493,21 @@ export interface DivergenceResponse {
   divergence: DivergenceMap
 }
 
-export interface WorkflowRunsResponse {
+export interface WorkflowRunsResponse extends CacheMeta {
   runs: WorkflowRun[]
   stats: WorkflowStats
   workflows: Workflow[]
 }
 
-export interface ContributorTimeSeriesResponse {
+export interface ContributorTimeSeriesResponse extends CacheMeta {
   contributors: ContributorTimeSeries[]
 }
 
-export interface CodeActivityResponse extends CodeActivity {}
+export interface CodeActivityResponse extends CodeActivity, CacheMeta {}
 
-export interface LifecycleMetricsResponse extends LifecycleMetrics {}
+export interface LifecycleMetricsResponse extends LifecycleMetrics, CacheMeta {}
 
-export interface ReviewResponsivenessResponse extends ReviewResponsiveness {}
+export interface ReviewResponsivenessResponse extends ReviewResponsiveness, CacheMeta {}
 
 export interface MergeQueueResponse {
   queue: MergeQueueItem[]

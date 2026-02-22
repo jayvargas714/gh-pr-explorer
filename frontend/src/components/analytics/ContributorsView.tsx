@@ -13,6 +13,7 @@ import { useAnalyticsStore } from '../../stores/useAnalyticsStore'
 import { useAccountStore } from '../../stores/useAccountStore'
 import { useUIStore } from '../../stores/useUIStore'
 import { fetchContributorTimeSeries } from '../../api/analytics'
+import { CacheTimestamp } from '../common/CacheTimestamp'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 
@@ -30,11 +31,13 @@ export function ContributorsView() {
     contributorTSError,
     contributorTSTimeframe,
     contributorTSMetric,
+    cacheMeta,
     setContributorTimeSeries,
     setContributorTSLoading,
     setContributorTSError,
     setContributorTSTimeframe,
     setContributorTSMetric,
+    setCacheMeta,
   } = useAnalyticsStore()
 
   const [hiddenContributors, setHiddenContributors] = useState<Set<string>>(new Set())
@@ -55,6 +58,7 @@ export function ContributorsView() {
         selectedRepo.name
       )
       setContributorTimeSeries(response.contributors)
+      setCacheMeta('contributors', response)
     } catch (err) {
       setContributorTSError(err instanceof Error ? err.message : 'Failed to load contributor data')
     } finally {
@@ -132,8 +136,15 @@ export function ContributorsView() {
     return `${parts[1]}/${parts[2]}`
   }
 
+  const contributorsCacheMeta = cacheMeta.contributors
+
   return (
     <div className="mx-contributors-view">
+      <CacheTimestamp
+        lastUpdated={contributorsCacheMeta.lastUpdated}
+        stale={contributorsCacheMeta.stale}
+        refreshing={contributorsCacheMeta.refreshing}
+      />
       <div className="mx-activity__controls">
         <label>Timeframe:</label>
         {timeframeOptions.map((option) => (

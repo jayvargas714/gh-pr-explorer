@@ -3,6 +3,7 @@ import { useAnalyticsStore } from '../../stores/useAnalyticsStore'
 import { useAccountStore } from '../../stores/useAccountStore'
 import { fetchReviewResponsiveness } from '../../api/analytics'
 import { SortableTable, Column } from '../common/SortableTable'
+import { CacheTimestamp } from '../common/CacheTimestamp'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 import { formatHours, formatNumber } from '../../utils/formatters'
@@ -15,11 +16,13 @@ export function ResponsivenessView() {
     responsivenessError,
     responsivenessSortBy,
     responsivenessSortDirection,
+    cacheMeta,
     setReviewResponsiveness,
     setResponsivenessLoading,
     setResponsivenessError,
     sortResponsiveness,
     getSortedReviewerLeaderboard,
+    setCacheMeta,
   } = useAnalyticsStore()
 
   useEffect(() => {
@@ -39,6 +42,7 @@ export function ResponsivenessView() {
         selectedRepo.name
       )
       setReviewResponsiveness(response)
+      setCacheMeta('responsiveness', response)
     } catch (err) {
       setResponsivenessError(err instanceof Error ? err.message : 'Failed to load responsiveness data')
     } finally {
@@ -109,8 +113,15 @@ export function ResponsivenessView() {
     },
   ]
 
+  const responsivenessCacheMeta = cacheMeta.responsiveness
+
   return (
     <div className="mx-responsiveness-view">
+      <CacheTimestamp
+        lastUpdated={responsivenessCacheMeta.lastUpdated}
+        stale={responsivenessCacheMeta.stale}
+        refreshing={responsivenessCacheMeta.refreshing}
+      />
       <div className="mx-stat-cards">
         <div className="mx-stat-card">
           <span className="mx-stat-card__label">Avg Team Response</span>

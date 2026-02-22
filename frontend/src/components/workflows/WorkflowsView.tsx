@@ -5,6 +5,7 @@ import { fetchWorkflowRuns } from '../../api/workflows'
 import { WorkflowFilters } from './WorkflowFilters'
 import { WorkflowStats } from './WorkflowStats'
 import { WorkflowTable } from './WorkflowTable'
+import { CacheTimestamp } from '../common/CacheTimestamp'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 
@@ -16,6 +17,9 @@ export function WorkflowsView() {
   const error = useWorkflowStore((s) => s.error)
   const workflows = useWorkflowStore((s) => s.workflows)
   const workflowStats = useWorkflowStore((s) => s.workflowStats)
+  const lastUpdated = useWorkflowStore((s) => s.lastUpdated)
+  const stale = useWorkflowStore((s) => s.stale)
+  const cacheRefreshing = useWorkflowStore((s) => s.cacheRefreshing)
   const workflowFilter = useWorkflowStore((s) => s.workflowFilter)
   const branchFilter = useWorkflowStore((s) => s.branchFilter)
   const eventFilter = useWorkflowStore((s) => s.eventFilter)
@@ -31,6 +35,7 @@ export function WorkflowsView() {
       setWorkflowRuns,
       setWorkflows,
       setWorkflowStats,
+      setCacheMeta,
     } = useWorkflowStore.getState()
 
     try {
@@ -56,6 +61,7 @@ export function WorkflowsView() {
       setWorkflowRuns(response.runs)
       setWorkflows(response.workflows || [])
       setWorkflowStats(response.stats || null)
+      setCacheMeta(response)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load workflow runs')
     } finally {
@@ -90,6 +96,11 @@ export function WorkflowsView() {
 
   return (
     <div className="mx-workflows-view">
+      <CacheTimestamp
+        lastUpdated={lastUpdated}
+        stale={stale}
+        refreshing={cacheRefreshing}
+      />
       <WorkflowFilters
         workflows={workflows}
         onRefreshCache={handleRefreshCache}

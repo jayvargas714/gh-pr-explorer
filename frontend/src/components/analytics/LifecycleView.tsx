@@ -3,6 +3,7 @@ import { useAnalyticsStore } from '../../stores/useAnalyticsStore'
 import { useAccountStore } from '../../stores/useAccountStore'
 import { fetchLifecycleMetrics } from '../../api/analytics'
 import { SortableTable, Column } from '../common/SortableTable'
+import { CacheTimestamp } from '../common/CacheTimestamp'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 import { InfoTooltip } from '../common/InfoTooltip'
@@ -16,11 +17,13 @@ export function LifecycleView() {
     lifecycleError,
     lifecycleSortBy,
     lifecycleSortDirection,
+    cacheMeta,
     setLifecycleMetrics,
     setLifecycleLoading,
     setLifecycleError,
     sortLifecycle,
     getSortedLifecyclePRs,
+    setCacheMeta,
   } = useAnalyticsStore()
 
   useEffect(() => {
@@ -40,6 +43,7 @@ export function LifecycleView() {
         selectedRepo.name
       )
       setLifecycleMetrics(response)
+      setCacheMeta('lifecycle', response)
     } catch (err) {
       setLifecycleError(err instanceof Error ? err.message : 'Failed to load lifecycle metrics')
     } finally {
@@ -85,8 +89,15 @@ export function LifecycleView() {
     { key: 'first_reviewer', label: 'First Reviewer', sortable: true, tooltip: 'First person to submit a review' },
   ]
 
+  const lifecycleCacheMeta = cacheMeta.lifecycle
+
   return (
     <div className="mx-lifecycle-view">
+      <CacheTimestamp
+        lastUpdated={lifecycleCacheMeta.lastUpdated}
+        stale={lifecycleCacheMeta.stale}
+        refreshing={lifecycleCacheMeta.refreshing}
+      />
       <div className="mx-stat-cards">
         <div className="mx-stat-card">
           <span className="mx-stat-card__label">Median Time to Merge</span>

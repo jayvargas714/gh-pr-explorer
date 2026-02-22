@@ -7,5 +7,6 @@
   "cache_ttl_seconds": 300,
   "workflow_cache_ttl_minutes": 60,
   "workflow_cache_max_runs": 1000,
+  "review_sample_limit": 250,
   "reviews_dir": "/Users/jvargas714/Documents/code-reviews"
 }
