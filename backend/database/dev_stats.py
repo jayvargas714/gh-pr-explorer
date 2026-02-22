@@ -61,8 +61,22 @@ class DeveloperStatsDB:
         finally:
             conn.close()
 
+    def get_all_repos(self) -> List[str]:
+        """Return all repos that have cached stats."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT repo FROM stats_metadata")
+            return [row["repo"] for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
     def save_stats(self, repo: str, stats: List[Dict[str, Any]]) -> None:
-        """Save developer stats for a repository."""
+        """Save developer stats for a repository. Skips save if stats list is empty."""
+        if not stats:
+            logger.warning(f"Skipping save_stats for {repo}: empty stats list")
+            return
+
         conn = self._get_connection()
         try:
             cursor = conn.cursor()

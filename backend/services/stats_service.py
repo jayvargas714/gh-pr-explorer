@@ -20,7 +20,9 @@ def fetch_contributor_stats(owner, repo):
             "commits: .total, "
             "lines_added: ([.weeks[].a] | add), "
             "lines_deleted: ([.weeks[].d] | add)}]"
-        )
+        ),
+        max_retries=5,
+        retry_delay=3,
     )
 
 

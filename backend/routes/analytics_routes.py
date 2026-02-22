@@ -36,12 +36,14 @@ def _background_refresh_stats(owner, repo, full_repo):
     """Background task to refresh stats for a repository."""
     try:
         logger.info(f"Background refresh started for {full_repo}")
-        reviews_db = get_reviews_db()
         dev_stats_db = get_dev_stats_db()
         stats_list = fetch_and_compute_stats(owner, repo)
-        cache_data = stats_to_cache_format(stats_list)
-        dev_stats_db.save_stats(full_repo, cache_data)
-        logger.info(f"Background refresh completed for {full_repo}")
+        if stats_list:
+            cache_data = stats_to_cache_format(stats_list)
+            dev_stats_db.save_stats(full_repo, cache_data)
+            logger.info(f"Background refresh completed for {full_repo}")
+        else:
+            logger.warning(f"Background refresh got empty stats for {full_repo}, keeping existing cache")
     except Exception as e:
         logger.error(f"Background refresh failed for {full_repo}: {e}")
     finally:
@@ -67,9 +69,10 @@ def get_developer_stats(owner, repo):
 
         if force_refresh:
             stats_list = fetch_and_compute_stats(owner, repo)
-            cache_data = stats_to_cache_format(stats_list)
-            dev_stats_db.save_stats(full_repo, cache_data)
-            last_updated = dev_stats_db.get_last_updated(full_repo)
+            if stats_list:
+                cache_data = stats_to_cache_format(stats_list)
+                dev_stats_db.save_stats(full_repo, cache_data)
+                last_updated = dev_stats_db.get_last_updated(full_repo)
             stats_with_scores = add_avg_pr_scores(stats_list, full_repo, reviews_db)
             return jsonify({
                 "stats": stats_with_scores,
@@ -103,9 +106,10 @@ def get_developer_stats(owner, repo):
 
         # No cached data: fetch synchronously
         stats_list = fetch_and_compute_stats(owner, repo)
-        cache_data = stats_to_cache_format(stats_list)
-        dev_stats_db.save_stats(full_repo, cache_data)
-        last_updated = dev_stats_db.get_last_updated(full_repo)
+        if stats_list:
+            cache_data = stats_to_cache_format(stats_list)
+            dev_stats_db.save_stats(full_repo, cache_data)
+            last_updated = dev_stats_db.get_last_updated(full_repo)
         stats_with_scores = add_avg_pr_scores(stats_list, full_repo, reviews_db)
 
         return jsonify({
