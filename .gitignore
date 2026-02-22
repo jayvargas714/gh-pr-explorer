@@ -22,3 +22,8 @@ pr_explorer.db
 # Frontend (Node/React)
 node_modules/
 frontend/dist/
+frontend/.env
+frontend/.vite/
+
+# Logs
+gh-pr-explorer.log

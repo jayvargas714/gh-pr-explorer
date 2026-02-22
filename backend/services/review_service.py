@@ -126,14 +126,14 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
             f"This is a FOLLOW-UP review. Here is the previous review for context:\n\n"
             f"---PREVIOUS REVIEW---\n{previous_review_content[:8000]}\n---END PREVIOUS REVIEW---\n\n"
             f"Focus on: changes since last review, whether previous issues were addressed. "
-            f"Use the code-reviewer agent. "
+            f"Use the elite-code-reviewer agent. "
             f"Write the review to {review_file} "
             f"IMPORTANT: Include a final score from 0-10 in the review."
         )
     else:
         prompt = (
             f"Review PR #{pr_number} at {pr_url}. "
-            f"Use the code-reviewer agent. "
+            f"Use the elite-code-reviewer agent. "
             f"Write the review to {review_file} "
             f"IMPORTANT: Include a final score from 0-10 in the review."
         )

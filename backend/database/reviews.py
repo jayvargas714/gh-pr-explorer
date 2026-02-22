@@ -120,13 +120,18 @@ class ReviewsDB:
         finally:
             conn.close()
 
-    def update_section_posted(self, review_id: int, section: str, posted: bool = True):
-        """Update the posted flag for a specific review section.
+    def update_section_posted(
+        self, review_id: int, section: str, posted: bool = True,
+        posted_count: int = 0, found_count: int = 0
+    ):
+        """Update the posted flag and counts for a specific review section.
 
         Args:
             review_id: The review ID.
             section: One of 'critical', 'major', or 'minor'.
             posted: Whether the section has been posted.
+            posted_count: Number of issues successfully posted.
+            found_count: Number of issues found/parsed.
         """
         column_map = {
             "critical": "inline_comments_posted",
@@ -141,11 +146,13 @@ class ReviewsDB:
         try:
             cursor = conn.cursor()
             cursor.execute(
-                f"UPDATE reviews SET {column} = ? WHERE id = ?",
-                (posted, review_id)
+                f"UPDATE reviews SET {column} = ?, "
+                f"{section}_posted_count = ?, {section}_found_count = ? "
+                f"WHERE id = ?",
+                (posted, posted_count, found_count, review_id)
             )
             conn.commit()
-            logger.info(f"Updated {column} for review {review_id} to {posted}")
+            logger.info(f"Updated {column} for review {review_id}: {posted_count}/{found_count} posted")
         finally:
             conn.close()
 

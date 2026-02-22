@@ -208,6 +208,12 @@ class Database:
             review_new_columns = [
                 ("major_concerns_posted", "BOOLEAN DEFAULT FALSE"),
                 ("minor_issues_posted", "BOOLEAN DEFAULT FALSE"),
+                ("critical_posted_count", "INTEGER"),
+                ("critical_found_count", "INTEGER"),
+                ("major_posted_count", "INTEGER"),
+                ("major_found_count", "INTEGER"),
+                ("minor_posted_count", "INTEGER"),
+                ("minor_found_count", "INTEGER"),
             ]
 
             for col_name, col_type in review_new_columns:

@@ -315,6 +315,12 @@ export interface MergeQueueItem {
   inlineCommentsPosted: boolean
   majorConcernsPosted: boolean
   minorIssuesPosted: boolean
+  criticalPostedCount: number | null
+  criticalFoundCount: number | null
+  majorPostedCount: number | null
+  majorFoundCount: number | null
+  minorPostedCount: number | null
+  minorFoundCount: number | null
 }
 
 export interface QueueNote {

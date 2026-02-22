@@ -34,6 +34,12 @@ def get_merge_queue():
             inline_comments_posted = False
             major_concerns_posted = False
             minor_issues_posted = False
+            critical_posted_count = None
+            critical_found_count = None
+            major_posted_count = None
+            major_found_count = None
+            minor_posted_count = None
+            minor_found_count = None
 
             if len(repo_parts) == 2:
                 owner, repo = repo_parts
@@ -47,6 +53,12 @@ def get_merge_queue():
                     inline_comments_posted = latest_review.get("inline_comments_posted", False)
                     major_concerns_posted = latest_review.get("major_concerns_posted", False)
                     minor_issues_posted = latest_review.get("minor_issues_posted", False)
+                    critical_posted_count = latest_review.get("critical_posted_count")
+                    critical_found_count = latest_review.get("critical_found_count")
+                    major_posted_count = latest_review.get("major_posted_count")
+                    major_found_count = latest_review.get("major_found_count")
+                    minor_posted_count = latest_review.get("minor_posted_count")
+                    minor_found_count = latest_review.get("minor_found_count")
                     if latest_review.get("head_commit_sha"):
                         last_reviewed_sha = latest_review["head_commit_sha"]
                         if current_sha and last_reviewed_sha:
@@ -74,7 +86,13 @@ def get_merge_queue():
                 "reviewId": review_id,
                 "inlineCommentsPosted": inline_comments_posted,
                 "majorConcernsPosted": major_concerns_posted,
-                "minorIssuesPosted": minor_issues_posted
+                "minorIssuesPosted": minor_issues_posted,
+                "criticalPostedCount": critical_posted_count,
+                "criticalFoundCount": critical_found_count,
+                "majorPostedCount": major_posted_count,
+                "majorFoundCount": major_found_count,
+                "minorPostedCount": minor_posted_count,
+                "minorFoundCount": minor_found_count
             }
 
         with ThreadPoolExecutor(max_workers=5) as executor:

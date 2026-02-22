@@ -302,7 +302,10 @@ def post_inline_comments(reviews_db, review_id, section="critical"):
             "failed_paths": errors
         }, 500
 
-    reviews_db.update_section_posted(review_id, section, True)
+    reviews_db.update_section_posted(
+        review_id, section, True,
+        posted_count=posted_count, found_count=len(issues)
+    )
 
     return {
         "message": "Inline comments posted successfully",

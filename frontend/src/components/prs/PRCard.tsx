@@ -64,6 +64,12 @@ export function PRCard({ pr }: PRCardProps) {
           inlineCommentsPosted: false,
           majorConcernsPosted: false,
           minorIssuesPosted: false,
+          criticalPostedCount: null,
+          criticalFoundCount: null,
+          majorPostedCount: null,
+          majorFoundCount: null,
+          minorPostedCount: null,
+          minorFoundCount: null,
         })
         await apiAddToQueue({
           number: pr.number,
