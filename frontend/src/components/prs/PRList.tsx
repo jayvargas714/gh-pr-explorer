@@ -8,6 +8,7 @@ import { PRCard } from './PRCard'
 import { Pagination } from '../common/Pagination'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
+import { Button } from '../common/Button'
 
 export function PRList() {
   const selectedRepo = useAccountStore((state) => state.selectedRepo)
@@ -148,6 +149,15 @@ export function PRList() {
     <div className="mx-pr-list">
       <div className="mx-pr-list__header">
         <h2>{prs.length} Pull Requests</h2>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={loadPRs}
+          disabled={loading}
+          data-tooltip="Refresh PR list"
+        >
+          {loading ? <Spinner size="sm" /> : '↻ Refresh'}
+        </Button>
       </div>
 
       <div className="mx-pr-list__items">

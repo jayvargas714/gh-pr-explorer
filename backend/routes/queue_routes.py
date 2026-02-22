@@ -32,6 +32,8 @@ def get_merge_queue():
             has_review = False
             review_id = None
             inline_comments_posted = False
+            major_concerns_posted = False
+            minor_issues_posted = False
 
             if len(repo_parts) == 2:
                 owner, repo = repo_parts
@@ -43,6 +45,8 @@ def get_merge_queue():
                     review_score = latest_review.get("score")
                     review_id = latest_review.get("id")
                     inline_comments_posted = latest_review.get("inline_comments_posted", False)
+                    major_concerns_posted = latest_review.get("major_concerns_posted", False)
+                    minor_issues_posted = latest_review.get("minor_issues_posted", False)
                     if latest_review.get("head_commit_sha"):
                         last_reviewed_sha = latest_review["head_commit_sha"]
                         if current_sha and last_reviewed_sha:
@@ -68,7 +72,9 @@ def get_merge_queue():
                 "hasReview": has_review,
                 "reviewScore": review_score,
                 "reviewId": review_id,
-                "inlineCommentsPosted": inline_comments_posted
+                "inlineCommentsPosted": inline_comments_posted,
+                "majorConcernsPosted": major_concerns_posted,
+                "minorIssuesPosted": minor_issues_posted
             }
 
         with ThreadPoolExecutor(max_workers=5) as executor:

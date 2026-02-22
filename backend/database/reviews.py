@@ -120,6 +120,35 @@ class ReviewsDB:
         finally:
             conn.close()
 
+    def update_section_posted(self, review_id: int, section: str, posted: bool = True):
+        """Update the posted flag for a specific review section.
+
+        Args:
+            review_id: The review ID.
+            section: One of 'critical', 'major', or 'minor'.
+            posted: Whether the section has been posted.
+        """
+        column_map = {
+            "critical": "inline_comments_posted",
+            "major": "major_concerns_posted",
+            "minor": "minor_issues_posted",
+        }
+        column = column_map.get(section)
+        if not column:
+            raise ValueError(f"Unknown section: {section}")
+
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"UPDATE reviews SET {column} = ? WHERE id = ?",
+                (posted, review_id)
+            )
+            conn.commit()
+            logger.info(f"Updated {column} for review {review_id} to {posted}")
+        finally:
+            conn.close()
+
     def _extract_score(self, content: str) -> Optional[float]:
         """Extract score from review content."""
         if not content:

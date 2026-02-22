@@ -51,8 +51,8 @@ export async function getReviewStatus(owner: string, repo: string, prNumber: num
 /**
  * Post inline comments from review
  */
-export async function postInlineComments(reviewId: number): Promise<MessageResponse> {
-  return api.post<MessageResponse>(`/reviews/${reviewId}/post-inline-comments`)
+export async function postInlineComments(reviewId: number, section: string = 'critical'): Promise<MessageResponse> {
+  return api.post<MessageResponse>(`/reviews/${reviewId}/post-inline-comments`, { section })
 }
 
 /**

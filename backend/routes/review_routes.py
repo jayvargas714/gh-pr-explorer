@@ -218,10 +218,12 @@ def get_review_status_endpoint(owner, repo, pr_number):
 
 @review_bp.route("/api/reviews/<int:review_id>/post-inline-comments", methods=["POST"])
 def post_inline_comments_endpoint(review_id):
-    """Post critical issues from a review as inline PR comments."""
+    """Post issues from a review section as inline PR comments."""
     try:
         reviews_db = get_reviews_db()
-        result, status_code = post_inline_comments(reviews_db, review_id)
+        data = request.get_json(silent=True) or {}
+        section = data.get("section", "critical")
+        result, status_code = post_inline_comments(reviews_db, review_id, section=section)
         return jsonify(result), status_code
     except Exception as e:
         logger.error(f"Error posting inline comments for review {review_id}: {e}")

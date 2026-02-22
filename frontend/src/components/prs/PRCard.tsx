@@ -62,6 +62,8 @@ export function PRCard({ pr }: PRCardProps) {
           reviewScore: null,
           reviewId: null,
           inlineCommentsPosted: false,
+          majorConcernsPosted: false,
+          minorIssuesPosted: false,
         })
         await apiAddToQueue({
           number: pr.number,

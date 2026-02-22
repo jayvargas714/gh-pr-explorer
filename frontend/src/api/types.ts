@@ -313,6 +313,8 @@ export interface MergeQueueItem {
   reviewScore: number | null
   reviewId: number | null
   inlineCommentsPosted: boolean
+  majorConcernsPosted: boolean
+  minorIssuesPosted: boolean
 }
 
 export interface QueueNote {

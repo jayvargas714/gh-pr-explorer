@@ -201,6 +201,23 @@ class Database:
                 )
             """)
 
+            # Migration: Add section-posted columns to reviews for existing databases
+            cursor.execute("PRAGMA table_info(reviews)")
+            reviews_columns = {row[1] for row in cursor.fetchall()}
+
+            review_new_columns = [
+                ("major_concerns_posted", "BOOLEAN DEFAULT FALSE"),
+                ("minor_issues_posted", "BOOLEAN DEFAULT FALSE"),
+            ]
+
+            for col_name, col_type in review_new_columns:
+                if col_name not in reviews_columns:
+                    try:
+                        cursor.execute(f"ALTER TABLE reviews ADD COLUMN {col_name} {col_type}")
+                        logger.info(f"Added column {col_name} to reviews table")
+                    except sqlite3.OperationalError:
+                        pass
+
             # Migration: Add new columns to developer_stats for existing databases
             cursor.execute("PRAGMA table_info(developer_stats)")
             existing_columns = {row[1] for row in cursor.fetchall()}

@@ -9,6 +9,18 @@ from backend.services.github_service import fetch_pr_head_sha
 
 logger = logging.getLogger(__name__)
 
+SECTION_HEADINGS = {
+    "critical": "Critical Issues",
+    "major": "Major Concerns",
+    "minor": "Minor Issues",
+}
+
+SECTION_DB_COLUMNS = {
+    "critical": "inline_comments_posted",
+    "major": "major_concerns_posted",
+    "minor": "minor_issues_posted",
+}
+
 
 def _parse_location(location):
     """Parse a location string into (file_path, start_line, end_line) or None.
@@ -53,8 +65,12 @@ def _extract_issue_field(content, field_name):
     return None
 
 
-def parse_critical_issues(content):
-    """Parse critical issues from review markdown content.
+def parse_section_issues(content, section_heading):
+    """Parse issues from a named section in review markdown content.
+
+    Args:
+        content: The full review markdown string.
+        section_heading: The bold heading text to search for (e.g. "Critical Issues").
 
     Returns:
         List of dicts: [{ title, path, start_line, end_line, body }]
@@ -64,24 +80,25 @@ def parse_critical_issues(content):
     if not content:
         return issues
 
-    critical_match = re.search(
-        r'\*\*Critical Issues\*\*\s*(.*?)(?=\n---|\n\*\*[A-Z]|\Z)',
+    escaped_heading = re.escape(section_heading)
+    section_match = re.search(
+        rf'\*\*{escaped_heading}\*\*\s*(.*?)(?=\n---|\n\*\*[A-Z]|\Z)',
         content,
         re.DOTALL | re.IGNORECASE
     )
 
-    if not critical_match:
+    if not section_match:
         return issues
 
-    critical_section = critical_match.group(1)
-    issue_headers = list(re.finditer(r'\*\*(\d+)\.\s*(.+?)\*\*', critical_section))
+    section_text = section_match.group(1)
+    issue_headers = list(re.finditer(r'\*\*(\d+)\.\s*(.+?)\*\*', section_text))
 
     for idx, header_match in enumerate(issue_headers):
         title = header_match.group(2).strip()
 
         start = header_match.end()
-        end = issue_headers[idx + 1].start() if idx + 1 < len(issue_headers) else len(critical_section)
-        issue_content = critical_section[start:end]
+        end = issue_headers[idx + 1].start() if idx + 1 < len(issue_headers) else len(section_text)
+        issue_content = section_text[start:end]
 
         location = _extract_issue_field(issue_content, 'Location')
         problem = _extract_issue_field(issue_content, 'Problem')
@@ -113,6 +130,11 @@ def parse_critical_issues(content):
     return issues
 
 
+def parse_critical_issues(content):
+    """Parse critical issues from review markdown content (backward-compat wrapper)."""
+    return parse_section_issues(content, SECTION_HEADINGS["critical"])
+
+
 def _post_file_comment(owner, repo_name, pr_number, commit_sha, issue):
     """Post a single file-level comment via the individual comments endpoint."""
     comment_body = {
@@ -136,8 +158,13 @@ def _post_file_comment(owner, repo_name, pr_number, commit_sha, issue):
     return result
 
 
-def post_inline_comments(reviews_db, review_id):
-    """Post critical issues from a review as inline PR comments.
+def post_inline_comments(reviews_db, review_id, section="critical"):
+    """Post issues from a review section as inline PR comments.
+
+    Args:
+        reviews_db: ReviewsDB instance.
+        review_id: The review ID.
+        section: One of 'critical', 'major', or 'minor'.
 
     Line-level issues are batched into a review. File-level issues (no line numbers)
     are posted individually via the single comment endpoint.
@@ -145,20 +172,26 @@ def post_inline_comments(reviews_db, review_id):
     Returns:
         tuple: (response_dict, status_code)
     """
+    if section not in SECTION_HEADINGS:
+        return {"error": f"Unknown section: {section}"}, 400
+
+    section_heading = SECTION_HEADINGS[section]
+    db_column = SECTION_DB_COLUMNS[section]
+
     review = reviews_db.get_review(review_id)
     if not review:
         return {"error": "Review not found"}, 404
 
-    if review.get("inline_comments_posted"):
-        return {"error": "Inline comments have already been posted for this review"}, 409
+    if review.get(db_column):
+        return {"error": f"{section_heading} have already been posted for this review"}, 409
 
     content = review.get("content")
     if not content:
         return {"error": "Review has no content to parse"}, 400
 
-    issues = parse_critical_issues(content)
+    issues = parse_section_issues(content, section_heading)
     if not issues:
-        return {"error": "No critical issues found in review content", "issues_found": 0}, 400
+        return {"error": f"No {section_heading.lower()} found in review content", "issues_found": 0}, 400
 
     repo = review.get("repo")
     pr_number = review.get("pr_number")
@@ -201,7 +234,7 @@ def post_inline_comments(reviews_db, review_id):
         review_body = {
             "commit_id": current_sha,
             "event": "COMMENT",
-            "body": f"**Code Review Critical Issues** ({len(issues)} issue(s) flagged)",
+            "body": f"**Code Review {section_heading}** ({len(issues)} issue(s) flagged)",
             "comments": comments
         }
 
@@ -236,7 +269,7 @@ def post_inline_comments(reviews_db, review_id):
                 summary_body = {
                     "commit_id": current_sha,
                     "event": "COMMENT",
-                    "body": f"**Code Review Critical Issues** ({len(issues)} issue(s) flagged)"
+                    "body": f"**Code Review {section_heading}** ({len(issues)} issue(s) flagged)"
                 }
                 subprocess.run(
                     [
@@ -269,7 +302,7 @@ def post_inline_comments(reviews_db, review_id):
             "failed_paths": errors
         }, 500
 
-    reviews_db.update_inline_comments_posted(review_id, True)
+    reviews_db.update_section_posted(review_id, section, True)
 
     return {
         "message": "Inline comments posted successfully",

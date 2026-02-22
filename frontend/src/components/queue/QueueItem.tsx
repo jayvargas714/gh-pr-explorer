@@ -102,7 +102,9 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
         {item.hasReview && (
           <div className="mx-queue-item__badges">
             {item.hasNewCommits && <Badge variant="warning">New Commits</Badge>}
-            {item.inlineCommentsPosted && <Badge variant="info">Posted</Badge>}
+            {item.inlineCommentsPosted && <Badge variant="info">Critical Posted</Badge>}
+            {item.majorConcernsPosted && <Badge variant="info">Major Posted</Badge>}
+            {item.minorIssuesPosted && <Badge variant="info">Minor Posted</Badge>}
           </div>
         )}
 

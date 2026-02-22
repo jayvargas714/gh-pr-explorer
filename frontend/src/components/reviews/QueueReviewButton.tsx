@@ -12,7 +12,7 @@ interface QueueReviewButtonProps {
 
 export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
   const [starting, setStarting] = useState(false)
-  const [posting, setPosting] = useState(false)
+  const [postingSection, setPostingSection] = useState<string | null>(null)
   const { activeReviews, updateReview, removeReview, showReviewError } = useReviewStore()
 
   const [owner, repo] = item.repo.split('/')
@@ -73,16 +73,16 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
     )
   }
 
-  const handlePostInlineComments = async () => {
-    if (posting || !item.reviewId) return
+  const handlePostSection = async (section: string) => {
+    if (postingSection || !item.reviewId) return
     try {
-      setPosting(true)
-      await postInlineComments(item.reviewId)
+      setPostingSection(section)
+      await postInlineComments(item.reviewId, section)
       onRefresh()
     } catch (err) {
-      console.error('Failed to post inline comments:', err)
+      console.error(`Failed to post ${section} comments:`, err)
     } finally {
-      setPosting(false)
+      setPostingSection(null)
     }
   }
 
@@ -104,6 +104,8 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
     )
   }
 
+  const isPosting = postingSection !== null
+
   return (
     <>
       <Button
@@ -119,11 +121,35 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
         <Button
           variant="ghost"
           size="sm"
-          onClick={handlePostInlineComments}
-          disabled={posting}
+          onClick={() => handlePostSection('critical')}
+          disabled={isPosting}
           data-tooltip="Post critical issues as inline comments on GitHub"
         >
-          {posting ? <Spinner size="sm" /> : '💬 Post Comments'}
+          {postingSection === 'critical' ? <Spinner size="sm" /> : '🔴 Critical'}
+        </Button>
+      )}
+
+      {item.hasReview && item.reviewId && !item.majorConcernsPosted && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => handlePostSection('major')}
+          disabled={isPosting}
+          data-tooltip="Post major concerns as inline comments on GitHub"
+        >
+          {postingSection === 'major' ? <Spinner size="sm" /> : '🟡 Major'}
+        </Button>
+      )}
+
+      {item.hasReview && item.reviewId && !item.minorIssuesPosted && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => handlePostSection('minor')}
+          disabled={isPosting}
+          data-tooltip="Post minor issues as inline comments on GitHub"
+        >
+          {postingSection === 'minor' ? <Spinner size="sm" /> : '🟢 Minor'}
         </Button>
       )}
     </>
