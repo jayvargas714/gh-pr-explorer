@@ -22,6 +22,7 @@ export function HistoryPanel() {
     resetFilters,
   } = useHistoryStore()
   const [reviews, setReviews] = useState<any[]>([])
+  const [totalReviews, setTotalReviews] = useState<number>(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -40,6 +41,7 @@ export function HistoryPanel() {
       if (prNumberFilter) params.pr_number = prNumberFilter
       const response = await fetchReviewHistory(params)
       setReviews(response.reviews)
+      if (response.total !== undefined) setTotalReviews(response.total)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load review history')
     } finally {
@@ -71,12 +73,16 @@ export function HistoryPanel() {
           <div className="mx-history-panel__title">
             <h2>Review History</h2>
             <span className="mx-history-panel__count">
-              {reviews.length} {reviews.length === 1 ? 'review' : 'reviews'}
+              {totalReviews} total {totalReviews === 1 ? 'review' : 'reviews'}
             </span>
           </div>
           <Button variant="ghost" size="sm" onClick={() => setShowHistoryPanel(false)}>
             ✕
           </Button>
+        </div>
+
+        <div className="mx-history-panel__total">
+          Total PRs Reviewed: <strong>{totalReviews}</strong>
         </div>
 
         <div className="mx-history-panel__filters">

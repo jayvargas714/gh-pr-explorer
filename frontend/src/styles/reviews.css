@@ -158,6 +158,18 @@
   border-radius: var(--mx-radius-full);
 }
 
+.mx-history-panel__total {
+  padding: var(--mx-spacing-3) var(--mx-spacing-4);
+  font-size: var(--mx-font-size-lg);
+  color: var(--mx-color-text-secondary);
+  border-bottom: 1px solid var(--mx-color-border);
+  background: var(--mx-color-surface);
+}
+
+.mx-history-panel__total strong {
+  color: var(--mx-color-primary);
+}
+
 .mx-history-panel__filters {
   display: flex;
   gap: var(--mx-spacing-2);

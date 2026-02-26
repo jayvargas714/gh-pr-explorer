@@ -8,20 +8,32 @@ import time
 logger = logging.getLogger(__name__)
 
 
-def run_gh_command(args, check=True):
-    """Run a gh CLI command and return the output."""
-    try:
-        result = subprocess.run(
-            ["gh"] + args,
-            capture_output=True,
-            text=True,
-            check=check,
-        )
-        return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"gh command failed: {e.stderr}")
-    except FileNotFoundError:
-        raise RuntimeError("gh CLI not found. Please install GitHub CLI.")
+_TRANSIENT_ERRORS = ("stream error", "CANCEL", "received from peer", "connection reset")
+
+
+def run_gh_command(args, check=True, max_retries=2, retry_delay=1):
+    """Run a gh CLI command and return the output.
+
+    Retries automatically on transient HTTP/2 stream errors.
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            result = subprocess.run(
+                ["gh"] + args,
+                capture_output=True,
+                text=True,
+                check=check,
+            )
+            return result.stdout.strip()
+        except subprocess.CalledProcessError as e:
+            stderr = e.stderr or ""
+            if attempt < max_retries and any(err in stderr for err in _TRANSIENT_ERRORS):
+                logger.warning(f"Transient gh error (attempt {attempt + 1}), retrying: {stderr.strip()}")
+                time.sleep(retry_delay)
+                continue
+            raise RuntimeError(f"gh command failed: {stderr}")
+        except FileNotFoundError:
+            raise RuntimeError("gh CLI not found. Please install GitHub CLI.")
 
 
 def parse_json_output(output):

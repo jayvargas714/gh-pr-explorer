@@ -51,7 +51,9 @@ def get_review_history():
                 "pr_state": review.get("pr_state_at_review")
             })
 
-        return jsonify({"reviews": formatted})
+        total_all = reviews_db.count_all()
+
+        return jsonify({"reviews": formatted, "total": total_all})
 
     except Exception as e:
         return error_response("Internal server error", 500, f"Error getting review history: {e}")

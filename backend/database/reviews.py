@@ -267,6 +267,13 @@ class ReviewsDB:
                 "followup_count": followup_count
             }
 
+    def count_all(self) -> int:
+        """Return the total number of reviews in the database."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) as total FROM reviews")
+            return cursor.fetchone()["total"]
+
     def search_reviews(self, search_text: str, limit: int = 20) -> List[Dict[str, Any]]:
         """Search reviews by title or content."""
         with self.db.connection() as conn:
