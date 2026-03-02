@@ -8,7 +8,11 @@ import time
 logger = logging.getLogger(__name__)
 
 
-_TRANSIENT_ERRORS = ("stream error", "CANCEL", "received from peer", "connection reset")
+_TRANSIENT_ERRORS = (
+    "stream error", "CANCEL", "received from peer", "connection reset",
+    "502 Bad Gateway", "503 Service Unavailable", "504 Gateway Timeout",
+    "HTTP 502", "HTTP 503", "HTTP 504",
+)
 
 
 def run_gh_command(args, check=True, max_retries=2, retry_delay=1):
