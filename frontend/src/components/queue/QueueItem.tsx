@@ -4,6 +4,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { useReviewStore } from '../../stores/useReviewStore'
 import { removeFromQueue } from '../../api/queue'
 import { NotesModal } from './NotesModal'
+import { VerdictModal } from './VerdictModal'
 import { QueueReviewButton } from '../reviews/QueueReviewButton'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
@@ -18,6 +19,7 @@ interface QueueItemProps {
 
 export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
   const [showNotes, setShowNotes] = useState(false)
+  const [showVerdict, setShowVerdict] = useState(false)
   const [removing, setRemoving] = useState(false)
   const openReviewViewer = useReviewStore((state) => state.openReviewViewer)
 
@@ -126,21 +128,31 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
 
         <div className="mx-queue-item__actions">
           {item.hasReview && item.reviewId && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => openReviewViewer({ id: item.reviewId })}
-              data-tooltip="View review"
-              className={`mx-score-btn mx-score-btn--${
-                item.reviewScore !== null && item.reviewScore !== undefined
-                  ? item.reviewScore >= 7 ? 'good' : item.reviewScore >= 4 ? 'ok' : 'bad'
-                  : 'neutral'
-              }`}
-            >
-              {item.reviewScore !== null && item.reviewScore !== undefined
-                ? `${item.reviewScore}/10`
-                : 'View Review'}
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => openReviewViewer({ id: item.reviewId })}
+                data-tooltip="View review"
+                className={`mx-score-btn mx-score-btn--${
+                  item.reviewScore !== null && item.reviewScore !== undefined
+                    ? item.reviewScore >= 7 ? 'good' : item.reviewScore >= 4 ? 'ok' : 'bad'
+                    : 'neutral'
+                }`}
+              >
+                {item.reviewScore !== null && item.reviewScore !== undefined
+                  ? `${item.reviewScore}/10`
+                  : 'View Review'}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowVerdict(true)}
+                data-tooltip="Submit review verdict to GitHub"
+              >
+                Verdict
+              </Button>
+            </>
           )}
           <QueueReviewButton item={item} onRefresh={onRefresh} />
           <Button variant="ghost" size="sm" onClick={() => setShowNotes(true)}>
@@ -158,6 +170,15 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
           repo={item.repo}
           onClose={() => setShowNotes(false)}
           onUpdate={onRefresh}
+        />
+      )}
+
+      {showVerdict && item.reviewId && (
+        <VerdictModal
+          reviewId={item.reviewId}
+          prNumber={item.number}
+          repo={item.repo}
+          onClose={() => setShowVerdict(false)}
         />
       )}
     </>

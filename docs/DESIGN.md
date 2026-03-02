@@ -977,6 +977,8 @@ The Merge Queue feature allows users to organize PRs they intend to review or me
 | Queue Item | Panel | Individual PR with reorder and remove controls |
 | Review Button | Queue Item | Start code review for queued PR |
 | Post Inline Comments | Queue Item | Post critical issues to GitHub (appears when review exists) |
+| Verdict Button | Queue Item | Submit formal PR review verdict to GitHub (appears when review exists) |
+| Verdict Modal | Overlay | Modal with event selector, custom text, section toggles, and submit |
 | Notes Toggle | Queue Item | Expand/collapse notes for the PR |
 | Add Note Button | Queue Item | Add a new note to the PR |
 | PR State Badge | Queue Item | Shows current PR state (open/closed/merged) |
@@ -1119,6 +1121,52 @@ The button appears when all conditions are met:
 #### Cache Refresh
 
 When a review completes, the PR review cache is automatically invalidated and refreshed to ensure the button appears immediately without requiring a page reload.
+
+### Review Verdict
+
+The Review Verdict feature allows users to submit a formal GitHub PR review verdict (Approve, Request Changes, or Comment) directly from the merge queue, composing the review body from custom text and/or sections extracted from a completed code review.
+
+#### How It Works
+
+1. After a review completes, the "Verdict" button appears on the merge queue card
+2. User clicks the button to open a modal
+3. User selects the review action (Approve, Request Changes, or Comment)
+4. User writes optional custom text and toggles review sections to include
+5. The composed body is posted as a formal PR review to GitHub via the API
+
+#### UI Components
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| Verdict Button | Merge Queue Card | Appears when PR has a completed review |
+| VerdictModal | Overlay | Modal with event selector, textarea, section toggles, and submit |
+| Event Selector | VerdictModal | Three side-by-side buttons for Approve/Request Changes/Comment |
+| Section Toggles | VerdictModal | Checkboxes with collapsible preview for each review section |
+
+#### Verdict Button Visibility
+
+The button appears when:
+- PR has an existing review (`hasReview: true`)
+- Review ID is available (`reviewId` is not null)
+
+#### Review Sections
+
+The modal parses the completed review content to extract named sections:
+
+| Section | Description |
+|---------|-------------|
+| Critical Issues | Critical bugs or security issues |
+| Major Concerns | Significant design or logic concerns |
+| Minor Issues | Style, naming, or minor code issues |
+| Recommendations | Suggested improvements |
+
+Each section can be individually toggled on/off and previewed before submission.
+
+#### Composed Body Format
+
+The final review body is assembled from:
+1. Custom text (if provided)
+2. Enabled review sections (each preceded by a `---` separator and bold heading)
 
 ---
 
@@ -1913,6 +1961,38 @@ Posts critical issues from a review as inline comments on the GitHub PR.
 - `404`: Review not found
 - `400`: Review has no content or missing PR information
 - `500`: Failed to post comments to GitHub
+
+---
+
+**POST** `/api/repos/<owner>/<repo>/prs/<pr_number>/verdict`
+
+Posts a formal PR review verdict (Approve, Request Changes, or Comment) to GitHub.
+
+**Request Body**:
+```json
+{
+  "event": "APPROVE",
+  "body": "Looks good! All critical issues addressed."
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `event` | string | Yes | One of: `APPROVE`, `REQUEST_CHANGES`, `COMMENT` |
+| `body` | string | Yes | Review body text (cannot be empty) |
+
+**Response** (Success):
+```json
+{
+  "message": "Review verdict posted: APPROVE",
+  "event": "APPROVE",
+  "pr_number": 123
+}
+```
+
+**Error Responses**:
+- `400`: Missing event, invalid event type, or empty body
+- `500`: Failed to fetch PR head SHA or failed to post to GitHub
 
 ---
 

@@ -531,3 +531,20 @@ export interface ReviewStatsResponse extends ReviewStats {}
 export interface MessageResponse {
   message: string
 }
+
+// ============================================================================
+// Verdict Types
+// ============================================================================
+
+export type VerdictEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
+
+export interface VerdictRequest {
+  event: VerdictEvent
+  body: string
+}
+
+export interface VerdictResponse {
+  message: string
+  event: string
+  pr_number: number
+}

@@ -10,6 +10,7 @@ from backend.database import get_reviews_db
 from backend.services.github_service import fetch_pr_head_sha
 from backend.services.review_service import save_review_to_db, check_review_status, start_review_process
 from backend.services.inline_comments_service import post_inline_comments
+from backend.services.verdict_service import post_verdict
 from backend.routes import error_response
 
 review_bp = Blueprint("review", __name__)
@@ -237,3 +238,23 @@ def check_new_commits(owner, repo, pr_number):
 
     except Exception as e:
         return error_response("Internal server error", 500, f"Error checking new commits for PR #{pr_number}: {e}")
+
+
+@review_bp.route("/api/repos/<owner>/<repo>/prs/<int:pr_number>/verdict", methods=["POST"])
+def post_verdict_endpoint(owner, repo, pr_number):
+    """Post a formal PR review verdict (Approve, Request Changes, Comment)."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        event = data.get("event")
+        body = data.get("body")
+
+        if not event:
+            return jsonify({"error": "Missing required field: event"}), 400
+
+        result, status_code = post_verdict(owner, repo, pr_number, event, body)
+        return jsonify(result), status_code
+    except Exception as e:
+        return error_response("Internal server error", 500, f"Error posting verdict for PR #{pr_number}: {e}")

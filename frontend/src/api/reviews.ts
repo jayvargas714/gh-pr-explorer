@@ -5,6 +5,8 @@ import {
   ReviewDetail,
   ReviewStatsResponse,
   MessageResponse,
+  VerdictRequest,
+  VerdictResponse,
 } from './types'
 
 /**
@@ -118,4 +120,16 @@ export async function getReviewStats(): Promise<ReviewStatsResponse> {
  */
 export async function checkPRReviewed(owner: string, repo: string, prNumber: number) {
   return api.get(`/review-history/check/${owner}/${repo}/${prNumber}`)
+}
+
+/**
+ * Post a formal PR review verdict (Approve, Request Changes, Comment)
+ */
+export async function postVerdict(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  data: VerdictRequest
+): Promise<VerdictResponse> {
+  return api.post<VerdictResponse>(`/repos/${owner}/${repo}/prs/${prNumber}/verdict`, data)
 }
