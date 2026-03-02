@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { useQueueStore } from '../../stores/useQueueStore'
+import { useSortable } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { useReviewStore } from '../../stores/useReviewStore'
-import { removeFromQueue, reorderQueue } from '../../api/queue'
+import { removeFromQueue } from '../../api/queue'
 import { NotesModal } from './NotesModal'
 import { QueueReviewButton } from '../reviews/QueueReviewButton'
 import { Button } from '../common/Button'
@@ -17,10 +18,22 @@ interface QueueItemProps {
 
 export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
   const [showNotes, setShowNotes] = useState(false)
-  const [moving, setMoving] = useState(false)
   const [removing, setRemoving] = useState(false)
-  const mergeQueue = useQueueStore((state) => state.mergeQueue)
   const openReviewViewer = useReviewStore((state) => state.openReviewViewer)
+
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: item.id })
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  }
 
   const handleRemove = async () => {
     if (removing) return
@@ -32,27 +45,6 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
       console.error('Failed to remove from queue:', err)
     } finally {
       setRemoving(false)
-    }
-  }
-
-  const handleMove = async (direction: 'up' | 'down') => {
-    if (moving) return
-    const toIndex = direction === 'up' ? index - 1 : index + 1
-    if (toIndex < 0 || toIndex >= mergeQueue.length) return
-
-    try {
-      setMoving(true)
-      // Build new order by swapping the items locally, then send full order to backend
-      const newQueue = [...mergeQueue]
-      const [removed] = newQueue.splice(index, 1)
-      newQueue.splice(toIndex, 0, removed)
-      const order = newQueue.map((q) => ({ number: q.number, repo: q.repo }))
-      await reorderQueue(order)
-      onRefresh()
-    } catch (err) {
-      console.error('Failed to reorder queue:', err)
-    } finally {
-      setMoving(false)
     }
   }
 
@@ -71,8 +63,20 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
 
   return (
     <>
-      <div className="mx-queue-item">
+      <div
+        ref={setNodeRef}
+        style={style}
+        className={`mx-queue-item${isDragging ? ' mx-queue-item--dragging' : ''}`}
+      >
         <div className="mx-queue-item__header">
+          <button
+            className="mx-queue-item__drag-handle"
+            {...attributes}
+            {...listeners}
+            aria-label="Drag to reorder"
+          >
+            ⠿
+          </button>
           <div className="mx-queue-item__position">{index + 1}</div>
           <div className="mx-queue-item__info">
             <div className="mx-queue-item__title-row">
@@ -139,22 +143,6 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
             </Button>
           )}
           <QueueReviewButton item={item} onRefresh={onRefresh} />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => handleMove('up')}
-            disabled={index === 0 || moving}
-          >
-            ↑
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => handleMove('down')}
-            disabled={index === mergeQueue.length - 1 || moving}
-          >
-            ↓
-          </Button>
           <Button variant="ghost" size="sm" onClick={() => setShowNotes(true)}>
             Notes {item.notesCount > 0 && `(${item.notesCount})`}
           </Button>

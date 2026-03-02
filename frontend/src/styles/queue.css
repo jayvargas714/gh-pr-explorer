@@ -111,12 +111,47 @@
   border: 1px solid var(--mx-color-border);
   border-radius: var(--mx-radius-md);
   padding: var(--mx-spacing-3);
-  transition: var(--mx-transition-base);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
 }
 
 .mx-queue-item:hover {
   border-color: var(--mx-color-border-hover);
   box-shadow: var(--mx-shadow-sm);
+}
+
+.mx-queue-item--dragging {
+  opacity: 0.5;
+  box-shadow: var(--mx-shadow-lg);
+  border-color: var(--mx-color-primary);
+  z-index: 10;
+}
+
+/* Drag Handle */
+.mx-queue-item__drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 32px;
+  background: none;
+  border: none;
+  color: var(--mx-color-text-tertiary);
+  font-size: 18px;
+  cursor: grab;
+  border-radius: var(--mx-radius-sm);
+  flex-shrink: 0;
+  padding: 0;
+  touch-action: none;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.mx-queue-item__drag-handle:hover {
+  color: var(--mx-color-text-primary);
+  background: var(--mx-color-background);
+}
+
+.mx-queue-item__drag-handle:active {
+  cursor: grabbing;
 }
 
 .mx-queue-item__header {

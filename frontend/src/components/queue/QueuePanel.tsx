@@ -1,7 +1,21 @@
 import { useEffect } from 'react'
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  sortableKeyboardCoordinates,
+} from '@dnd-kit/sortable'
 import { useQueueStore } from '../../stores/useQueueStore'
 import { useUIStore } from '../../stores/useUIStore'
-import { fetchMergeQueue } from '../../api/queue'
+import { fetchMergeQueue, reorderQueue } from '../../api/queue'
 import { QueueItem } from './QueueItem'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
@@ -12,6 +26,11 @@ export function QueuePanel() {
   const setShowQueuePanel = useUIStore((state) => state.setShowQueuePanel)
   const { mergeQueue, loading: queueLoading, error: queueError, setMergeQueue, setLoading: setQueueLoading, setError: setQueueError } =
     useQueueStore()
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  )
 
   useEffect(() => {
     if (showQueuePanel) {
@@ -29,6 +48,31 @@ export function QueuePanel() {
       setQueueError(err instanceof Error ? err.message : 'Failed to load merge queue')
     } finally {
       setQueueLoading(false)
+    }
+  }
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+
+    const oldIndex = mergeQueue.findIndex((item) => item.id === active.id)
+    const newIndex = mergeQueue.findIndex((item) => item.id === over.id)
+    if (oldIndex === -1 || newIndex === -1) return
+
+    // Optimistic reorder
+    const newQueue = [...mergeQueue]
+    const [moved] = newQueue.splice(oldIndex, 1)
+    newQueue.splice(newIndex, 0, moved)
+    setMergeQueue(newQueue)
+
+    // Persist to backend
+    try {
+      const order = newQueue.map((q) => ({ number: q.number, repo: q.repo }))
+      await reorderQueue(order)
+    } catch (err) {
+      console.error('Failed to reorder queue:', err)
+      // Revert on failure
+      loadQueue()
     }
   }
 
@@ -66,11 +110,22 @@ export function QueuePanel() {
               No PRs in queue. Click the queue button on any PR card to add it.
             </Alert>
           ) : (
-            <div className="mx-queue-panel__list">
-              {mergeQueue.map((item, index) => (
-                <QueueItem key={item.id} item={item} index={index} onRefresh={loadQueue} />
-              ))}
-            </div>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={mergeQueue.map((item) => item.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="mx-queue-panel__list">
+                  {mergeQueue.map((item, index) => (
+                    <QueueItem key={item.id} item={item} index={index} onRefresh={loadQueue} />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
           )}
         </div>
       </div>
