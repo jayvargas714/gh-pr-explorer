@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -84,16 +83,13 @@ def save_review_to_db(key, review, status, reviews_db):
 
             # Build content_json string
             if review_json_data is None:
-                # Minimal stub for failed/empty reviews
+                # Distinguishable stub for failed/empty reviews
                 review_json_data = {
                     "schema_version": SCHEMA_VERSION,
+                    "error": True,
                     "metadata": {"pr_number": pr_number, "repository": full_repo},
                     "summary": "",
-                    "sections": [
-                        {"type": "critical", "display_name": "Critical Issues", "issues": []},
-                        {"type": "major", "display_name": "Major Concerns", "issues": []},
-                        {"type": "minor", "display_name": "Minor Issues", "issues": []},
-                    ],
+                    "sections": [],
                     "highlights": [],
                     "recommendations": [],
                     "score": {"overall": 0},
@@ -194,10 +190,18 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
     json_file = str(review_file).replace(".md", ".json")
 
     if is_followup and previous_review_content:
+        # Convert raw JSON to readable markdown for the prompt
+        previous_review_markdown = previous_review_content
+        try:
+            parsed_prev = json.loads(previous_review_content)
+            previous_review_markdown = json_to_markdown(parsed_prev)
+        except (json.JSONDecodeError, TypeError, Exception):
+            pass  # Fall back to raw string if conversion fails
+
         prompt = (
             f"Review PR #{pr_number} at {pr_url}. "
-            f"This is a FOLLOW-UP review. Previous review JSON:\n\n"
-            f"---PREVIOUS REVIEW---\n{previous_review_content[:8000]}\n---END PREVIOUS REVIEW---\n\n"
+            f"This is a FOLLOW-UP review. Previous review:\n\n"
+            f"---PREVIOUS REVIEW---\n{previous_review_markdown[:8000]}\n---END PREVIOUS REVIEW---\n\n"
             f"Focus on: changes since last review, whether previous issues were addressed. "
             f"Include a 'followup' section with 'resolution_status' array tracking each previous issue. "
             f"Use the elite-code-reviewer agent. "

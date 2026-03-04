@@ -14,7 +14,6 @@ import json
 import shutil
 import sqlite3
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -104,21 +103,23 @@ def create_new_db(new_path: Path, old_conn: sqlite3.Connection):
 
     # Copy data from non-review tables
     for table_name in copy_tables:
-        old_cursor.execute(f"SELECT * FROM {table_name}")
+        # Quote identifiers to handle special characters in table names
+        quoted_table = f'"{table_name}"'
+        old_cursor.execute(f"SELECT * FROM {quoted_table}")
         rows = old_cursor.fetchall()
         if not rows:
             continue
 
         # Get column names
-        old_cursor.execute(f"PRAGMA table_info({table_name})")
+        old_cursor.execute(f"PRAGMA table_info({quoted_table})")
         columns = [col[1] for col in old_cursor.fetchall()]
         placeholders = ", ".join("?" * len(columns))
-        cols_str = ", ".join(columns)
+        cols_str = ", ".join(f'"{c}"' for c in columns)
 
         for row in rows:
             try:
                 new_conn.execute(
-                    f"INSERT INTO {table_name} ({cols_str}) VALUES ({placeholders})",
+                    f"INSERT INTO {quoted_table} ({cols_str}) VALUES ({placeholders})",
                     row
                 )
             except sqlite3.IntegrityError:
@@ -270,31 +271,36 @@ def main():
     old_conn = sqlite3.connect(db_path)
     old_conn.row_factory = None
 
-    # Create new database
-    new_path = db_path.parent / f"{db_path.stem}_v2.db"
     if args.dry_run:
-        new_path = db_path.parent / f"{db_path.stem}_v2_dryrun.db"
+        # Dry run: only exercise the conversion logic, no new DB needed
+        total, migrated, warnings, errors = migrate_reviews(old_conn, None, dry_run=True)
 
-    print(f"Creating new database: {new_path}")
-    new_conn = create_new_db(new_path, old_conn)
+        print(f"\nDRY RUN Migration complete:")
+        print(f"  Total reviews: {total}")
+        print(f"  Migrated:      {migrated}")
+        print(f"  Warnings:      {warnings}")
+        print(f"  Errors:        {errors}")
 
-    # Migrate reviews
-    total, migrated, warnings, errors = migrate_reviews(old_conn, new_conn, dry_run=args.dry_run)
-
-    print(f"\n{'DRY RUN ' if args.dry_run else ''}Migration complete:")
-    print(f"  Total reviews: {total}")
-    print(f"  Migrated:      {migrated}")
-    print(f"  Warnings:      {warnings}")
-    print(f"  Errors:        {errors}")
-
-    old_conn.close()
-    new_conn.close()
-
-    if args.dry_run:
-        # Clean up dry run database
-        new_path.unlink(missing_ok=True)
-        print("\nDry run database removed.")
+        old_conn.close()
     else:
+        # Create new database
+        new_path = db_path.parent / f"{db_path.stem}_v2.db"
+
+        print(f"Creating new database: {new_path}")
+        new_conn = create_new_db(new_path, old_conn)
+
+        # Migrate reviews
+        total, migrated, warnings, errors = migrate_reviews(old_conn, new_conn, dry_run=False)
+
+        print(f"\nMigration complete:")
+        print(f"  Total reviews: {total}")
+        print(f"  Migrated:      {migrated}")
+        print(f"  Warnings:      {warnings}")
+        print(f"  Errors:        {errors}")
+
+        old_conn.close()
+        new_conn.close()
+
         # Swap databases
         old_path = db_path.parent / f"{db_path.stem}.db.old"
         print(f"\nSwapping databases:")

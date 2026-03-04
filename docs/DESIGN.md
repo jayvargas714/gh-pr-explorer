@@ -2058,10 +2058,14 @@ Returns a single review with full content in both structured JSON and generated 
   "score": 8,
   "content_json": {
     "schema_version": "1.0.0",
-    "metadata": { "pr_number": 123, "repo": "owner/repo", "author": "developer" },
+    "metadata": { "pr_number": 123, "repository": "owner/repo", "author": "developer" },
     "summary": "Overall review summary...",
-    "score": { "overall": 8, "breakdown": {} },
-    "sections": { "critical": [], "major": [], "minor": [] },
+    "score": { "overall": 8, "breakdown": [] },
+    "sections": [
+      { "type": "critical", "display_name": "Critical Issues", "issues": [] },
+      { "type": "major", "display_name": "Major Concerns", "issues": [] },
+      { "type": "minor", "display_name": "Minor Issues", "issues": [] }
+    ],
     "recommendations": []
   },
   "content": "# Code Review for PR #123\n\n## Summary\n...",
@@ -2476,38 +2480,49 @@ Reviews are stored as structured JSON in the `content_json` column. The schema i
   "schema_version": "1.0.0",
   "metadata": {
     "pr_number": 123,
-    "repo": "owner/repo",
-    "title": "Add new feature",
+    "repository": "owner/repo",
+    "pr_title": "Add new feature",
     "author": "developer",
-    "url": "https://github.com/owner/repo/pull/123",
-    "reviewed_at": "2024-01-15T10:30:00Z",
-    "head_sha": "abc123def456"
+    "pr_url": "https://github.com/owner/repo/pull/123",
+    "review_date": "2024-01-15",
+    "review_type": "initial",
+    "branch": { "head": "feature-branch", "base": "main" },
+    "files_changed": 5,
+    "additions": 150,
+    "deletions": 50
   },
   "summary": "Brief overall assessment of the PR.",
   "score": {
     "overall": 8,
-    "breakdown": {
-      "correctness": 9,
-      "design": 7,
-      "testing": 8,
-      "documentation": 7
-    }
-  },
-  "sections": {
-    "critical": [
-      {
-        "title": "Race condition in check_and_hold",
-        "location": "src/service.rs:123-145",
-        "problem": "Concurrent access without lock.",
-        "fix": "Wrap in mutex guard."
-      }
+    "breakdown": [
+      { "category": "Correctness", "score": 9, "comment": "All logic paths handled" },
+      { "category": "Design", "score": 7, "comment": "Minor coupling concerns" }
     ],
-    "major": [],
-    "minor": []
+    "summary": "Well-structured PR with minor design concerns."
   },
+  "sections": [
+    {
+      "type": "critical",
+      "display_name": "Critical Issues",
+      "issues": [
+        {
+          "title": "Race condition in check_and_hold",
+          "location": { "file": "src/service.rs", "start_line": 123, "end_line": 145 },
+          "problem": "Concurrent access without lock.",
+          "fix": "Wrap in mutex guard."
+        }
+      ]
+    },
+    { "type": "major", "display_name": "Major Concerns", "issues": [] },
+    { "type": "minor", "display_name": "Minor Issues", "issues": [] }
+  ],
+  "highlights": [
+    "Good test coverage for the new endpoint.",
+    "Clean separation of concerns in the service layer."
+  ],
   "recommendations": [
-    "Add integration tests for the new endpoint.",
-    "Consider extracting the validation logic into a shared helper."
+    { "priority": "must_fix", "text": "Fix the race condition before merge." },
+    { "priority": "medium", "text": "Consider extracting the validation logic into a shared helper." }
   ]
 }
 ```
@@ -2518,11 +2533,13 @@ Reviews are stored as structured JSON in the `content_json` column. The schema i
 |-------|------|----------|-------------|
 | `schema_version` | string | Yes | Semver version of the schema (currently `"1.0.0"`) |
 | `metadata` | object | Yes | PR identification and review context |
+| `metadata.repository` | string | Yes | Repository in `owner/repo` format |
 | `summary` | string | Yes | Brief overall assessment |
 | `score.overall` | integer | Yes | Overall score (0-10) |
-| `score.breakdown` | object | No | Optional per-dimension scores |
-| `sections` | object | Yes | Categorized issues (critical, major, minor) |
-| `recommendations` | array | No | General improvement suggestions |
+| `score.breakdown` | array | No | Optional array of `{category, score, comment}` |
+| `sections` | array | Yes | Array of `{type, display_name, issues}` objects |
+| `highlights` | array | No | Positive aspects of the PR |
+| `recommendations` | array | No | Array of `{priority, text}` objects |
 
 #### Validation and Conversion
 

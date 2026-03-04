@@ -12,10 +12,8 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = "1.0.0"
 
-# Load the JSON Schema spec from the companion file
-_SCHEMA_PATH = Path(__file__).parent / "review_schema_spec.json"
-with open(_SCHEMA_PATH) as _f:
-    REVIEW_JSON_SCHEMA = json.load(_f)
+# Path to the formal JSON Schema spec (for external tools/agents)
+SCHEMA_SPEC_PATH = Path(__file__).parent / "review_schema_spec.json"
 
 # Default section display names (can be overridden in config.json)
 DEFAULT_SECTION_NAMES = {
@@ -625,11 +623,17 @@ def _parse_highlights(content: str) -> List[str]:
     highlights = []
     for line in m.group(1).strip().split("\n"):
         line = line.strip()
-        # Match numbered items: "1. text" or "- text"
-        item = re.match(r'^\d+\.\s*(?:\*\*.*?\*\*:?\s*)?(.+)', line)
+        # Match numbered items: "1. text" or "1. **Bold**: text"
+        item = re.match(r'^\d+\.\s*(.+)', line)
         if item:
-            highlights.append(item.group(1).strip() if not line.startswith(("**", "- **")) else line.lstrip("0123456789. "))
+            text = item.group(1).strip()
+            # Strip bold prefix like "**Bold**: rest" -> "rest"
+            bold_match = re.match(r'\*\*.*?\*\*:?\s*(.*)', text)
+            if bold_match and bold_match.group(1):
+                text = bold_match.group(1).strip()
+            highlights.append(text)
             continue
+        # Match bullet items: "- text"
         item = re.match(r'^[-*]\s+(.+)', line)
         if item:
             highlights.append(item.group(1).strip())
@@ -638,12 +642,7 @@ def _parse_highlights(content: str) -> List[str]:
         if line and highlights:
             highlights[-1] += " " + line
 
-    # Clean up: collapse numbered highlights that include bold prefix
-    cleaned = []
-    for h in highlights:
-        # Remove leading bold marker if the whole item was "1. **Bold**: rest"
-        cleaned.append(h)
-    return cleaned
+    return highlights
 
 
 def _parse_recommendations(content: str) -> List[Dict[str, str]]:

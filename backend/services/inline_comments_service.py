@@ -235,18 +235,6 @@ def post_inline_comments(reviews_db, review_id, section="critical"):
             pass
 
     if not issues:
-        # Fallback to markdown parsing (for legacy reviews or parse failures)
-        # Generate markdown from JSON if available, otherwise use empty string
-        content = ""
-        if content_json_str:
-            try:
-                from backend.services.review_schema import json_to_markdown
-                content = json_to_markdown(json.loads(content_json_str))
-            except Exception:
-                pass
-        if content:
-            issues = parse_section_issues(content, section_heading)
-    if not issues:
         return {"error": f"No {section_heading.lower()} found in review content", "issues_found": 0}, 400
 
     repo = review.get("repo")
