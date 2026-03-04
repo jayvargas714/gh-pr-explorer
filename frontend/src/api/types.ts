@@ -321,6 +321,7 @@ export interface MergeQueueItem {
   majorFoundCount: number | null
   minorPostedCount: number | null
   minorFoundCount: number | null
+  isFollowup: boolean
   reviewDecision: string | null
   ciStatus: string | null
 }

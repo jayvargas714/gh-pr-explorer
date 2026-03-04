@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useReviewStore } from '../../stores/useReviewStore'
 import { startReview, cancelReview, postInlineComments } from '../../api/reviews'
 import { Button } from '../common/Button'
@@ -18,6 +18,18 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
   const [owner, repo] = item.repo.split('/')
   const reviewKey = `${item.repo}/${item.number}`
   const review = activeReviews[reviewKey]
+  const prevStatusRef = useRef(review?.status)
+
+  // Refresh queue when a review transitions to completed or failed
+  useEffect(() => {
+    const prevStatus = prevStatusRef.current
+    const currStatus = review?.status
+    prevStatusRef.current = currStatus
+
+    if (prevStatus === 'running' && (currStatus === 'completed' || currStatus === 'failed')) {
+      onRefresh()
+    }
+  }, [review?.status, onRefresh])
 
   const handleStartReview = async () => {
     if (starting || !owner || !repo) return

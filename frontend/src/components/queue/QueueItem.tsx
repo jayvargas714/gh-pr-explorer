@@ -137,6 +137,7 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
 
         {item.hasReview && (
           <div className="mx-queue-item__badges">
+            {item.isFollowup && <Badge variant="info">Follow-up</Badge>}
             {item.hasNewCommits && <Badge variant="warning">New Commits</Badge>}
             {item.inlineCommentsPosted && (
               <Badge variant={item.criticalPostedCount !== null && item.criticalPostedCount < (item.criticalFoundCount ?? 0) ? 'warning' : 'info'}>

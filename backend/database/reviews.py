@@ -187,7 +187,7 @@ class ReviewsDB:
             cursor.execute("""
                 SELECT * FROM reviews
                 WHERE repo = ? AND pr_number = ?
-                ORDER BY review_timestamp DESC
+                ORDER BY review_timestamp DESC, id DESC
                 LIMIT 1
             """, (repo, pr_number))
             row = cursor.fetchone()

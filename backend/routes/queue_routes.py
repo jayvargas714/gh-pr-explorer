@@ -42,6 +42,7 @@ def get_merge_queue():
             major_found_count = None
             minor_posted_count = None
             minor_found_count = None
+            is_followup = False
             review_decision = None
             ci_status = None
 
@@ -67,6 +68,7 @@ def get_merge_queue():
                     major_found_count = latest_review.get("major_found_count")
                     minor_posted_count = latest_review.get("minor_posted_count")
                     minor_found_count = latest_review.get("minor_found_count")
+                    is_followup = bool(latest_review.get("is_followup", False))
                     if latest_review.get("head_commit_sha"):
                         last_reviewed_sha = latest_review["head_commit_sha"]
                         if current_sha and last_reviewed_sha:
@@ -101,6 +103,7 @@ def get_merge_queue():
                 "majorFoundCount": major_found_count,
                 "minorPostedCount": minor_posted_count,
                 "minorFoundCount": minor_found_count,
+                "isFollowup": is_followup,
                 "reviewDecision": review_decision,
                 "ciStatus": ci_status
             }

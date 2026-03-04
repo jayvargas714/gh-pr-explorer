@@ -70,6 +70,7 @@ export function PRCard({ pr }: PRCardProps) {
           majorFoundCount: null,
           minorPostedCount: null,
           minorFoundCount: null,
+          isFollowup: false,
           reviewDecision: pr.reviewDecision,
           ciStatus: pr.ciStatus,
         })
