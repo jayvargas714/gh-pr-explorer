@@ -25,6 +25,7 @@ const EVENT_OPTIONS: { value: VerdictEvent; label: string }[] = [
 
 const MIN_PANEL_WIDTH = 300
 const MIN_PANEL_HEIGHT = 250
+const MIN_PANEL_TOP = 60 // Keep panel below the sticky header banner
 
 export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModalProps) {
   const [event, setEvent] = useState<VerdictEvent>('COMMENT')
@@ -40,7 +41,7 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
   const [showReviewPanel, setShowReviewPanel] = useState(false)
 
   // Drag state
-  const [panelPos, setPanelPos] = useState({ x: 40, y: 40 })
+  const [panelPos, setPanelPos] = useState({ x: 40, y: 80 })
   const [panelSize, setPanelSize] = useState({ w: 520, h: 600 })
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null)
   const resizeRef = useRef<{ startX: number; startY: number; origW: number; origH: number } | null>(null)
@@ -59,7 +60,7 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
         const dy = e.clientY - dragRef.current.startY
         setPanelPos({
           x: Math.max(0, dragRef.current.origX + dx),
-          y: Math.max(0, dragRef.current.origY + dy),
+          y: Math.max(MIN_PANEL_TOP, dragRef.current.origY + dy),
         })
       }
       if (resizeRef.current) {
