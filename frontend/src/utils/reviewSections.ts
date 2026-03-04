@@ -1,4 +1,4 @@
-import type { ReviewJSON, ReviewSectionJSON } from '../api/types'
+import type { ReviewJSON, ReviewRecommendation, ReviewSectionJSON } from '../api/types'
 
 export interface ReviewSection {
   key: string
@@ -79,10 +79,39 @@ function formatSectionToMarkdown(section: ReviewSectionJSON): string {
 }
 
 /**
+ * Convert structured recommendations into markdown text for display.
+ */
+function formatRecommendationsToMarkdown(recs: ReviewRecommendation[]): string {
+  const priorityLabels: Record<string, string> = {
+    must_fix: 'Must Fix Before Merge:',
+    high: 'High Priority:',
+    medium: 'Medium Priority:',
+    low: 'Low Priority:',
+  }
+
+  const lines: string[] = []
+  let currentPriority: string | null = null
+  let num = 1
+
+  for (const rec of recs) {
+    const p = rec.priority || 'medium'
+    if (p !== currentPriority) {
+      if (currentPriority !== null) lines.push('')
+      lines.push(`**${priorityLabels[p] || `${p}:`}**`)
+      currentPriority = p
+    }
+    lines.push(`${num}. ${rec.text}`)
+    num++
+  }
+
+  return lines.join('\n')
+}
+
+/**
  * Extract sections from structured JSON review data (preferred path).
  */
 export function sectionsFromJSON(reviewJson: ReviewJSON): ReviewSection[] {
-  return reviewJson.sections
+  const sections = reviewJson.sections
     .filter(section => section.issues.length > 0)
     .map(section => ({
       key: section.type === 'critical' ? 'critical-issues'
@@ -91,6 +120,16 @@ export function sectionsFromJSON(reviewJson: ReviewJSON): ReviewSection[] {
       heading: section.display_name,
       content: formatSectionToMarkdown(section),
     }))
+
+  if (reviewJson.recommendations?.length) {
+    sections.push({
+      key: 'recommendations',
+      heading: 'Recommendations',
+      content: formatRecommendationsToMarkdown(reviewJson.recommendations),
+    })
+  }
+
+  return sections
 }
 
 /**

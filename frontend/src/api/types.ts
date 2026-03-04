@@ -321,6 +321,8 @@ export interface MergeQueueItem {
   majorFoundCount: number | null
   minorPostedCount: number | null
   minorFoundCount: number | null
+  reviewDecision: string | null
+  ciStatus: string | null
 }
 
 export interface QueueNote {

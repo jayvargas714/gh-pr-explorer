@@ -63,6 +63,34 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
     }
   }
 
+  const getReviewStatusBadge = () => {
+    if (!item.reviewDecision) return null
+    switch (item.reviewDecision) {
+      case 'APPROVED':
+        return <Badge variant="success">✓ Approved</Badge>
+      case 'CHANGES_REQUESTED':
+        return <Badge variant="error">✗ Changes Requested</Badge>
+      case 'REVIEW_REQUIRED':
+        return <Badge variant="warning">👀 Review Required</Badge>
+      default:
+        return null
+    }
+  }
+
+  const getCIStatusBadge = () => {
+    if (!item.ciStatus) return null
+    switch (item.ciStatus.toLowerCase()) {
+      case 'success':
+        return <Badge variant="success">✓ CI Passed</Badge>
+      case 'failure':
+        return <Badge variant="error">✗ CI Failed</Badge>
+      case 'pending':
+        return <Badge variant="warning">⏳ CI Running</Badge>
+      default:
+        return <Badge variant="neutral">CI Skipped</Badge>
+    }
+  }
+
   return (
     <>
       <div
@@ -91,6 +119,8 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
                 #{item.number} {item.title}
               </a>
               {getStateBadge()}
+              {getReviewStatusBadge()}
+              {getCIStatusBadge()}
             </div>
             <div className="mx-queue-item__meta">
               <span className="mx-queue-item__repo">{item.repo}</span>

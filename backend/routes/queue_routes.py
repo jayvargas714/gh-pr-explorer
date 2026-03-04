@@ -6,7 +6,8 @@ from flask import Blueprint, jsonify, request
 
 from backend.extensions import logger
 from backend.database import get_queue_db, get_reviews_db
-from backend.services.github_service import fetch_pr_state_and_sha
+from backend.services.github_service import fetch_pr_state_and_sha, fetch_pr_queue_data
+from backend.services.pr_service import get_ci_status
 from backend.routes import error_response
 
 queue_bp = Blueprint("queue", __name__)
@@ -41,10 +42,16 @@ def get_merge_queue():
             major_found_count = None
             minor_posted_count = None
             minor_found_count = None
+            review_decision = None
+            ci_status = None
 
             if len(repo_parts) == 2:
                 owner, repo = repo_parts
-                pr_state, current_sha = fetch_pr_state_and_sha(owner, repo, item["pr_number"])
+                queue_data = fetch_pr_queue_data(owner, repo, item["pr_number"])
+                pr_state = queue_data["state"]
+                current_sha = queue_data["headRefOid"]
+                review_decision = queue_data["reviewDecision"]
+                ci_status = get_ci_status(queue_data["statusCheckRollup"])
 
                 latest_review = reviews_db.get_latest_review_for_pr(item["repo"], item["pr_number"])
                 if latest_review:
@@ -93,7 +100,9 @@ def get_merge_queue():
                 "majorPostedCount": major_posted_count,
                 "majorFoundCount": major_found_count,
                 "minorPostedCount": minor_posted_count,
-                "minorFoundCount": minor_found_count
+                "minorFoundCount": minor_found_count,
+                "reviewDecision": review_decision,
+                "ciStatus": ci_status
             }
 
         with ThreadPoolExecutor(max_workers=5) as executor:

@@ -149,3 +149,32 @@ def fetch_pr_state_and_sha(owner, repo, pr_number):
     except RuntimeError as e:
         logger.warning(f"Failed to fetch PR state/SHA for {owner}/{repo}#{pr_number}: {e}")
         return None, None
+
+
+def fetch_pr_queue_data(owner, repo, pr_number):
+    """Fetch PR state, head SHA, review decision, and CI status in a single gh call.
+
+    Used by merge queue enrichment to avoid multiple API calls per item.
+
+    Returns:
+        dict with keys: state, headRefOid, reviewDecision, statusCheckRollup.
+        All values may be None on error.
+    """
+    try:
+        output = run_gh_command([
+            "pr", "view", str(pr_number),
+            "-R", f"{owner}/{repo}",
+            "--json", "state,headRefOid,reviewDecision,statusCheckRollup",
+        ])
+        data = parse_json_output(output)
+        if isinstance(data, dict):
+            return {
+                "state": data.get("state", "").upper() or None,
+                "headRefOid": data.get("headRefOid") or None,
+                "reviewDecision": data.get("reviewDecision") or None,
+                "statusCheckRollup": data.get("statusCheckRollup") or None,
+            }
+        return {"state": None, "headRefOid": None, "reviewDecision": None, "statusCheckRollup": None}
+    except RuntimeError as e:
+        logger.warning(f"Failed to fetch PR queue data for {owner}/{repo}#{pr_number}: {e}")
+        return {"state": None, "headRefOid": None, "reviewDecision": None, "statusCheckRollup": None}
