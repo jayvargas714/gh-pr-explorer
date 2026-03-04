@@ -93,12 +93,12 @@ def start_review():
             if previous_review_id:
                 prev_review = reviews_db.get_review(previous_review_id)
                 if prev_review:
-                    previous_review_content = prev_review.get("content")
+                    previous_review_content = prev_review.get("content_json")
                     parent_id = previous_review_id
             else:
                 prev_review = reviews_db.get_latest_review_for_pr(full_repo, pr_number)
                 if prev_review:
-                    previous_review_content = prev_review.get("content")
+                    previous_review_content = prev_review.get("content_json")
                     parent_id = prev_review.get("id")
 
             if not previous_review_content:

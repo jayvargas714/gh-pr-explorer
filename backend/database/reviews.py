@@ -1,6 +1,6 @@
-"""ReviewsDB - Database operations for code reviews."""
+"""ReviewsDB - Database operations for code reviews (JSON-primary storage)."""
 
-import re
+import json
 import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -9,7 +9,11 @@ logger = logging.getLogger(__name__)
 
 
 class ReviewsDB:
-    """Database operations for code reviews."""
+    """Database operations for code reviews.
+
+    Reviews are stored with content_json as the primary content column.
+    Score is extracted from json["score"]["overall"] instead of regex.
+    """
 
     def __init__(self, db):
         self.db = db
@@ -24,32 +28,42 @@ class ReviewsDB:
         status: str = "completed",
         review_file_path: Optional[str] = None,
         score: Optional[float] = None,
-        content: Optional[str] = None,
+        content_json: Optional[str] = None,
         is_followup: bool = False,
         parent_review_id: Optional[int] = None,
         review_timestamp: Optional[datetime] = None,
         head_commit_sha: Optional[str] = None,
         pr_state_at_review: Optional[str] = None
     ) -> int:
-        """Save a review to the database. Returns the review ID."""
+        """Save a review to the database. Returns the review ID.
+
+        Args:
+            content_json: JSON string of the review content (required for completed reviews).
+            score: Optional score override. If None, extracted from content_json.
+        """
         with self.db.connection() as conn:
             cursor = conn.cursor()
 
-            if score is None and content:
-                score = self._extract_score(content)
+            # Extract score from JSON if not provided
+            if score is None and content_json:
+                score = self._extract_score_from_json(content_json)
 
             timestamp = review_timestamp or datetime.now()
+
+            # Ensure content_json is a string
+            if content_json is None:
+                content_json = "{}"
 
             cursor.execute("""
                 INSERT INTO reviews (
                     pr_number, repo, pr_title, pr_author, pr_url,
-                    status, review_file_path, score, content,
+                    status, review_file_path, score, content_json,
                     is_followup, parent_review_id, review_timestamp,
                     head_commit_sha, pr_state_at_review
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 pr_number, repo, pr_title, pr_author, pr_url,
-                status, review_file_path, score, content,
+                status, review_file_path, score, content_json,
                 is_followup, parent_review_id, timestamp,
                 head_commit_sha, pr_state_at_review
             ))
@@ -63,7 +77,7 @@ class ReviewsDB:
         review_id: int,
         status: Optional[str] = None,
         score: Optional[float] = None,
-        content: Optional[str] = None
+        content_json: Optional[str] = None
     ):
         """Update an existing review."""
         with self.db.connection() as conn:
@@ -76,11 +90,11 @@ class ReviewsDB:
                 updates.append("status = ?")
                 params.append(status)
 
-            if content is not None:
-                updates.append("content = ?")
-                params.append(content)
+            if content_json is not None:
+                updates.append("content_json = ?")
+                params.append(content_json)
                 if score is None:
-                    score = self._extract_score(content)
+                    score = self._extract_score_from_json(content_json)
 
             if score is not None:
                 updates.append("score = ?")
@@ -136,23 +150,15 @@ class ReviewsDB:
             )
             logger.info(f"Updated {column} for review {review_id}: {posted_count}/{found_count} posted")
 
-    def _extract_score(self, content: str) -> Optional[float]:
-        """Extract score from review content."""
-        if not content:
-            return None
-
-        patterns = [
-            r'(?:#*\s*)?(?:\*\*)?(?:\w+\s+)?(?:Score|Rating)\s*[:\s]*(\d+(?:\.\d{1,2})?)\s*/?\s*10',
-            r'(\d+(?:\.\d{1,2})?)\s*/\s*10\s*(?:score|rating)',
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, content, re.IGNORECASE)
-            if match:
-                score = float(match.group(1))
-                if 0 <= score <= 10:
-                    return score
-
+    def _extract_score_from_json(self, content_json: str) -> Optional[float]:
+        """Extract score from the content_json string."""
+        try:
+            data = json.loads(content_json)
+            score = data.get("score", {}).get("overall")
+            if score is not None and isinstance(score, (int, float)) and 0 <= score <= 10:
+                return float(score)
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            pass
         return None
 
     def get_review(self, review_id: int) -> Optional[Dict[str, Any]]:
@@ -275,13 +281,13 @@ class ReviewsDB:
             return cursor.fetchone()["total"]
 
     def search_reviews(self, search_text: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """Search reviews by title or content."""
+        """Search reviews by title or content_json text."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             search_pattern = f"%{search_text}%"
             cursor.execute("""
                 SELECT * FROM reviews
-                WHERE pr_title LIKE ? OR content LIKE ?
+                WHERE pr_title LIKE ? OR content_json LIKE ?
                 ORDER BY review_timestamp DESC
                 LIMIT ?
             """, (search_pattern, search_pattern, limit))

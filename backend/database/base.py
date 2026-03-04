@@ -56,7 +56,7 @@ class Database:
                     status TEXT NOT NULL DEFAULT 'completed',
                     review_file_path TEXT,
                     score REAL CHECK(score >= 0 AND score <= 10),
-                    content TEXT,
+                    content_json TEXT NOT NULL,
                     is_followup BOOLEAN DEFAULT FALSE,
                     parent_review_id INTEGER,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

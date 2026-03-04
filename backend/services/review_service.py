@@ -1,19 +1,39 @@
 """Claude CLI subprocess management: start, cancel, poll, save to DB."""
 
+import json
 import logging
-import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.config import get_reviews_dir
 from backend.services.github_service import fetch_pr_head_sha, fetch_pr_state
+from backend.services.review_schema import markdown_to_json, validate_review_json, json_to_markdown, SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
 
+# Compact schema instructions embedded in the review prompt
+_SCHEMA_INSTRUCTIONS = (
+    "The JSON must have these top-level keys: "
+    '"schema_version" (set to "1.0.0"), '
+    '"metadata" (object with pr_number, repository, pr_url, pr_title, author, branch {head, base}, '
+    "review_date, review_type, files_changed, additions, deletions), "
+    '"summary" (string), '
+    '"sections" (array of objects with type=critical|major|minor, display_name, and issues array), '
+    '"highlights" (array of strings), '
+    '"recommendations" (array of {priority: must_fix|high|medium|low, text}), '
+    '"score" (object with overall 0-10, optional breakdown array of {category, score, comment}, optional summary). '
+    "Each issue MUST have: title (string), location (object with file, start_line, end_line), "
+    "problem (string), and optionally fix (string) and code_snippet (string). "
+)
+
 
 def save_review_to_db(key, review, status, reviews_db):
-    """Save a completed/failed review to the database."""
+    """Save a completed/failed review to the database.
+
+    Reads both .md and .json files. If .json exists and validates, uses it directly.
+    Otherwise falls back to parsing the .md file via markdown_to_json().
+    """
     try:
         parts = key.split("/")
         if len(parts) >= 3:
@@ -22,15 +42,60 @@ def save_review_to_db(key, review, status, reviews_db):
             pr_number = int(parts[2])
             full_repo = f"{owner}/{repo}"
 
-            content = None
+            review_json_data = None
             review_file = review.get("review_file")
+
             if status == "completed" and review_file:
-                try:
-                    review_path = Path(review_file)
-                    if review_path.exists():
-                        content = review_path.read_text(encoding='utf-8')
-                except Exception as e:
-                    logger.warning(f"Could not read review file {review_file}: {e}")
+                review_path = Path(review_file)
+                json_path = review_path.with_suffix(".json")
+
+                # Try reading the .json file first (agent writes both .md and .json)
+                if json_path.exists():
+                    try:
+                        raw = json_path.read_text(encoding="utf-8")
+                        parsed = json.loads(raw)
+                        valid, errs = validate_review_json(parsed)
+                        if valid:
+                            review_json_data = parsed
+                            logger.info(f"Loaded validated JSON review from {json_path}")
+                        else:
+                            logger.warning(f"JSON review at {json_path} failed validation: {errs[:3]}")
+                    except Exception as e:
+                        logger.warning(f"Could not read/parse JSON review file {json_path}: {e}")
+
+                # Fallback: read the .md file and convert to JSON
+                if review_json_data is None and review_path.exists():
+                    try:
+                        md_content = review_path.read_text(encoding="utf-8")
+                        metadata = {
+                            "pr_number": pr_number,
+                            "repo": full_repo,
+                            "pr_url": review.get("pr_url", ""),
+                            "pr_title": review.get("pr_title"),
+                            "pr_author": review.get("pr_author"),
+                            "is_followup": review.get("is_followup", False),
+                            "parent_review_id": review.get("parent_review_id"),
+                        }
+                        review_json_data = markdown_to_json(md_content, metadata)
+                        logger.info(f"Converted markdown review to JSON for {key}")
+                    except Exception as e:
+                        logger.warning(f"Could not read/convert review file {review_file}: {e}")
+
+            # Build content_json string
+            if review_json_data is None:
+                # Distinguishable stub for failed/empty reviews
+                review_json_data = {
+                    "schema_version": SCHEMA_VERSION,
+                    "error": True,
+                    "metadata": {"pr_number": pr_number, "repository": full_repo},
+                    "summary": "",
+                    "sections": [],
+                    "highlights": [],
+                    "recommendations": [],
+                    "score": {"overall": 0},
+                }
+
+            content_json_str = json.dumps(review_json_data, ensure_ascii=False)
 
             pr_url = review.get("pr_url", "")
             pr_title = review.get("pr_title")
@@ -38,12 +103,10 @@ def save_review_to_db(key, review, status, reviews_db):
             is_followup = review.get("is_followup", False)
             parent_review_id = review.get("parent_review_id")
 
-            if not pr_title and content:
-                h1_match = re.search(r'^#\s+(.+?)$', content, re.MULTILINE)
-                if h1_match:
-                    pr_title = h1_match.group(1).strip()
-                else:
-                    pr_title = f"PR #{pr_number} Review"
+            if not pr_title:
+                pr_title = review_json_data.get("metadata", {}).get("pr_title")
+            if not pr_title:
+                pr_title = f"PR #{pr_number} Review"
 
             head_commit_sha = fetch_pr_head_sha(owner, repo, pr_number)
             pr_state_at_review = fetch_pr_state(owner, repo, pr_number)
@@ -56,7 +119,7 @@ def save_review_to_db(key, review, status, reviews_db):
                 pr_url=pr_url,
                 status=status,
                 review_file_path=review_file,
-                content=content,
+                content_json=content_json_str,
                 is_followup=is_followup,
                 parent_review_id=parent_review_id,
                 head_commit_sha=head_commit_sha,
@@ -107,6 +170,9 @@ def check_review_status(key, active_reviews, reviews_lock, reviews_db):
 def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, previous_review_content=None):
     """Start a Claude CLI review process in the background.
 
+    Args:
+        previous_review_content: For follow-ups, the JSON string of the previous review's content_json.
+
     Returns:
         tuple: (process, review_file_path_or_error, is_followup)
     """
@@ -121,22 +187,37 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
     else:
         review_file = reviews_dir / f"{owner}-{repo_safe}-pr-{pr_number}.md"
 
+    json_file = str(review_file).replace(".md", ".json")
+
     if is_followup and previous_review_content:
+        # Convert raw JSON to readable markdown for the prompt
+        previous_review_markdown = previous_review_content
+        try:
+            parsed_prev = json.loads(previous_review_content)
+            previous_review_markdown = json_to_markdown(parsed_prev)
+        except (json.JSONDecodeError, TypeError, Exception):
+            pass  # Fall back to raw string if conversion fails
+
         prompt = (
             f"Review PR #{pr_number} at {pr_url}. "
-            f"This is a FOLLOW-UP review. Here is the previous review for context:\n\n"
-            f"---PREVIOUS REVIEW---\n{previous_review_content[:8000]}\n---END PREVIOUS REVIEW---\n\n"
+            f"This is a FOLLOW-UP review. Previous review:\n\n"
+            f"---PREVIOUS REVIEW---\n{previous_review_markdown[:8000]}\n---END PREVIOUS REVIEW---\n\n"
             f"Focus on: changes since last review, whether previous issues were addressed. "
+            f"Include a 'followup' section with 'resolution_status' array tracking each previous issue. "
             f"Use the elite-code-reviewer agent. "
-            f"Write the review to {review_file} "
-            f"IMPORTANT: Include a final score from 0-10 in the review."
+            f"Write the review to {review_file}. "
+            f"ALSO write a structured JSON version to {json_file} following this schema: "
+            f"{_SCHEMA_INSTRUCTIONS} "
+            f"IMPORTANT: Include a final score from 0-10 in both formats."
         )
     else:
         prompt = (
             f"Review PR #{pr_number} at {pr_url}. "
             f"Use the elite-code-reviewer agent. "
-            f"Write the review to {review_file} "
-            f"IMPORTANT: Include a final score from 0-10 in the review."
+            f"Write the review to {review_file}. "
+            f"ALSO write a structured JSON version to {json_file} following this schema: "
+            f"{_SCHEMA_INSTRUCTIONS} "
+            f"IMPORTANT: Include a final score from 0-10 in both formats."
         )
 
     # --dangerously-skip-permissions is required for non-interactive subprocess execution.

@@ -361,9 +361,70 @@ export interface ReviewHistoryItem {
   parent_review_id: number | null
 }
 
+// ============================================================================
+// Structured Review JSON Types
+// ============================================================================
+
+export interface ReviewJSONMetadata {
+  pr_number: number
+  repository: string
+  pr_url?: string
+  pr_title?: string
+  author?: string
+  branch?: { head: string; base: string }
+  review_date?: string
+  review_type?: 'initial' | 'followup'
+  files_changed?: number
+  additions?: number
+  deletions?: number
+  description?: string
+}
+
+export interface ReviewIssueJSON {
+  title: string
+  location: { file: string; start_line: number | null; end_line: number | null }
+  problem: string
+  fix?: string
+  code_snippet?: string
+}
+
+export interface ReviewSectionJSON {
+  type: 'critical' | 'major' | 'minor'
+  display_name: string
+  issues: ReviewIssueJSON[]
+}
+
+export interface ReviewRecommendation {
+  priority: 'must_fix' | 'high' | 'medium' | 'low'
+  text: string
+}
+
+export interface ReviewScoreJSON {
+  overall: number
+  breakdown?: { category: string; score: number; comment?: string }[]
+  summary?: string
+}
+
+export interface ReviewFollowup {
+  previous_review_id: number | null
+  resolution_status: { issue: string; status: string; notes?: string }[]
+}
+
+export interface ReviewJSON {
+  schema_version: string
+  metadata: ReviewJSONMetadata
+  summary: string
+  sections: ReviewSectionJSON[]
+  highlights?: string[]
+  recommendations?: ReviewRecommendation[]
+  score: ReviewScoreJSON
+  followup?: ReviewFollowup
+}
+
 export interface ReviewDetail extends ReviewHistoryItem {
   review_file_path: string
   content: string
+  content_json?: ReviewJSON | null
 }
 
 export interface ReviewStats {

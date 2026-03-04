@@ -1,3 +1,5 @@
+import type { ReviewJSON, ReviewSectionJSON } from '../api/types'
+
 export interface ReviewSection {
   key: string
   heading: string
@@ -51,4 +53,50 @@ export function parseReviewSections(content: string): ReviewSection[] {
   }
 
   return sections
+}
+
+/**
+ * Convert a structured JSON section into markdown text for display.
+ */
+function formatSectionToMarkdown(section: ReviewSectionJSON): string {
+  if (!section.issues.length) return 'None'
+
+  return section.issues.map((issue, idx) => {
+    const parts: string[] = [`**${idx + 1}. ${issue.title}**`]
+    const loc = issue.location
+    let locStr = loc.file
+    if (loc.start_line != null && loc.end_line != null && loc.start_line !== loc.end_line) {
+      locStr += `:${loc.start_line}-${loc.end_line}`
+    } else if (loc.start_line != null) {
+      locStr += `:${loc.start_line}`
+    }
+    if (locStr) parts.push(`- Location: \`${locStr}\``)
+    if (issue.problem) parts.push(`- Problem: ${issue.problem}`)
+    if (issue.fix) parts.push(`- Fix: ${issue.fix}`)
+    if (issue.code_snippet) parts.push(`\n\`\`\`\n${issue.code_snippet}\n\`\`\``)
+    return parts.join('\n')
+  }).join('\n\n')
+}
+
+/**
+ * Extract sections from structured JSON review data (preferred path).
+ */
+export function sectionsFromJSON(reviewJson: ReviewJSON): ReviewSection[] {
+  return reviewJson.sections
+    .filter(section => section.issues.length > 0)
+    .map(section => ({
+      key: section.type === 'critical' ? 'critical-issues'
+        : section.type === 'major' ? 'major-concerns'
+        : 'minor-issues',
+      heading: section.display_name,
+      content: formatSectionToMarkdown(section),
+    }))
+}
+
+/**
+ * Get review sections, using JSON data when available with markdown fallback.
+ */
+export function getReviewSections(content?: string, contentJson?: ReviewJSON | null): ReviewSection[] {
+  if (contentJson) return sectionsFromJSON(contentJson)
+  return parseReviewSections(content || '')
 }

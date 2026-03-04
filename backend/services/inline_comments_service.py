@@ -1,4 +1,8 @@
-"""Critical issue parsing from review content + posting to GitHub."""
+"""Critical issue parsing from review content + posting to GitHub.
+
+Supports JSON-first extraction (from content_json) with fallback to
+markdown regex parsing for backward compatibility.
+"""
 
 import json
 import logging
@@ -20,6 +24,41 @@ SECTION_DB_COLUMNS = {
     "major": "major_concerns_posted",
     "minor": "minor_issues_posted",
 }
+
+# ---------------------------------------------------------------------------
+# JSON-first parsing
+# ---------------------------------------------------------------------------
+
+def _format_issue_body(issue: dict) -> str:
+    """Format an issue dict into a markdown comment body."""
+    parts = [f"**{issue.get('title', 'Issue')}**"]
+    if issue.get("problem"):
+        parts.append(f"\n**Problem:** {issue['problem']}")
+    if issue.get("fix"):
+        parts.append(f"\n**Fix:** {issue['fix']}")
+    return "\n".join(parts)
+
+
+def parse_section_issues_from_json(content_json: dict, section_type: str) -> list:
+    """Extract issues from structured JSON review data.
+
+    Args:
+        content_json: Parsed review JSON dict.
+        section_type: One of 'critical', 'major', 'minor'.
+
+    Returns:
+        List of dicts: [{ title, path, start_line, end_line, body }]
+    """
+    for section in content_json.get("sections", []):
+        if section.get("type") == section_type:
+            return [{
+                "title": issue.get("title", ""),
+                "path": issue.get("location", {}).get("file", ""),
+                "start_line": issue.get("location", {}).get("start_line"),
+                "end_line": issue.get("location", {}).get("end_line"),
+                "body": _format_issue_body(issue),
+            } for issue in section.get("issues", [])]
+    return []
 
 
 def _parse_location(location):
@@ -185,11 +224,16 @@ def post_inline_comments(reviews_db, review_id, section="critical"):
     if review.get(db_column):
         return {"error": f"{section_heading} have already been posted for this review"}, 409
 
-    content = review.get("content")
-    if not content:
-        return {"error": "Review has no content to parse"}, 400
+    # JSON-first: parse from content_json, fall back to markdown regex
+    issues = []
+    content_json_str = review.get("content_json")
+    if content_json_str:
+        try:
+            content_json = json.loads(content_json_str)
+            issues = parse_section_issues_from_json(content_json, section)
+        except (json.JSONDecodeError, TypeError):
+            pass
 
-    issues = parse_section_issues(content, section_heading)
     if not issues:
         return {"error": f"No {section_heading.lower()} found in review content", "issues_found": 0}, 400
 
