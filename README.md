@@ -1,141 +1,15 @@
 # GitHub PR Explorer
 
-A powerful web application for browsing, filtering, analyzing, and managing GitHub Pull Requests. Built with Flask and Vue.js 3, it leverages the GitHub CLI for seamless authentication and provides advanced features for code review management, merge queue tracking, and developer analytics.
-
-> **Note:** This project is actively under development. Features may change, and contributions are welcome!
-
----
-
-## Features
-
-### Pull Request Browsing & Filtering
-
-Browse PRs with an extensive filtering system organized into intuitive tabs:
-
-**Basic Filters**
-- State (Open, Closed, Merged, All)
-- Draft status
-- Author and Assignee selection
-- Base and Head branch filtering
-- Labels (multi-select with AND logic)
-- Milestone filtering
-- Linked issue status
-
-**Review Filters**
-- Review status (No reviews, Required, Approved, Changes requested)
-- Reviewed by specific contributor
-- Review requested from
-- CI status (Pending, Success, Failure)
-
-**People Filters**
-- Involves (author, assignee, mentions, or commenter)
-- Mentions
-- Commenter
-
-**Date Filters**
-- Created, Updated, Merged, and Closed date ranges
-
-**Advanced Filters**
-- Full-text search across title, body, and comments
-- Comment count with comparison operators
-- Reactions and interactions count
-- Team review requests
-- Exclusion filters (labels, author, milestone)
-- Custom sort options
-
-### PR Display
-
-Each PR card displays:
-- PR number and title with direct GitHub link
-- State badge (Open/Closed/Merged) with color coding
-- Draft indicator
-- Author with avatar
-- Branch information (source → target)
-- Time since last update
-- Diff stats (+additions, -deletions, files changed)
-- Label badges with colors
-- Review status indicator
-- Review score badge (0-10)
-- New commits indicator
-
-### Code Review Management
-
-Integrated code review workflow:
-- Start reviews directly from PR cards
-- Reviews saved as markdown files
-- Automatic review score extraction
-- Follow-up review support when new commits are detected
-- Review chain tracking (parent-child relationships)
-- Post critical issues as inline GitHub PR comments
-- Complete review history archive
-
-### Merge Queue
-
-Professional merge queue management:
-- Add/remove PRs from queue
-- Reorder queue items
-- Track PR state (synced with GitHub)
-- Attach markdown notes to queue items
-- Persistent storage across sessions
-
-### Developer Statistics
-
-Comprehensive contributor analytics:
-- Total commits, PRs authored, merged, and closed
-- Merge rate percentage with color coding
-- Reviews given, approvals, and changes requested
-- Lines added/deleted
-- Average review score
-- Sortable columns
-- 4-hour cache with background refresh
-
-### Review History
-
-Browse and search past reviews:
-- Filter by repository, author, or search text
-- View full review content with markdown rendering
-- Track review scores and PR states
-- Follow-up and inline comments indicators
-
-### Persistent Settings
-
-All preferences automatically saved and restored:
-- Filter selections
-- Selected account and repository
-- Theme preference
-
-### Dark Mode
-
-Full dark mode support with:
-- CSS variable-based theming
-- Toggle in header
-- Preference persisted to localStorage
-
----
-
-## Screenshots
-
-*Coming soon*
-
----
-
-## Tech Stack
-
-| Component | Technology |
-|-----------|------------|
-| Backend | Flask (Python 3) |
-| Frontend | Vue.js 3 (Composition API) |
-| Database | SQLite |
-| Styling | CSS with custom properties |
-| Auth | GitHub CLI (`gh`) |
-| Markdown | Marked.js |
+A local web application for browsing, filtering, and analyzing GitHub Pull Requests across your personal account and organizations. Built with a Flask API backend and a React + TypeScript frontend.
 
 ---
 
 ## Prerequisites
 
 - **Python 3.x** with pip
-- **GitHub CLI** installed and authenticated
+- **Node.js 18+** with npm
+- **GitHub CLI** (`gh`) installed and authenticated
+- **Claude CLI** (optional) — required only for the automated code review feature
 
 ```bash
 # Install GitHub CLI (macOS)
@@ -147,183 +21,242 @@ gh auth login
 
 ---
 
-## Installation
+## Quick Start
 
-1. **Clone the repository**
 ```bash
+# 1. Clone the repository
 git clone https://github.com/yourusername/gh-pr-explorer.git
 cd gh-pr-explorer
-```
 
-2. **Install Python dependencies**
-```bash
+# 2. Install Python dependencies
 pip install -r requirements.txt
-```
 
-3. **Run the application**
-```bash
+# 3. Install frontend dependencies
+cd frontend && npm install && cd ..
+
+# 4. Start the Flask API server (Terminal 1)
 python app.py
+# API runs on http://127.0.0.1:5714
+
+# 5. Start the Vite dev server (Terminal 2)
+cd frontend && npm run dev
+# UI runs on http://localhost:3050 (proxies API requests to :5714)
 ```
 
-4. **Open in browser**
-```
-http://127.0.0.1:5050
+Open **http://localhost:3050** in your browser.
+
+---
+
+## Production Mode
+
+Build the frontend and serve everything from Flask:
+
+```bash
+cd frontend && npm run build && cd ..
+python app.py
+# Access at http://127.0.0.1:5714
 ```
 
 ---
 
 ## Configuration
 
-Edit `config.json` to customize:
+Edit `config.json` in the project root:
 
 ```json
 {
-  "port": 5050,
-  "host": "127.0.0.1",
+  "port": 5714,
+  "host": "localhost",
+  "frontend_port": 3050,
   "debug": false,
   "default_per_page": 30,
-  "cache_ttl_seconds": 300
+  "cache_ttl_seconds": 300,
+  "workflow_cache_ttl_minutes": 60,
+  "workflow_cache_max_runs": 1000,
+  "review_sample_limit": 250,
+  "reviews_dir": "/path/to/your/code-reviews"
 }
 ```
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `port` | Server port | 5050 |
-| `host` | Listen address | 127.0.0.1 |
-| `debug` | Flask debug mode | false |
-| `default_per_page` | Default results per page | 30 |
-| `cache_ttl_seconds` | In-memory cache TTL | 300 |
+| Option | Default | Description |
+|--------|---------|-------------|
+| `port` | `5714` | Flask API server port |
+| `host` | `localhost` | Server bind address |
+| `frontend_port` | `3050` | Vite dev server port |
+| `debug` | `false` | Flask debug mode |
+| `default_per_page` | `30` | Default PR results per page |
+| `cache_ttl_seconds` | `300` | In-memory cache TTL (seconds) |
+| `workflow_cache_ttl_minutes` | `60` | CI/Workflow cache TTL (minutes) |
+| `workflow_cache_max_runs` | `1000` | Max workflow runs cached per repo |
+| `review_sample_limit` | `250` | Max PRs sampled for lifecycle/review analytics |
+| `reviews_dir` | — | Directory where code review output files are saved |
 
 ---
 
-## API Endpoints
+## Database
 
-### Core Endpoints
+The SQLite database (`pr_explorer.db`) is created automatically on first run. It stores review history, merge queue data, developer stats cache, and user settings.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/user` | GET | Get authenticated user info |
-| `/api/orgs` | GET | List user accounts and organizations |
-| `/api/repos` | GET | List repositories for an owner |
-| `/api/repos/<owner>/<repo>/prs` | GET | Get PRs with extensive filtering |
-| `/api/repos/<owner>/<repo>/contributors` | GET | List repository contributors |
-| `/api/repos/<owner>/<repo>/labels` | GET | List repository labels |
-| `/api/repos/<owner>/<repo>/branches` | GET | List repository branches |
-| `/api/repos/<owner>/<repo>/milestones` | GET | List repository milestones |
-| `/api/repos/<owner>/<repo>/teams` | GET | List teams with repository access |
-| `/api/repos/<owner>/<repo>/stats` | GET | Get developer statistics |
+To pre-seed the CI/Workflow cache for faster first loads:
 
-### Merge Queue
+```bash
+# Seed specific repos
+python seed_workflow_cache.py owner/repo1 owner/repo2
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/merge-queue` | GET | Get queue items |
-| `/api/merge-queue` | POST | Add PR to queue |
-| `/api/merge-queue/<pr_number>` | DELETE | Remove from queue |
-| `/api/merge-queue/reorder` | POST | Reorder queue items |
-| `/api/merge-queue/<pr_number>/notes` | GET/POST | Get or add notes |
-
-### Code Reviews
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/reviews` | GET | Get active reviews |
-| `/api/reviews` | POST | Start a review |
-| `/api/reviews/<owner>/<repo>/<pr_number>/status` | GET | Check review status |
-| `/api/review-history` | GET | List past reviews |
-| `/api/review-history/<review_id>` | GET | Get review details |
-
-### Settings
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/settings` | GET | Get all settings |
-| `/api/settings/<key>` | GET/PUT/DELETE | Manage individual settings |
-
-### Cache
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/clear-cache` | POST | Clear in-memory cache |
+# Re-seed all previously cached repos
+python seed_workflow_cache.py --refresh
+```
 
 ---
 
-## Database Schema
+## Code Review Agent Setup
 
-The application uses SQLite with the following tables:
+The app can launch automated code reviews via Claude CLI and post the results as inline comments on GitHub PRs. For the inline commenting feature to work, the review output **must** follow a specific format that the parser can extract issues from.
 
-- **reviews** - Code review history with scores, content, and metadata
-- **merge_queue** - PR merge queue with positions and state tracking
-- **queue_notes** - Notes attached to queue items
-- **user_settings** - Persistent user preferences (filters, theme, etc.)
-- **developer_stats** - Cached contributor statistics
-- **stats_metadata** - Cache metadata for background refresh
-- **migrations** - Database migration tracking
+If you use a custom review agent or prompt, ensure its output matches the structure below.
+
+### Required Section Headings
+
+The parser looks for these exact bold headings, separated by `---` horizontal rules:
+
+```
+**Critical Issues**
+
+(issues here)
+
+---
+**Major Concerns**
+
+(issues here)
+
+---
+**Minor Issues**
+
+(issues here)
+```
+
+If a section has no issues, include the heading with "None" beneath it.
+
+### Issue Format
+
+Each issue must use a **numbered bold title** followed by exactly three dash-prefixed fields: `Location`, `Problem`, and `Fix`. All three fields are required — issues missing a `Location` field are skipped.
+
+```
+**1. Short Descriptive Title**
+- Location: `path/to/file.ext:42-58`
+- Problem: Clear explanation of what is wrong.
+- Fix: Concrete recommendation for how to resolve it.
+```
+
+### Location Field Rules
+
+| Format | Example | Result |
+|--------|---------|--------|
+| Single line | `` `src/auth.py:42` `` | Comment on line 42 |
+| Line range | `` `src/auth.py:42-58` `` | Comment spanning lines 42–58 |
+| File only | `` `src/auth.py` `` | File-level comment (no line annotation) |
+
+- Wrap file paths in backticks
+- Paths must be relative to the repo root (no leading `/` or `./`)
+- Use `:` between path and line number, `-` for ranges
+- Do not include extra text or multiple paths in the Location field
+
+### Complete Example
+
+```markdown
+**Critical Issues**
+
+**1. SQL Injection in User Query**
+- Location: `backend/services/user_service.py:87-92`
+- Problem: User input interpolated directly into SQL without parameterization.
+- Fix: Use parameterized queries with `?` placeholders.
+
+---
+**Major Concerns**
+
+**1. Unbounded Query Without Pagination**
+- Location: `backend/services/search_service.py:120-135`
+- Problem: Search returns all results with no limit, risking memory issues.
+- Fix: Add LIMIT clause (e.g., 100) and cursor-based pagination.
+
+---
+**Minor Issues**
+
+**1. Unused Import**
+- Location: `backend/routes/api.py:3`
+- Problem: The `datetime` import is unused.
+- Fix: Remove it.
+```
+
+Issues that don't match this structure are silently skipped when posting inline comments.
 
 ---
 
-## Architecture
+## Features
+
+- **PR Browsing & Filtering** — 5-tab filter panel (Basic, Review, People, Dates, Advanced) with 30+ filter options
+- **Client-side Pagination** — page through PRs and workflow runs without extra API calls
+- **Analytics** — 5 sub-tabs: Developer Stats, PR Lifecycle, Code Activity, Review Responsiveness, Contributor Time Series
+- **CI/Workflows** — workflow run history with filters, pass rate, and failure trends
+- **Merge Queue** — cross-repo prioritized queue with notes and reordering
+- **Code Reviews** — automated reviews via Claude CLI with score tracking and follow-ups
+- **Inline Comments** — post critical/major/minor issues from reviews directly to GitHub PRs
+- **Review History** — searchable archive of all past reviews with score badges on PR cards
+- **Branch Divergence** — badges showing how far behind base each open PR is
+- **Settings Persistence** — filters, account selection, and theme saved to SQLite
+- **Dark/Light Mode** — full theme support with CSS custom properties
+
+---
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Backend | Flask (Python 3) |
+| Frontend | React 18 + TypeScript |
+| Build Tool | Vite |
+| State Management | Zustand |
+| Charts | Recharts + CSS-only bar charts |
+| Database | SQLite |
+| Styling | CSS custom properties (Matrix UI) |
+| GitHub Integration | GitHub CLI (`gh`) |
+| Code Reviews | Claude CLI (optional) |
+
+---
+
+## Project Structure
 
 ```
 gh-pr-explorer/
-├── app.py              # Flask application with all routes
-├── config.json         # Application configuration
-├── requirements.txt    # Python dependencies
-├── pr_explorer.db      # SQLite database (created on first run)
-├── templates/
-│   └── index.html      # Vue.js single-file component
-└── static/
-    ├── css/
-    │   └── styles.css  # CSS with theming support
-    └── js/
-        └── app.js      # Vue.js application logic
+├── app.py                      # Flask launcher (~25 lines)
+├── config.json                 # Application configuration
+├── requirements.txt            # Python dependencies
+├── pr_explorer.db              # SQLite database (auto-created)
+├── seed_workflow_cache.py      # Pre-seed CI cache
+├── migrate_data.py             # One-time legacy data migration
+├── docs/
+│   └── DESIGN.md               # Detailed design document
+│
+├── backend/                    # Flask backend package
+│   ├── __init__.py             # create_app() factory
+│   ├── config.py               # Configuration loading
+│   ├── extensions.py           # Shared singletons (logger, cache, locks)
+│   ├── database/               # SQLite models (reviews, queue, stats, caches)
+│   ├── services/               # Business logic (GitHub, reviews, stats, etc.)
+│   ├── filters/                # PR filter builder (request args → gh CLI args)
+│   ├── cache/                  # In-memory TTL cache decorator
+│   ├── visualizers/            # Data transforms for charts and tables
+│   └── routes/                 # 11 Flask Blueprints (36+ endpoints)
+│
+└── frontend/                   # React + TypeScript frontend
+    ├── src/
+    │   ├── api/                # Type-safe API modules
+    │   ├── components/         # React components by feature
+    │   ├── stores/             # Zustand state stores
+    │   ├── styles/             # CSS styles
+    │   └── types/              # TypeScript type definitions
+    ├── vite.config.ts          # Vite configuration
+    └── package.json            # Frontend dependencies
 ```
 
-### Data Flow
-
-1. Frontend makes API calls to Flask backend
-2. Backend translates requests into `gh` CLI commands
-3. GitHub CLI handles authentication and fetches data
-4. Backend parses JSON output and returns to frontend
-5. Complex data (reviews, queue, stats) stored in SQLite
-
----
-
-## Development Status
-
-This project is under active development. Current focus areas:
-
-- [ ] Additional filtering capabilities
-- [ ] Bulk PR operations
-- [ ] Export functionality
-- [ ] Enhanced review templates
-- [ ] Performance optimizations
-- [ ] Mobile responsiveness improvements
-- [ ] Test coverage
-
----
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues and pull requests.
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
----
-
-## License
-
-This project is open source. See LICENSE file for details.
-
----
-
-## Acknowledgments
-
-- Built with [Flask](https://flask.palletsprojects.com/)
-- Frontend powered by [Vue.js 3](https://vuejs.org/)
-- Data fetched via [GitHub CLI](https://cli.github.com/)
-- Markdown rendering by [Marked.js](https://marked.js.org/)
+For full architectural details, API endpoint documentation, and database schema, see [docs/DESIGN.md](docs/DESIGN.md).
