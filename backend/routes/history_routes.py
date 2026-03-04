@@ -1,10 +1,13 @@
 """Review history routes: list, detail, PR reviews, stats, check."""
 
+import json
+
 from flask import Blueprint, jsonify, request
 
 from backend.extensions import logger
 from backend.database import get_reviews_db
 from backend.routes import error_response
+from backend.services.review_schema import json_to_markdown
 
 history_bp = Blueprint("history", __name__)
 
@@ -61,14 +64,29 @@ def get_review_history():
 
 @history_bp.route("/api/review-history/<int:review_id>", methods=["GET"])
 def get_review_detail(review_id):
-    """Get a single review with full content."""
+    """Get a single review with full content (JSON + generated markdown)."""
     try:
         reviews_db = get_reviews_db()
         review = reviews_db.get_review(review_id)
         if not review:
             return jsonify({"error": "Review not found"}), 404
 
-        return jsonify({"review": dict(review)})
+        result = dict(review)
+        # Parse content_json and provide generated markdown for rendering
+        content_json_str = result.get("content_json")
+        if content_json_str:
+            try:
+                parsed = json.loads(content_json_str)
+                result["content_json"] = parsed
+                result["content"] = json_to_markdown(parsed)
+            except (json.JSONDecodeError, TypeError):
+                result["content_json"] = None
+                result["content"] = ""
+        else:
+            result["content_json"] = None
+            result["content"] = ""
+
+        return jsonify({"review": result})
 
     except Exception as e:
         return error_response("Internal server error", 500, f"Error getting review {review_id}: {e}")
@@ -84,7 +102,7 @@ def get_pr_reviews(owner, repo, pr_number):
 
         formatted = []
         for review in reviews:
-            formatted.append({
+            item = {
                 "id": review["id"],
                 "pr_number": review["pr_number"],
                 "repo": review["repo"],
@@ -94,10 +112,23 @@ def get_pr_reviews(owner, repo, pr_number):
                 "review_timestamp": review["review_timestamp"],
                 "status": review["status"],
                 "score": review["score"],
-                "content": review["content"],
                 "is_followup": review["is_followup"],
                 "parent_review_id": review["parent_review_id"]
-            })
+            }
+            # Generate markdown content from JSON
+            content_json_str = review.get("content_json")
+            if content_json_str:
+                try:
+                    parsed = json.loads(content_json_str)
+                    item["content_json"] = parsed
+                    item["content"] = json_to_markdown(parsed)
+                except (json.JSONDecodeError, TypeError):
+                    item["content_json"] = None
+                    item["content"] = ""
+            else:
+                item["content_json"] = None
+                item["content"] = ""
+            formatted.append(item)
 
         return jsonify({"reviews": formatted})
 

@@ -7,7 +7,7 @@ import { Button } from '../common/Button'
 import { Alert } from '../common/Alert'
 import { Spinner } from '../common/Spinner'
 import { getReviewDetail, postVerdict } from '../../api/reviews'
-import { parseReviewSections, type ReviewSection } from '../../utils/reviewSections'
+import { getReviewSections, type ReviewSection } from '../../utils/reviewSections'
 import type { VerdictEvent, ReviewDetail } from '../../api/types'
 
 interface VerdictModalProps {
@@ -113,7 +113,7 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
       setError(null)
       const review = await getReviewDetail(reviewId)
       setReviewDetail(review)
-      const parsed = parseReviewSections(review.content || '')
+      const parsed = getReviewSections(review.content, review.content_json)
       setSections(parsed)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load review content')

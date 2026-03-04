@@ -139,6 +139,7 @@ The backend is organized as a Python package with clear separation of concerns:
 | `workflow_service.py` | `fetch_workflow_data()` |
 | `activity_service.py` | `fetch_code_activity_data()` |
 | `contributor_service.py` | `fetch_contributor_timeseries()` |
+| `review_schema.py` | `validate_review_json()`, `json_to_markdown()`, `markdown_to_json()`, `get_section_display_names()`, `SCHEMA_VERSION` |
 
 **Filters** (`backend/filters/`):
 
@@ -201,7 +202,7 @@ The database module provides SQLite-based persistence for reviews and merge queu
 #### Database Schema
 
 ```sql
--- Reviews table: Stores code review history and content
+-- Reviews table: Stores code review history and structured JSON content
 CREATE TABLE reviews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     pr_number INTEGER NOT NULL,
@@ -213,7 +214,7 @@ CREATE TABLE reviews (
     status TEXT NOT NULL DEFAULT 'completed',
     review_file_path TEXT,
     score INTEGER CHECK(score >= 0 AND score <= 10),
-    content TEXT,
+    content_json TEXT NOT NULL,              -- Structured JSON review content (see Review JSON Schema)
     is_followup BOOLEAN DEFAULT FALSE,
     parent_review_id INTEGER,
     head_commit_sha TEXT,
@@ -319,15 +320,16 @@ CREATE TABLE code_activity_cache (
 
 | Method | Description |
 |--------|-------------|
-| `add_review()` | Creates a new review record with optional follow-up linking |
+| `add_review()` | Creates a new review record with `content_json` and optional follow-up linking |
 | `get_review()` | Retrieves a single review by ID |
 | `get_reviews_for_pr()` | Gets all reviews for a specific PR |
 | `get_latest_review_for_pr()` | Gets the most recent review for a specific PR |
-| `search_reviews()` | Searches reviews with filters (repo, author, date range) |
+| `search_reviews()` | Searches reviews with filters (repo, author, date range); searches within `content_json` |
 | `get_stats()` | Returns aggregate review statistics |
 | `check_pr_reviewed()` | Checks if a PR has existing reviews |
-| `extract_score()` | Extracts numerical score from review content using regex |
-| `update_review()` | Updates review fields (e.g., marking inline comments as posted) |
+| `update_review()` | Updates review fields including `content_json` (e.g., marking inline comments as posted) |
+
+**Note**: Score is extracted directly from the JSON content at `content_json["score"]["overall"]` rather than using regex parsing.
 
 #### MergeQueueDB Methods
 
@@ -392,12 +394,7 @@ CREATE TABLE code_activity_cache (
 
 #### Score Extraction
 
-The database module extracts review scores from markdown content using regex patterns:
-
-```python
-# Matches patterns like "Score: 8/10", "Overall Score: 7", "Rating: 9/10"
-score_pattern = r'(?:score|rating|overall\s*score)[:\s]*(\d+)(?:\s*/\s*10)?'
-```
+Scores are extracted directly from the JSON content: `content_json["score"]["overall"]`. No regex parsing needed.
 
 ### Data Migration Module
 
@@ -995,8 +992,8 @@ The Code Review feature integrates with Claude CLI to perform automated code rev
 2. Backend spawns a Claude CLI subprocess with the review prompt
 3. UI shows spinner while review is in progress
 4. Claude CLI uses the `code-reviewer` agent to analyze the PR
-5. Review output is written to a markdown file
-6. Review metadata and content are saved to SQLite database
+5. Review output is written to both a markdown file (`.md`) and a structured JSON file (`.json`)
+6. Review metadata and `content_json` are saved to SQLite database; markdown is generated on the fly from `content_json` when needed
 7. UI updates to show completed/failed status with score badge
 8. Failed reviews display error details in a modal
 
@@ -1005,13 +1002,14 @@ The Code Review feature integrates with Claude CLI to perform automated code rev
 ```bash
 claude -p "Review PR #123 at https://github.com/owner/repo/pull/123. \
   Use the code-reviewer agent. \
-  Write the review to /path/to/reviews/owner-repo-pr-123.md" \
+  Write the review to /path/to/reviews/owner-repo-pr-123.md \
+  AND write structured JSON to /path/to/reviews/owner-repo-pr-123.json" \
   --allowedTools "Bash(git*),Bash(gh*),Read,Glob,Grep,Write,Task" \
   --dangerously-skip-permissions
 ```
 
 **Flags**:
-- `-p`: Prompt with review instructions
+- `-p`: Prompt with review instructions requesting both `.md` and `.json` output files
 - `--allowedTools`: Grants read-only git/gh access + file tools
 - `--dangerously-skip-permissions`: Bypass permission prompts for automated execution
 
@@ -1026,15 +1024,16 @@ claude -p "Review PR #123 at https://github.com/owner/repo/pull/123. \
 #### Review Storage
 
 - **Active Reviews**: In-memory dictionary (`active_reviews`) with process references
-- **Database Storage**: Completed reviews saved to `reviews` table in SQLite
+- **Database Storage**: Completed reviews saved to `reviews` table in SQLite; `content_json` is the primary storage column containing the structured JSON review
+- **Markdown Generation**: Markdown content is generated on the fly from `content_json` via `json_to_markdown()` when needed (API responses, file export)
 - **Review Files**: Written to `/Users/jvargas714/Documents/code-reviews/`
-- **File Naming**: `{owner}-{repo}-pr-{number}.md`
+- **File Naming**: `{owner}-{repo}-pr-{number}.md` and `{owner}-{repo}-pr-{number}.json`
 
 #### Score Tracking
 
-Reviews are analyzed to extract numerical scores:
+Reviews store numerical scores extracted from structured JSON:
 
-- **Automatic Extraction**: Regex parses content for score patterns (e.g., "Score: 8/10")
+- **Automatic Extraction**: Score read directly from `content_json["score"]["overall"]`
 - **Score Range**: 0-10 scale stored in database
 - **Visual Display**: Color-coded badges on PR cards
 - **Statistics**: Aggregate score data available via stats endpoint
@@ -2042,7 +2041,7 @@ Returns a list of past reviews with optional filtering.
 
 **GET** `/api/review-history/<id>`
 
-Returns a single review with full content.
+Returns a single review with full content in both structured JSON and generated markdown formats.
 
 **Response**:
 ```json
@@ -2057,11 +2056,21 @@ Returns a single review with full content.
   "status": "completed",
   "review_file_path": "/path/to/reviews/owner-repo-pr-123.md",
   "score": 8,
+  "content_json": {
+    "schema_version": "1.0.0",
+    "metadata": { "pr_number": 123, "repo": "owner/repo", "author": "developer" },
+    "summary": "Overall review summary...",
+    "score": { "overall": 8, "breakdown": {} },
+    "sections": { "critical": [], "major": [], "minor": [] },
+    "recommendations": []
+  },
   "content": "# Code Review for PR #123\n\n## Summary\n...",
   "is_followup": false,
   "parent_review_id": null
 }
 ```
+
+**Note**: `content_json` is the primary structured data stored in the database. `content` is a markdown string generated on the fly from `content_json` via `json_to_markdown()` for display and backward compatibility.
 
 ---
 
@@ -2172,6 +2181,7 @@ Clears the in-memory cache.
 | `workflow_cache_ttl_minutes` | integer | 60 | Workflow cache TTL in minutes (stale-while-revalidate) |
 | `workflow_cache_max_runs` | integer | 1000 | Maximum unfiltered workflow runs to cache per repo |
 | `review_sample_limit` | integer | 250 | Maximum PRs to sample for review statistics and lifecycle metrics |
+| `review_section_names` | object | `{"critical": "Critical Issues", "major": "Major Concerns", "minor": "Minor Issues"}` | Custom display names for review sections |
 
 ### Example Configuration
 
@@ -2185,7 +2195,12 @@ Clears the in-memory cache.
   "cache_ttl_seconds": 300,
   "workflow_cache_ttl_minutes": 60,
   "workflow_cache_max_runs": 1000,
-  "review_sample_limit": 250
+  "review_sample_limit": 250,
+  "review_section_names": {
+    "critical": "Critical Issues",
+    "major": "Major Concerns",
+    "minor": "Minor Issues"
+  }
 }
 ```
 
@@ -2450,6 +2465,77 @@ process = subprocess.Popen(
 6. stderr captured for failed reviews
 7. Process removed on cancellation or after viewing error
 
+### Review JSON Schema
+
+Reviews are stored as structured JSON in the `content_json` column. The schema is versioned to support future evolution.
+
+#### Schema Version: 1.0.0
+
+```json
+{
+  "schema_version": "1.0.0",
+  "metadata": {
+    "pr_number": 123,
+    "repo": "owner/repo",
+    "title": "Add new feature",
+    "author": "developer",
+    "url": "https://github.com/owner/repo/pull/123",
+    "reviewed_at": "2024-01-15T10:30:00Z",
+    "head_sha": "abc123def456"
+  },
+  "summary": "Brief overall assessment of the PR.",
+  "score": {
+    "overall": 8,
+    "breakdown": {
+      "correctness": 9,
+      "design": 7,
+      "testing": 8,
+      "documentation": 7
+    }
+  },
+  "sections": {
+    "critical": [
+      {
+        "title": "Race condition in check_and_hold",
+        "location": "src/service.rs:123-145",
+        "problem": "Concurrent access without lock.",
+        "fix": "Wrap in mutex guard."
+      }
+    ],
+    "major": [],
+    "minor": []
+  },
+  "recommendations": [
+    "Add integration tests for the new endpoint.",
+    "Consider extracting the validation logic into a shared helper."
+  ]
+}
+```
+
+#### Key Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `schema_version` | string | Yes | Semver version of the schema (currently `"1.0.0"`) |
+| `metadata` | object | Yes | PR identification and review context |
+| `summary` | string | Yes | Brief overall assessment |
+| `score.overall` | integer | Yes | Overall score (0-10) |
+| `score.breakdown` | object | No | Optional per-dimension scores |
+| `sections` | object | Yes | Categorized issues (critical, major, minor) |
+| `recommendations` | array | No | General improvement suggestions |
+
+#### Validation and Conversion
+
+The `review_schema.py` service module provides:
+
+- **`validate_review_json(data)`**: Validates a review object against the schema, returning errors if any required fields are missing or malformed
+- **`json_to_markdown(data)`**: Converts structured JSON to human-readable markdown for display and file export
+- **`markdown_to_json(text)`**: Best-effort conversion of legacy markdown reviews into the structured JSON format
+- **`get_section_display_names()`**: Returns the configured display names for each section key (customizable via `review_section_names` in config)
+- **`SCHEMA_VERSION`**: Current schema version constant (`"1.0.0"`)
+
+The formal JSON Schema specification is available at `backend/services/review_schema_spec.json` for use by external tools and agents.
+
 ---
 
 ## Future Considerations
@@ -2539,6 +2625,8 @@ gh-pr-explorer/
 ├── database.py                     # Thin re-export layer for backward compat with scripts
 ├── migrate_data.py                 # Data migration script for legacy JSON/markdown files
 ├── seed_workflow_cache.py          # Pre-seeds workflow cache for faster first load
+├── scripts/
+│   └── review_converter.py         # Bidirectional CLI converter: JSON <-> markdown
 ├── pr_explorer.db                  # SQLite database file (auto-created)
 ├── config.json                     # Application configuration
 ├── requirements.txt                # Python dependencies
@@ -2569,7 +2657,9 @@ gh-pr-explorer/
 │   │   ├── lifecycle_service.py    # PR review times fetch (ThreadPoolExecutor)
 │   │   ├── workflow_service.py     # Parallel batch workflow data fetching
 │   │   ├── activity_service.py     # Code activity data from 3 stats APIs
-│   │   └── contributor_service.py  # Contributor time series transform
+│   │   ├── contributor_service.py  # Contributor time series transform
+│   │   ├── review_schema.py        # Review JSON schema, validation, JSON<->markdown conversion
+│   │   └── review_schema_spec.json # Formal JSON Schema file for external tools/agents
 │   │
 │   ├── filters/                    # Request parameter processing
 │   │   └── pr_filter_builder.py    # PRFilterParams dataclass + PRFilterBuilder -> gh CLI args

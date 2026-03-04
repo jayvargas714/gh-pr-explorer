@@ -48,3 +48,11 @@ def get_config() -> Dict[str, Any]:
     if _config is None:
         _config = load_config()
     return _config
+
+
+# Default review section display names (overridable via config.json "review_section_names")
+DEFAULT_REVIEW_SECTION_NAMES = {
+    "critical": "Critical Issues",
+    "major": "Major Concerns",
+    "minor": "Minor Issues",
+}

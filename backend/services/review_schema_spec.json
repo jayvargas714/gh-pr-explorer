@@ -1,0 +1,145 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Code Review JSON Schema",
+  "description": "Structured JSON format for code reviews produced by automated review agents",
+  "type": "object",
+  "required": ["schema_version", "metadata", "summary", "sections", "score"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Schema version for forward compatibility"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["pr_number", "repository"],
+      "properties": {
+        "pr_number": { "type": "integer" },
+        "repository": { "type": "string", "description": "owner/repo format" },
+        "pr_url": { "type": "string", "format": "uri" },
+        "pr_title": { "type": "string" },
+        "author": { "type": "string" },
+        "branch": {
+          "type": "object",
+          "properties": {
+            "head": { "type": "string" },
+            "base": { "type": "string" }
+          }
+        },
+        "review_date": { "type": "string" },
+        "review_type": {
+          "type": "string",
+          "enum": ["initial", "followup"]
+        },
+        "files_changed": { "type": "integer" },
+        "additions": { "type": "integer" },
+        "deletions": { "type": "integer" },
+        "description": { "type": "string" }
+      }
+    },
+    "summary": {
+      "type": "string",
+      "description": "High-level review summary paragraph"
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "display_name", "issues"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["critical", "major", "minor"]
+          },
+          "display_name": { "type": "string" },
+          "issues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["title", "location", "problem"],
+              "properties": {
+                "title": { "type": "string" },
+                "location": {
+                  "type": "object",
+                  "required": ["file"],
+                  "properties": {
+                    "file": { "type": "string" },
+                    "start_line": { "type": ["integer", "null"] },
+                    "end_line": { "type": ["integer", "null"] }
+                  }
+                },
+                "problem": { "type": "string" },
+                "fix": { "type": "string" },
+                "code_snippet": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "highlights": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Positive aspects of the code under review"
+    },
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["priority", "text"],
+        "properties": {
+          "priority": {
+            "type": "string",
+            "enum": ["must_fix", "high", "medium", "low"]
+          },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    "score": {
+      "type": "object",
+      "required": ["overall"],
+      "properties": {
+        "overall": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "breakdown": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["category", "score"],
+            "properties": {
+              "category": { "type": "string" },
+              "score": { "type": "number", "minimum": 0, "maximum": 10 },
+              "comment": { "type": "string" }
+            }
+          }
+        },
+        "summary": { "type": "string" }
+      }
+    },
+    "followup": {
+      "type": "object",
+      "properties": {
+        "previous_review_id": { "type": ["integer", "null"] },
+        "resolution_status": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["issue", "status"],
+            "properties": {
+              "issue": { "type": "string" },
+              "status": {
+                "type": "string",
+                "enum": ["resolved", "partially_addressed", "not_addressed", "wont_fix"]
+              },
+              "notes": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
