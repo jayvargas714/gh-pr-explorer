@@ -596,15 +596,38 @@ export interface MessageResponse {
   message: string
 }
 
+export interface SectionIssuePreview {
+  index: number
+  title: string
+  path: string
+  start_line: number | null
+  end_line: number | null
+  body: string
+}
+
+export interface SectionIssuesResponse {
+  issues: SectionIssuePreview[]
+  section: string
+  section_heading: string
+}
+
 // ============================================================================
 // Verdict Types
 // ============================================================================
 
 export type VerdictEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
 
+export interface VerdictInlineComment {
+  path: string
+  body: string
+  start_line: number | null
+  end_line: number | null
+}
+
 export interface VerdictRequest {
   event: VerdictEvent
   body: string
+  inline_comments?: VerdictInlineComment[]
 }
 
 export interface VerdictResponse {

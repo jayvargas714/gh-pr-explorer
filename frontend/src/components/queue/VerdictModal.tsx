@@ -8,7 +8,12 @@ import { Alert } from '../common/Alert'
 import { Spinner } from '../common/Spinner'
 import { getReviewDetail, postVerdict } from '../../api/reviews'
 import { getReviewSections, type ReviewSection } from '../../utils/reviewSections'
-import type { VerdictEvent, ReviewDetail } from '../../api/types'
+import type {
+  VerdictEvent,
+  VerdictInlineComment,
+  ReviewDetail,
+  ReviewIssueJSON,
+} from '../../api/types'
 
 interface VerdictModalProps {
   reviewId: number
@@ -23,16 +28,30 @@ const EVENT_OPTIONS: { value: VerdictEvent; label: string }[] = [
   { value: 'COMMENT', label: 'Comment' },
 ]
 
+// Section keys that support inline posting (have file locations)
+const INLINE_ELIGIBLE_KEYS = new Set(['critical-issues', 'major-concerns', 'minor-issues'])
+
+/** Editable issue — location is read-only, problem/fix are editable */
+interface EditableIssue {
+  title: string
+  location: { file: string; start_line: number | null; end_line: number | null }
+  problem: string
+  fix: string
+}
+
 const MIN_PANEL_WIDTH = 300
 const MIN_PANEL_HEIGHT = 250
-const MIN_PANEL_TOP = 60 // Keep panel below the sticky header banner
+const MIN_PANEL_TOP = 60
 
 export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModalProps) {
   const [event, setEvent] = useState<VerdictEvent>('COMMENT')
   const [customText, setCustomText] = useState('')
   const [sections, setSections] = useState<ReviewSection[]>([])
+  const [editedContent, setEditedContent] = useState<Record<string, string>>({})
   const [enabledSections, setEnabledSections] = useState<Set<string>>(new Set())
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set())
+  const [inlineSections, setInlineSections] = useState<Set<string>>(new Set())
+  const [structuredIssues, setStructuredIssues] = useState<Record<string, EditableIssue[]>>({})
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -86,7 +105,6 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
   }, [])
 
   const onDragStart = useCallback((e: React.MouseEvent) => {
-    // Only drag from the header area, not child buttons
     if ((e.target as HTMLElement).closest('button')) return
     dragRef.current = {
       startX: e.clientX,
@@ -115,6 +133,31 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
       setReviewDetail(review)
       const parsed = getReviewSections(review.content, review.content_json)
       setSections(parsed)
+
+      const initialEdits: Record<string, string> = {}
+      for (const s of parsed) {
+        initialEdits[s.key] = s.content
+      }
+      setEditedContent(initialEdits)
+
+      // Extract structured issues from content_json for inline-eligible sections
+      if (review.content_json?.sections) {
+        const issueMap: Record<string, EditableIssue[]> = {}
+        for (const jsonSection of review.content_json.sections) {
+          const key = jsonSection.type === 'critical' ? 'critical-issues'
+            : jsonSection.type === 'major' ? 'major-concerns'
+            : 'minor-issues'
+          if (jsonSection.issues.length > 0) {
+            issueMap[key] = jsonSection.issues.map((issue: ReviewIssueJSON) => ({
+              title: issue.title,
+              location: { ...issue.location },
+              problem: issue.problem,
+              fix: issue.fix ?? '',
+            }))
+          }
+        }
+        setStructuredIssues(issueMap)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load review content')
     } finally {
@@ -146,31 +189,91 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
     })
   }
 
+  const toggleInline = (key: string) => {
+    setInlineSections((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+  }
+
+  const updateIssueField = (sectionKey: string, issueIdx: number, field: 'problem' | 'fix', value: string) => {
+    setStructuredIssues((prev) => {
+      const issues = [...(prev[sectionKey] || [])]
+      issues[issueIdx] = { ...issues[issueIdx], [field]: value }
+      return { ...prev, [sectionKey]: issues }
+    })
+  }
+
+  /** Build the body text for the verdict (excludes inline sections). */
   const composeBody = (): string => {
     const parts: string[] = []
     if (customText.trim()) {
       parts.push(customText.trim())
     }
     for (const section of sections) {
-      if (enabledSections.has(section.key)) {
-        parts.push(`**${section.heading}**\n\n${section.content}`)
+      if (enabledSections.has(section.key) && !inlineSections.has(section.key)) {
+        const content = editedContent[section.key] ?? section.content
+        parts.push(`**${section.heading}**\n\n${content}`)
       }
     }
     return parts.join('\n\n---\n\n')
   }
 
+  /** Build inline comment payloads from inline-marked sections. */
+  const buildInlineComments = (): VerdictInlineComment[] => {
+    const comments: VerdictInlineComment[] = []
+    for (const section of sections) {
+      if (!enabledSections.has(section.key) || !inlineSections.has(section.key)) continue
+      const issues = structuredIssues[section.key]
+      if (!issues) continue
+
+      for (const issue of issues) {
+        const bodyParts = [`**${issue.title}**`]
+        if (issue.problem) bodyParts.push(`\n**Problem:** ${issue.problem}`)
+        if (issue.fix) bodyParts.push(`\n**Fix:** ${issue.fix}`)
+
+        comments.push({
+          path: issue.location.file,
+          body: bodyParts.join('\n'),
+          start_line: issue.location.start_line,
+          end_line: issue.location.end_line,
+        })
+      }
+    }
+    return comments
+  }
+
   const handleSubmit = async () => {
     const body = composeBody()
-    if (!body) {
-      setError('Please add custom text or enable at least one review section')
+    const inlineComments = buildInlineComments()
+
+    if (!body && inlineComments.length === 0) {
+      setError('Please add custom text, enable a review section, or mark sections for inline posting')
       return
+    }
+
+    // Validate inline comments have valid locations
+    for (const ic of inlineComments) {
+      if (!ic.path || !ic.path.trim()) {
+        setError('Cannot post inline: one or more issues is missing a file path')
+        return
+      }
     }
 
     try {
       setSubmitting(true)
       setError(null)
       const [owner, repoName] = repo.split('/')
-      const result = await postVerdict(owner, repoName, prNumber, { event, body })
+      const result = await postVerdict(owner, repoName, prNumber, {
+        event,
+        body: body || '',
+        inline_comments: inlineComments.length > 0 ? inlineComments : undefined,
+      })
       setSuccess(result.message)
       setTimeout(onClose, 1500)
     } catch (err) {
@@ -188,7 +291,76 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
     }
   }
 
-  const hasContent = customText.trim() || enabledSections.size > 0
+  const hasBodyContent = customText.trim() || [...enabledSections].some((k) => !inlineSections.has(k))
+  const hasInlineContent = [...enabledSections].some((k) => inlineSections.has(k) && structuredIssues[k]?.length)
+  const hasContent = hasBodyContent || hasInlineContent
+
+  const formatLocation = (loc: EditableIssue['location']) => {
+    let s = loc.file
+    if (loc.start_line != null && loc.end_line != null && loc.start_line !== loc.end_line) {
+      s += `:${loc.start_line}-${loc.end_line}`
+    } else if (loc.start_line != null) {
+      s += `:${loc.start_line}`
+    }
+    return s
+  }
+
+  const isInlineEligible = (key: string) => INLINE_ELIGIBLE_KEYS.has(key) && !!structuredIssues[key]?.length
+
+  const renderSectionContent = (section: ReviewSection) => {
+    const isInline = inlineSections.has(section.key)
+    const issues = structuredIssues[section.key]
+
+    // If inline is toggled and we have structured issues, show per-issue editor
+    if (isInline && issues?.length) {
+      return (
+        <div className="mx-verdict-modal__issue-list">
+          {issues.map((issue, idx) => (
+            <div key={idx} className="mx-verdict-modal__issue-item">
+              <div className="mx-verdict-modal__issue-header">
+                <span className="mx-verdict-modal__issue-number">{idx + 1}.</span>
+                <span className="mx-verdict-modal__issue-title">{issue.title}</span>
+              </div>
+              <code className="mx-verdict-modal__issue-location">
+                {formatLocation(issue.location)}
+              </code>
+              <div className="mx-verdict-modal__issue-fields">
+                <label className="mx-verdict-modal__issue-field-label">Problem</label>
+                <textarea
+                  className="mx-verdict-modal__issue-field"
+                  value={issue.problem}
+                  onChange={(e) => updateIssueField(section.key, idx, 'problem', e.target.value)}
+                  disabled={submitting}
+                  rows={2}
+                />
+                <label className="mx-verdict-modal__issue-field-label">Fix</label>
+                <textarea
+                  className="mx-verdict-modal__issue-field"
+                  value={issue.fix}
+                  onChange={(e) => updateIssueField(section.key, idx, 'fix', e.target.value)}
+                  disabled={submitting}
+                  rows={2}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )
+    }
+
+    // Default: editable markdown textarea
+    return (
+      <textarea
+        className="mx-verdict-modal__section-preview mx-verdict-modal__section-preview--editable"
+        value={editedContent[section.key] ?? section.content}
+        onChange={(e) => setEditedContent((prev) => ({
+          ...prev,
+          [section.key]: e.target.value,
+        }))}
+        disabled={submitting}
+      />
+    )
+  }
 
   return (
     <>
@@ -265,18 +437,31 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
                         />
                         {section.heading}
                       </label>
-                      <button
-                        className="mx-verdict-modal__expand-btn"
-                        onClick={() => toggleExpanded(section.key)}
-                      >
-                        {expandedSections.has(section.key) ? 'Hide' : 'Preview'}
-                      </button>
+                      <div className="mx-verdict-modal__section-controls">
+                        {isInlineEligible(section.key) && enabledSections.has(section.key) && (
+                          <label
+                            className={`mx-verdict-modal__inline-toggle${
+                              inlineSections.has(section.key) ? ' mx-verdict-modal__inline-toggle--active' : ''
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={inlineSections.has(section.key)}
+                              onChange={() => toggleInline(section.key)}
+                              disabled={submitting}
+                            />
+                            Inline
+                          </label>
+                        )}
+                        <button
+                          className="mx-verdict-modal__expand-btn"
+                          onClick={() => toggleExpanded(section.key)}
+                        >
+                          {expandedSections.has(section.key) ? 'Hide' : 'Edit'}
+                        </button>
+                      </div>
                     </div>
-                    {expandedSections.has(section.key) && (
-                      <pre className="mx-verdict-modal__section-preview">
-                        {section.content}
-                      </pre>
-                    )}
+                    {expandedSections.has(section.key) && renderSectionContent(section)}
                   </div>
                 ))}
               </div>

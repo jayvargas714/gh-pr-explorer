@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useReviewStore } from '../../stores/useReviewStore'
-import { startReview, cancelReview, postInlineComments } from '../../api/reviews'
+import { startReview, cancelReview } from '../../api/reviews'
+import { InlineIssuePickerModal } from './InlineIssuePickerModal'
 import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
 import type { MergeQueueItem } from '../../api/types'
@@ -12,7 +13,7 @@ interface QueueReviewButtonProps {
 
 export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
   const [starting, setStarting] = useState(false)
-  const [postingSection, setPostingSection] = useState<string | null>(null)
+  const [pickerSection, setPickerSection] = useState<string | null>(null)
   const { activeReviews, updateReview, removeReview, showReviewError } = useReviewStore()
 
   const [owner, repo] = item.repo.split('/')
@@ -85,17 +86,9 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
     )
   }
 
-  const handlePostSection = async (section: string) => {
-    if (postingSection || !item.reviewId) return
-    try {
-      setPostingSection(section)
-      await postInlineComments(item.reviewId, section)
-      onRefresh()
-    } catch (err) {
-      console.error(`Failed to post ${section} comments:`, err)
-    } finally {
-      setPostingSection(null)
-    }
+  const handleSectionPosted = () => {
+    setPickerSection(null)
+    onRefresh()
   }
 
   // Review in progress
@@ -116,8 +109,6 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
     )
   }
 
-  const isPosting = postingSection !== null
-
   return (
     <>
       <Button
@@ -133,11 +124,10 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => handlePostSection('critical')}
-          disabled={isPosting}
-          data-tooltip="Post critical issues as inline comments on GitHub"
+          onClick={() => setPickerSection('critical')}
+          data-tooltip="Select and post critical issues as inline comments"
         >
-          {postingSection === 'critical' ? <Spinner size="sm" /> : '🔴 Critical'}
+          🔴 Critical
         </Button>
       )}
 
@@ -145,11 +135,10 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => handlePostSection('major')}
-          disabled={isPosting}
-          data-tooltip="Post major concerns as inline comments on GitHub"
+          onClick={() => setPickerSection('major')}
+          data-tooltip="Select and post major concerns as inline comments"
         >
-          {postingSection === 'major' ? <Spinner size="sm" /> : '🟡 Major'}
+          🟡 Major
         </Button>
       )}
 
@@ -157,12 +146,20 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => handlePostSection('minor')}
-          disabled={isPosting}
-          data-tooltip="Post minor issues as inline comments on GitHub"
+          onClick={() => setPickerSection('minor')}
+          data-tooltip="Select and post minor issues as inline comments"
         >
-          {postingSection === 'minor' ? <Spinner size="sm" /> : '🟢 Minor'}
+          🟢 Minor
         </Button>
+      )}
+
+      {pickerSection && item.reviewId && (
+        <InlineIssuePickerModal
+          reviewId={item.reviewId}
+          section={pickerSection}
+          onClose={() => setPickerSection(null)}
+          onPosted={handleSectionPosted}
+        />
       )}
     </>
   )

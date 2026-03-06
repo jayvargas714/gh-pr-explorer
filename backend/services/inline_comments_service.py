@@ -197,13 +197,63 @@ def _post_file_comment(owner, repo_name, pr_number, commit_sha, issue):
     return result
 
 
-def post_inline_comments(reviews_db, review_id, section="critical"):
+def preview_section_issues(reviews_db, review_id, section="critical"):
+    """Return parsed issues for a review section without posting them.
+
+    Args:
+        reviews_db: ReviewsDB instance.
+        review_id: The review ID.
+        section: One of 'critical', 'major', or 'minor'.
+
+    Returns:
+        tuple: (response_dict, status_code)
+    """
+    if section not in SECTION_HEADINGS:
+        return {"error": f"Unknown section: {section}"}, 400
+
+    section_heading = SECTION_HEADINGS[section]
+
+    review = reviews_db.get_review(review_id)
+    if not review:
+        return {"error": "Review not found"}, 404
+
+    issues = []
+    content_json_str = review.get("content_json")
+    if content_json_str:
+        try:
+            content_json = json.loads(content_json_str)
+            issues = parse_section_issues_from_json(content_json, section)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    if not issues:
+        return {"error": f"No {section_heading.lower()} found in review content", "issues": []}, 400
+
+    return {
+        "issues": [
+            {
+                "index": idx,
+                "title": issue.get("title", ""),
+                "path": issue.get("path", ""),
+                "start_line": issue.get("start_line"),
+                "end_line": issue.get("end_line"),
+                "body": issue.get("body", ""),
+            }
+            for idx, issue in enumerate(issues)
+        ],
+        "section": section,
+        "section_heading": section_heading,
+    }, 200
+
+
+def post_inline_comments(reviews_db, review_id, section="critical", selected_indices=None):
     """Post issues from a review section as inline PR comments.
 
     Args:
         reviews_db: ReviewsDB instance.
         review_id: The review ID.
         section: One of 'critical', 'major', or 'minor'.
+        selected_indices: Optional list of issue indices to post. If None, posts all.
 
     Line-level issues are batched into a review. File-level issues (no line numbers)
     are posted individually via the single comment endpoint.
@@ -225,17 +275,26 @@ def post_inline_comments(reviews_db, review_id, section="critical"):
         return {"error": f"{section_heading} have already been posted for this review"}, 409
 
     # JSON-first: parse from content_json, fall back to markdown regex
-    issues = []
+    all_issues = []
     content_json_str = review.get("content_json")
     if content_json_str:
         try:
             content_json = json.loads(content_json_str)
-            issues = parse_section_issues_from_json(content_json, section)
+            all_issues = parse_section_issues_from_json(content_json, section)
         except (json.JSONDecodeError, TypeError):
             pass
 
-    if not issues:
+    if not all_issues:
         return {"error": f"No {section_heading.lower()} found in review content", "issues_found": 0}, 400
+
+    # Filter to selected indices if provided
+    if selected_indices is not None:
+        valid_indices = [i for i in selected_indices if 0 <= i < len(all_issues)]
+        if not valid_indices:
+            return {"error": "No valid issue indices selected", "issues_found": len(all_issues)}, 400
+        issues = [all_issues[i] for i in valid_indices]
+    else:
+        issues = all_issues
 
     repo = review.get("repo")
     pr_number = review.get("pr_number")
@@ -348,7 +407,7 @@ def post_inline_comments(reviews_db, review_id, section="critical"):
 
     reviews_db.update_section_posted(
         review_id, section, True,
-        posted_count=posted_count, found_count=len(issues)
+        posted_count=posted_count, found_count=len(all_issues)
     )
 
     return {
