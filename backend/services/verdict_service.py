@@ -132,23 +132,30 @@ def post_verdict(owner, repo, pr_number, event, body, inline_comments=None):
             comments.append(comment)
         review_body["comments"] = comments
 
+    payload_json = json.dumps(review_body)
+    logger.info(f"Posting verdict on {owner}/{repo}#{pr_number}: event={event}, "
+                f"body_len={len(review_body.get('body', ''))}, "
+                f"comments={len(review_body.get('comments', []))}")
+    logger.debug(f"Verdict payload: {payload_json[:500]}")
+
     try:
-        subprocess.run(
+        result = subprocess.run(
             [
                 "gh", "api",
                 f"repos/{owner}/{repo}/pulls/{pr_number}/reviews",
                 "--method", "POST",
                 "--input", "-",
             ],
-            input=json.dumps(review_body),
+            input=payload_json,
             capture_output=True,
             text=True,
             check=True,
         )
         logger.info(f"Posted {event} verdict on {owner}/{repo}#{pr_number} with {len(validated_line_comments)} line comments")
     except subprocess.CalledProcessError as e:
-        logger.error(f"Failed to post verdict on {owner}/{repo}#{pr_number}: {e.stderr[:300]}")
-        return {"error": f"Failed to post review to GitHub: {e.stderr[:200]}"}, 500
+        logger.error(f"Failed to post verdict on {owner}/{repo}#{pr_number}: {e.stderr[:500]}")
+        logger.error(f"Verdict payload that failed: {payload_json[:1000]}")
+        return {"error": f"Failed to post review to GitHub: {e.stderr[:300]}"}, 500
 
     # Post file-level comments individually (no line numbers)
     file_errors = []
