@@ -9,7 +9,7 @@ from backend.extensions import logger, active_reviews, reviews_lock
 from backend.database import get_reviews_db
 from backend.services.github_service import fetch_pr_head_sha
 from backend.services.review_service import save_review_to_db, check_review_status, start_review_process
-from backend.services.inline_comments_service import post_inline_comments
+from backend.services.inline_comments_service import post_inline_comments, preview_section_issues
 from backend.services.verdict_service import post_verdict
 from backend.routes import error_response
 
@@ -197,6 +197,18 @@ def get_review_status_endpoint(owner, repo, pr_number):
     })
 
 
+@review_bp.route("/api/reviews/<int:review_id>/section-issues", methods=["GET"])
+def preview_section_issues_endpoint(review_id):
+    """Return parsed issues for a review section for preview/selection."""
+    try:
+        reviews_db = get_reviews_db()
+        section = request.args.get("section", "critical")
+        result, status_code = preview_section_issues(reviews_db, review_id, section=section)
+        return jsonify(result), status_code
+    except Exception as e:
+        return error_response("Internal server error", 500, f"Error fetching section issues for review {review_id}: {e}")
+
+
 @review_bp.route("/api/reviews/<int:review_id>/post-inline-comments", methods=["POST"])
 def post_inline_comments_endpoint(review_id):
     """Post issues from a review section as inline PR comments."""
@@ -204,7 +216,10 @@ def post_inline_comments_endpoint(review_id):
         reviews_db = get_reviews_db()
         data = request.get_json(silent=True) or {}
         section = data.get("section", "critical")
-        result, status_code = post_inline_comments(reviews_db, review_id, section=section)
+        selected_indices = data.get("selected_indices")
+        result, status_code = post_inline_comments(
+            reviews_db, review_id, section=section, selected_indices=selected_indices
+        )
         return jsonify(result), status_code
     except Exception as e:
         return error_response("Internal server error", 500, f"Error posting inline comments for review {review_id}: {e}")
@@ -250,11 +265,12 @@ def post_verdict_endpoint(owner, repo, pr_number):
 
         event = data.get("event")
         body = data.get("body")
+        inline_comments = data.get("inline_comments")
 
         if not event:
             return jsonify({"error": "Missing required field: event"}), 400
 
-        result, status_code = post_verdict(owner, repo, pr_number, event, body)
+        result, status_code = post_verdict(owner, repo, pr_number, event, body, inline_comments=inline_comments)
         return jsonify(result), status_code
     except Exception as e:
         return error_response("Internal server error", 500, f"Error posting verdict for PR #{pr_number}: {e}")

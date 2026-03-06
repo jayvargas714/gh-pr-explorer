@@ -5,6 +5,7 @@ import {
   ReviewDetail,
   ReviewStatsResponse,
   MessageResponse,
+  SectionIssuesResponse,
   VerdictRequest,
   VerdictResponse,
 } from './types'
@@ -51,10 +52,24 @@ export async function getReviewStatus(owner: string, repo: string, prNumber: num
 }
 
 /**
- * Post inline comments from review
+ * Fetch parsed issues for a review section (for preview/selection)
  */
-export async function postInlineComments(reviewId: number, section: string = 'critical'): Promise<MessageResponse> {
-  return api.post<MessageResponse>(`/reviews/${reviewId}/post-inline-comments`, { section })
+export async function fetchSectionIssues(reviewId: number, section: string = 'critical'): Promise<SectionIssuesResponse> {
+  return api.get<SectionIssuesResponse>(`/reviews/${reviewId}/section-issues?section=${encodeURIComponent(section)}`)
+}
+
+/**
+ * Post inline comments from review, optionally filtering by selected issue indices
+ */
+export async function postInlineComments(
+  reviewId: number,
+  section: string = 'critical',
+  selectedIndices?: number[]
+): Promise<MessageResponse> {
+  return api.post<MessageResponse>(`/reviews/${reviewId}/post-inline-comments`, {
+    section,
+    selected_indices: selectedIndices,
+  })
 }
 
 /**
