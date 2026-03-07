@@ -7,6 +7,7 @@ export function ViewTabs() {
     { id: 'prs' as const, label: 'Pull Requests', icon: '🔀' },
     { id: 'analytics' as const, label: 'Analytics', icon: '📊' },
     { id: 'workflows' as const, label: 'CI/Workflows', icon: '⚙️' },
+    { id: 'engine' as const, label: 'Review Workflows', icon: '🔬' },
   ]
 
   return (

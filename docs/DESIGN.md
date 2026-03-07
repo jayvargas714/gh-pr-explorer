@@ -432,13 +432,14 @@ The frontend uses React 18 with TypeScript, built via Vite. State management use
 
 #### Main Tab Architecture
 
-The application uses a 3-tab layout as the primary navigation:
+The application uses a 4-tab layout as the primary navigation:
 
 | Tab | View Key | Description |
 |-----|----------|-------------|
 | Pull Requests | `prs` | PR list with filters, pagination, and action buttons |
 | Analytics | `analytics` | 5 sub-tabs for developer and repository analytics |
 | CI/Workflows | `workflows` | Workflow run history with filters and aggregate stats |
+| Review Workflows | `engine` | Composable review pipeline runs with human gates |
 
 #### Analytics Sub-tabs
 
@@ -449,6 +450,92 @@ The application uses a 3-tab layout as the primary navigation:
 | Activity | `activity` | Code activity charts: commits, code changes, top 5 contributors |
 | Reviews | `responsiveness` | Per-reviewer response times, leaderboard, bottleneck detection |
 | Contributors | `contributors` | Interactive per-contributor time series charts (commits, additions, deletions) |
+
+### Workflow Engine (Review Workflows Tab)
+
+The Review Workflows tab provides a UI for composable code review pipelines. Built on a generic workflow engine with typed step executors, fan-out/fan-in parallelism, and human gates.
+
+#### Backend Packages
+
+**Agents** (`backend/agents/`):
+
+| Module | Description |
+|--------|-------------|
+| `base.py` | `AgentBackend` ABC, `AgentHandle`, `AgentStatus`, `ReviewArtifact` |
+| `claude_cli.py` | `ClaudeCLIAgent` — wraps subprocess calls to `claude` CLI |
+| `openai_api.py` | `OpenAIAgent` — OpenAI chat completions via `httpx` |
+| `registry.py` | `get_agent(name)`, `list_agents()`, agent type registry |
+
+**Workflows** (`backend/workflows/`):
+
+| Module | Description |
+|--------|-------------|
+| `step_types.py` | `StepType` enum, `@register_step` decorator, `STEP_REGISTRY` |
+| `executor.py` | `StepExecutor` ABC, `StepResult` dataclass |
+| `runtime.py` | `WorkflowRuntime` — topo-sort execution, fan-out, gate pausing |
+| `seed.py` | Built-in templates (Quick/Team/Self/Deep Review) + agents |
+
+**Step Executors** (`backend/workflows/executors/`):
+
+| Module | Step Type | Description |
+|--------|-----------|-------------|
+| `pr_select.py` | `pr_select` | Fetches PRs via `gh` CLI |
+| `prioritize.py` | `prioritize` | P0-P3 scoring, code owner boost, skip list |
+| `prompt_generate.py` | `prompt_generate` | Prompt building with dedup + Jira context + chunked diff |
+| `agent_review.py` | `agent_review` | Dispatches prompt to `AgentBackend`, polls, collects artifact |
+| `synthesis.py` | `synthesis` | Diffs Review A vs B, classifies AGREED/A-ONLY/B-ONLY |
+| `freshness_check.py` | `freshness_check` | Compares HEAD SHA at review time vs current |
+| `human_gate.py` | `human_gate` | Pauses workflow, presents gate payload to human |
+| `publish.py` | `publish` | Posts to GitHub (`gh pr review/comment`), comment sanitization |
+
+**Database** (`backend/database/workflows.py`): CRUD for templates, instances, steps, artifacts, agents.
+
+**Routes** (`backend/routes/workflow_engine_routes.py`): Template CRUD, instance lifecycle, gate actions, agent list.
+
+#### Database Tables
+
+```sql
+-- Workflow templates (Quick Review, Team Review, Self-Review, Deep Review)
+CREATE TABLE workflow_templates (id, name UNIQUE, description, template_json, is_builtin, created_at, updated_at);
+
+-- Workflow run instances
+CREATE TABLE workflow_instances (id, template_id FK, repo, status, config_json, created_at, updated_at);
+
+-- Per-step state within an instance
+CREATE TABLE instance_steps (id, instance_id FK, step_id, step_type, step_config_json, status, agent_id, inputs_json, outputs_json, started_at, completed_at, error_message);
+
+-- Artifacts produced by steps (reviews, synthesis, comments)
+CREATE TABLE instance_artifacts (id, instance_id FK, step_id, pr_number, artifact_type, file_path, content_json, created_at);
+
+-- Registered AI agents
+CREATE TABLE agents (id, name UNIQUE, type, model, config_json, is_active, created_at, updated_at);
+
+-- Code owner registry for priority scoring
+CREATE TABLE code_owner_registry (id, github_handle UNIQUE, display_name, priority_boost, is_reviewer, created_at, updated_at);
+
+-- PR skip list
+CREATE TABLE skip_list (id, pr_number, repo, reason, skipped_at, instance_id, UNIQUE(pr_number, repo));
+```
+
+#### Frontend Components
+
+| Component | File | Description |
+|-----------|------|-------------|
+| `WorkflowEngineView` | `components/engine/WorkflowEngineView.tsx` | Container routing between list and detail views |
+| `WorkflowRunList` | `components/engine/WorkflowRunList.tsx` | Table of instances with status badges, template selector, start run |
+| `WorkflowRunDetail` | `components/engine/WorkflowRunDetail.tsx` | Step pipeline visualization with progress bar, status colors, artifact list |
+| `GatePanel` | `components/engine/GatePanel.tsx` | Human gate modal: synthesis summary, freshness badges, approve/reject/edit |
+
+State management via `useWorkflowEngineStore` (Zustand). API client at `api/workflow-engine.ts`.
+
+#### Built-in Templates
+
+| Template | Steps | Description |
+|----------|-------|-------------|
+| Quick Review | PR Select → Prompt Gen → Agent Review | Single-agent, single-pass review |
+| Team Review | PR Select → Prioritize → Prompt Gen → Agent A + Agent B → Synthesis → Freshness → Human Gate → Publish | Dual-agent adversarial review |
+| Self-Review | PR Select → Expert Select → Prompt Gen → Agent A + Agent B → Synthesis → Holistic → Human Gate | Multi-expert deep-dive (local only) |
+| Deep Review | PR Select → Expert Select → Prompt Gen → Agent A + Agent B → Synthesis → Holistic → Human Gate → Publish | Multi-expert deep-dive with publication |
 
 ### Styling
 
@@ -2155,6 +2242,36 @@ Checks if a PR has been reviewed.
 
 ---
 
+### Workflow Engine
+
+**GET** `/api/templates` — List all workflow templates.
+
+**GET** `/api/templates/<id>` — Get a single template with parsed `template` object.
+
+**POST** `/api/templates` — Create a template. Body: `{name, description?, template}`.
+
+**PUT** `/api/templates/<id>` — Update a non-builtin template.
+
+**POST** `/api/templates/<id>/clone` — Clone a template. Body: `{name?}`.
+
+**POST** `/api/templates/<id>/validate` — Validate template structure. Returns `{valid, errors[]}`.
+
+**DELETE** `/api/templates/<id>` — Delete a non-builtin template.
+
+**POST** `/api/workflows/run` — Start a workflow run. Body: `{template_id, repo, config?}`. Returns `{id, status}`.
+
+**GET** `/api/workflows/instances` — List instances. Query: `?repo=owner/repo`.
+
+**GET** `/api/workflows/instances/<id>` — Get instance with steps and artifacts.
+
+**POST** `/api/workflows/instances/<id>/gate` — Gate action. Body: `{action: "approve"|"reject", ...data}`.
+
+**DELETE** `/api/workflows/instances/<id>` — Cancel a running instance.
+
+**GET** `/api/agents` — List registered AI agents.
+
+---
+
 ### Cache Management
 
 **POST** `/api/clear-cache`
@@ -2663,7 +2780,8 @@ gh-pr-explorer/
 │   │   ├── merge_queue.py          # MergeQueueDB
 │   │   ├── settings.py             # SettingsDB
 │   │   ├── dev_stats.py            # DeveloperStatsDB
-│   │   └── cache_stores.py         # LifecycleCacheDB, WorkflowCacheDB, ContributorTSCacheDB, CodeActivityCacheDB
+│   │   ├── cache_stores.py         # LifecycleCacheDB, WorkflowCacheDB, ContributorTSCacheDB, CodeActivityCacheDB
+│   │   └── workflows.py            # WorkflowDB — CRUD for templates, instances, steps, artifacts, agents
 │   │
 │   ├── services/                   # Business logic layer
 │   │   ├── github_service.py       # gh CLI wrapper: run_command, parse_json, fetch_stats_api
@@ -2690,7 +2808,29 @@ gh-pr-explorer/
 │   │   ├── lifecycle_visualizer.py # Merge time distribution, stale PR detection, pr_table
 │   │   └── responsiveness_visualizer.py  # Reviewer leaderboard, bottleneck detection
 │   │
-│   └── routes/                     # Flask Blueprints (11 blueprints)
+│   ├── agents/                     # Pluggable AI agent backends
+│   │   ├── base.py                 # AgentBackend ABC, AgentHandle, AgentStatus, ReviewArtifact
+│   │   ├── claude_cli.py           # ClaudeCLIAgent — wraps subprocess calls to `claude`
+│   │   ├── openai_api.py           # OpenAIAgent — OpenAI chat completions via httpx
+│   │   └── registry.py             # get_agent(name), list_agents(), agent type registry
+│   │
+│   ├── workflows/                  # Generic workflow engine
+│   │   ├── step_types.py           # StepType enum, @register_step, STEP_REGISTRY
+│   │   ├── executor.py             # StepExecutor ABC, StepResult dataclass
+│   │   ├── runtime.py              # WorkflowRuntime — topo-sort, fan-out, gate pausing
+│   │   ├── seed.py                 # Built-in templates + agents seeded on startup
+│   │   └── executors/              # Step executor implementations (8 executors)
+│   │       ├── __init__.py
+│   │       ├── pr_select.py
+│   │       ├── prioritize.py
+│   │       ├── prompt_generate.py
+│   │       ├── agent_review.py
+│   │       ├── synthesis.py
+│   │       ├── freshness_check.py
+│   │       ├── human_gate.py
+│   │       └── publish.py
+│   │
+│   └── routes/                     # Flask Blueprints (12 blueprints)
 │       ├── __init__.py             # register_blueprints(app)
 │       ├── static_routes.py        # / and /assets/<path>
 │       ├── auth_routes.py          # /api/user, /api/orgs
@@ -2698,6 +2838,7 @@ gh-pr-explorer/
 │       ├── pr_routes.py            # /api/repos/.../prs, prs/divergence
 │       ├── analytics_routes.py     # /api/repos/.../stats, lifecycle, responsiveness, activity, contributors
 │       ├── workflow_routes.py      # /api/repos/.../workflow-runs
+│       ├── workflow_engine_routes.py  # /api/templates, /api/workflows/*, /api/agents
 │       ├── queue_routes.py         # /api/merge-queue CRUD + reorder + notes
 │       ├── review_routes.py        # /api/reviews CRUD + status + inline-comments + check-new-commits
 │       ├── history_routes.py       # /api/review-history list, detail, PR reviews, stats, check
@@ -2706,10 +2847,10 @@ gh-pr-explorer/
 │
 ├── frontend/                       # React + TypeScript frontend
 │   ├── src/
-│   │   ├── api/                    # Type-safe API modules
-│   │   ├── components/             # React components by feature
-│   │   ├── stores/                 # Zustand state management
-│   │   ├── styles/                 # CSS styles
+│   │   ├── api/                    # Type-safe API modules (incl. workflow-engine.ts)
+│   │   ├── components/             # React components by feature (incl. engine/)
+│   │   ├── stores/                 # Zustand state management (incl. useWorkflowEngineStore)
+│   │   ├── styles/                 # CSS styles (incl. workflow-engine.css)
 │   │   ├── types/                  # TypeScript types
 │   │   ├── App.tsx                 # Root component
 │   │   └── main.tsx                # Entry point

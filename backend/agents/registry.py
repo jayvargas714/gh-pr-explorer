@@ -5,12 +5,14 @@ from typing import Optional
 
 from backend.agents.base import AgentBackend
 from backend.agents.claude_cli import ClaudeCLIAgent
+from backend.agents.cursor_cli import CursorCLIAgent
 from backend.agents.openai_api import OpenAIAgent
 
 logger = logging.getLogger(__name__)
 
 _AGENT_TYPES = {
     "claude_cli": ClaudeCLIAgent,
+    "cursor_cli": CursorCLIAgent,
     "openai_api": OpenAIAgent,
 }
 

@@ -110,6 +110,9 @@ BUILTIN_TEMPLATES = [
 BUILTIN_AGENTS = [
     ("claude", "claude_cli", "opus", {}),
     ("openai", "openai_api", "gpt-4o", {"api_key_env": "OPENAI_API_KEY"}),
+    ("cursor-opus", "cursor_cli", "opus-4.6-thinking", {"sandbox": "disabled"}),
+    ("cursor-codex", "cursor_cli", "gpt-5.3-codex-high", {"sandbox": "disabled"}),
+    ("cursor-codex-xh", "cursor_cli", "gpt-5.4-xhigh", {"sandbox": "disabled"}),
 ]
 
 

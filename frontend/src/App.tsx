@@ -8,6 +8,7 @@ import { FilterPanel } from './components/filters/FilterPanel'
 import { PRList } from './components/prs/PRList'
 import { AnalyticsView } from './components/analytics/AnalyticsView'
 import { WorkflowsView } from './components/workflows/WorkflowsView'
+import { WorkflowEngineView } from './components/engine/WorkflowEngineView'
 import { QueuePanel } from './components/queue/QueuePanel'
 import { ReviewErrorModal } from './components/reviews/ReviewErrorModal'
 import { ReviewViewer } from './components/reviews/ReviewViewer'
@@ -42,6 +43,8 @@ function App() {
         return <AnalyticsView />
       case 'workflows':
         return <WorkflowsView />
+      case 'engine':
+        return <WorkflowEngineView />
       default:
         return null
     }

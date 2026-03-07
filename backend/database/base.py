@@ -352,6 +352,32 @@ class Database:
                 )
             """)
 
+            # --- Phase 2: Code owner registry + skip list ---
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS code_owner_registry (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    github_handle TEXT NOT NULL UNIQUE,
+                    display_name TEXT,
+                    priority_boost INTEGER DEFAULT 0,
+                    is_reviewer BOOLEAN DEFAULT TRUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS skip_list (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pr_number INTEGER NOT NULL,
+                    repo TEXT NOT NULL,
+                    reason TEXT,
+                    skipped_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    instance_id INTEGER,
+                    UNIQUE(pr_number, repo)
+                )
+            """)
+
             logger.info(f"Database initialized at {self.db_path}")
 
     def is_migration_done(self, name: str) -> bool:

@@ -19,6 +19,21 @@
       "type": "openai_api",
       "model": "gpt-4o",
       "api_key_env": "OPENAI_API_KEY"
+    },
+    "cursor-opus": {
+      "type": "cursor_cli",
+      "model": "opus-4.6-thinking",
+      "sandbox": "disabled"
+    },
+    "cursor-codex": {
+      "type": "cursor_cli",
+      "model": "gpt-5.3-codex-high",
+      "sandbox": "disabled"
+    },
+    "cursor-codex-xh": {
+      "type": "cursor_cli",
+      "model": "gpt-5.4-xhigh",
+      "sandbox": "disabled"
     }
   }
 }
