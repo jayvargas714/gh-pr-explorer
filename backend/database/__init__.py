@@ -14,6 +14,7 @@ from backend.database.cache_stores import (
     ContributorTimeSeriesCacheDB,
     CodeActivityCacheDB,
 )
+from backend.database.workflows import WorkflowDB
 
 # Thread-safe singleton instances
 _db_lock = threading.Lock()
@@ -27,6 +28,7 @@ _lifecycle_cache_db: Optional[LifecycleCacheDB] = None
 _workflow_cache_db: Optional[WorkflowCacheDB] = None
 _contributor_ts_cache_db: Optional[ContributorTimeSeriesCacheDB] = None
 _code_activity_cache_db: Optional[CodeActivityCacheDB] = None
+_workflow_db: Optional[WorkflowDB] = None
 
 
 def get_database() -> Database:
@@ -118,11 +120,22 @@ def get_code_activity_cache_db() -> CodeActivityCacheDB:
     return _code_activity_cache_db
 
 
+def get_workflow_db() -> WorkflowDB:
+    global _workflow_db
+    if _workflow_db is None:
+        db = get_database()
+        with _db_lock:
+            if _workflow_db is None:
+                _workflow_db = WorkflowDB(db)
+    return _workflow_db
+
+
 __all__ = [
     "Database", "ReviewsDB", "MergeQueueDB", "SettingsDB",
     "DeveloperStatsDB", "LifecycleCacheDB", "WorkflowCacheDB",
-    "ContributorTimeSeriesCacheDB", "CodeActivityCacheDB",
+    "ContributorTimeSeriesCacheDB", "CodeActivityCacheDB", "WorkflowDB",
     "get_database", "get_reviews_db", "get_queue_db", "get_settings_db",
     "get_dev_stats_db", "get_lifecycle_cache_db", "get_workflow_cache_db",
     "get_contributor_ts_cache_db", "get_code_activity_cache_db",
+    "get_workflow_db",
 ]

@@ -1,0 +1,227 @@
+"""Claude CLI agent backend — wraps the existing subprocess-based review flow."""
+
+import json
+import logging
+import subprocess
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+from backend.agents.base import AgentBackend, AgentHandle, AgentStatus, ReviewArtifact
+from backend.config import get_reviews_dir
+from backend.services.review_schema import (
+    markdown_to_json, validate_review_json, json_to_markdown, SCHEMA_VERSION,
+)
+
+logger = logging.getLogger(__name__)
+
+_SCHEMA_INSTRUCTIONS = (
+    "The JSON must have these top-level keys: "
+    '"schema_version" (set to "1.0.0"), '
+    '"metadata" (object with pr_number, repository, pr_url, pr_title, author, branch {head, base}, '
+    "review_date, review_type, files_changed, additions, deletions), "
+    '"summary" (string), '
+    '"sections" (array of objects with type=critical|major|minor, display_name, and issues array), '
+    '"highlights" (array of strings), '
+    '"recommendations" (array of {priority: must_fix|high|medium|low, text}), '
+    '"score" (object with overall 0-10, optional breakdown array of {category, score, comment}, optional summary). '
+    "Each issue MUST have: title (string), location (object with file, start_line, end_line), "
+    "problem (string), and optionally fix (string) and code_snippet (string). "
+)
+
+_ALLOWED_TOOLS = (
+    "Bash(git status*),Bash(git log*),Bash(git show*),"
+    "Bash(git diff*),Bash(git blame*),Bash(git branch*),"
+    "Bash(gh pr view*),Bash(gh pr diff*),Bash(gh pr checks*),"
+    "Bash(gh api*),Read,Glob,Grep,Write,Task"
+)
+
+
+class _ProcessState:
+    """Tracks a running Claude CLI subprocess."""
+    def __init__(self, process: subprocess.Popen, review_file: str, json_file: str):
+        self.process = process
+        self.review_file = review_file
+        self.json_file = json_file
+        self.stdout: Optional[str] = None
+        self.stderr: Optional[str] = None
+        self.exit_code: Optional[int] = None
+
+
+class ClaudeCLIAgent(AgentBackend):
+    """Runs reviews via the `claude` CLI tool as a subprocess."""
+
+    def __init__(self, name: str, config: dict):
+        super().__init__(name, config)
+        self._processes: dict[str, _ProcessState] = {}
+
+    def start_review(self, prompt: str, context: dict) -> AgentHandle:
+        reviews_dir = get_reviews_dir()
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+
+        owner = context.get("owner", "unknown")
+        repo = context.get("repo", "unknown")
+        pr_number = context.get("pr_number", 0)
+        is_followup = context.get("is_followup", False)
+
+        repo_safe = repo.replace("/", "-")
+        suffix = "-followup" if is_followup else ""
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S") if is_followup else ""
+        if is_followup:
+            review_file = reviews_dir / f"{owner}-{repo_safe}-pr-{pr_number}{suffix}-{timestamp}.md"
+        else:
+            review_file = reviews_dir / f"{owner}-{repo_safe}-pr-{pr_number}.md"
+        json_file = str(review_file).replace(".md", ".json")
+
+        full_prompt = self._build_prompt(prompt, context, str(review_file), json_file)
+
+        cmd = [
+            "claude",
+            "-p", full_prompt,
+            "--allowedTools", _ALLOWED_TOOLS,
+            "--dangerously-skip-permissions",
+        ]
+
+        try:
+            process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            )
+        except FileNotFoundError:
+            raise RuntimeError("Claude CLI not found. Ensure 'claude' is installed and in PATH.")
+
+        handle_id = str(uuid.uuid4())
+        self._processes[handle_id] = _ProcessState(process, str(review_file), json_file)
+
+        logger.info(
+            f"ClaudeCLI: started PID {process.pid} for {owner}/{repo}#{pr_number} (handle={handle_id[:8]})"
+        )
+        return AgentHandle(
+            agent_name=self.name,
+            handle_id=handle_id,
+            metadata={"pid": process.pid, "review_file": str(review_file)},
+        )
+
+    def check_status(self, handle: AgentHandle) -> AgentStatus:
+        state = self._processes.get(handle.handle_id)
+        if state is None:
+            return AgentStatus.FAILED
+
+        if state.exit_code is not None:
+            return AgentStatus.COMPLETED if state.exit_code == 0 else AgentStatus.FAILED
+
+        exit_code = state.process.poll()
+        if exit_code is None:
+            return AgentStatus.RUNNING
+
+        try:
+            stdout, stderr = state.process.communicate(timeout=1)
+            state.stdout = stdout.strip()[-500:] if stdout else None
+            state.stderr = stderr.strip()[-2000:] if stderr else None
+        except (subprocess.TimeoutExpired, Exception):
+            pass
+
+        state.exit_code = exit_code
+        return AgentStatus.COMPLETED if exit_code == 0 else AgentStatus.FAILED
+
+    def get_output(self, handle: AgentHandle) -> ReviewArtifact:
+        state = self._processes.get(handle.handle_id)
+        if state is None:
+            return ReviewArtifact(error="Unknown handle")
+
+        if state.exit_code != 0:
+            return ReviewArtifact(error=state.stderr or f"Exit code {state.exit_code}")
+
+        review_path = Path(state.review_file)
+        json_path = Path(state.json_file)
+
+        content_json = None
+        content_md = None
+
+        if json_path.exists():
+            try:
+                raw = json_path.read_text(encoding="utf-8")
+                parsed = json.loads(raw)
+                valid, errs = validate_review_json(parsed)
+                if valid:
+                    content_json = parsed
+                else:
+                    logger.warning(f"JSON validation failed: {errs[:3]}")
+            except Exception as e:
+                logger.warning(f"Could not parse JSON review: {e}")
+
+        if review_path.exists():
+            try:
+                content_md = review_path.read_text(encoding="utf-8")
+                if content_json is None:
+                    content_json = markdown_to_json(content_md, {})
+            except Exception as e:
+                logger.warning(f"Could not read markdown review: {e}")
+
+        score = None
+        if content_json and "score" in content_json:
+            score = content_json["score"].get("overall")
+
+        return ReviewArtifact(
+            content_md=content_md,
+            content_json=content_json,
+            file_path=state.review_file,
+            score=score,
+        )
+
+    def cancel(self, handle: AgentHandle) -> bool:
+        state = self._processes.get(handle.handle_id)
+        if state is None or state.exit_code is not None:
+            return False
+        try:
+            state.process.terminate()
+            state.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            state.process.kill()
+        state.exit_code = -1
+        logger.info(f"ClaudeCLI: cancelled handle {handle.handle_id[:8]}")
+        return True
+
+    def _build_prompt(self, user_prompt: str, context: dict, review_file: str, json_file: str) -> str:
+        pr_url = context.get("pr_url", "")
+        pr_number = context.get("pr_number", 0)
+        is_followup = context.get("is_followup", False)
+        previous_review = context.get("previous_review_content")
+
+        if is_followup and previous_review:
+            prev_md = previous_review
+            try:
+                parsed_prev = json.loads(previous_review)
+                prev_md = json_to_markdown(parsed_prev)
+            except (json.JSONDecodeError, TypeError):
+                pass
+            return (
+                f"Review PR #{pr_number} at {pr_url}. "
+                f"This is a FOLLOW-UP review. Previous review:\n\n"
+                f"---PREVIOUS REVIEW---\n{prev_md[:8000]}\n---END PREVIOUS REVIEW---\n\n"
+                f"Focus on: changes since last review, whether previous issues were addressed. "
+                f"Include a 'followup' section with 'resolution_status' array tracking each previous issue. "
+                f"Use the elite-code-reviewer agent. "
+                f"Write the review to {review_file}. "
+                f"ALSO write a structured JSON version to {json_file} following this schema: "
+                f"{_SCHEMA_INSTRUCTIONS} "
+                f"IMPORTANT: Include a final score from 0-10 in both formats."
+            )
+
+        if user_prompt:
+            return (
+                f"{user_prompt}\n\n"
+                f"Write the review to {review_file}. "
+                f"ALSO write a structured JSON version to {json_file} following this schema: "
+                f"{_SCHEMA_INSTRUCTIONS} "
+                f"IMPORTANT: Include a final score from 0-10 in both formats."
+            )
+
+        return (
+            f"Review PR #{pr_number} at {pr_url}. "
+            f"Use the elite-code-reviewer agent. "
+            f"Write the review to {review_file}. "
+            f"ALSO write a structured JSON version to {json_file} following this schema: "
+            f"{_SCHEMA_INSTRUCTIONS} "
+            f"IMPORTANT: Include a final score from 0-10 in both formats."
+        )

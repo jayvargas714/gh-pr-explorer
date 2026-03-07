@@ -257,6 +257,101 @@ class Database:
                     except sqlite3.OperationalError:
                         pass
 
+            # Migration: Add agent_name column to reviews
+            if "agent_name" not in reviews_columns:
+                try:
+                    cursor.execute("ALTER TABLE reviews ADD COLUMN agent_name TEXT")
+                    logger.info("Added column agent_name to reviews table")
+                except sqlite3.OperationalError:
+                    pass
+
+            # --- Workflow Engine Tables ---
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS workflow_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    description TEXT,
+                    template_json TEXT NOT NULL,
+                    is_builtin BOOLEAN DEFAULT FALSE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS workflow_instances (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    template_id INTEGER NOT NULL,
+                    repo TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    config_json TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (template_id) REFERENCES workflow_templates(id)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_workflow_instances_status
+                ON workflow_instances(status)
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS instance_steps (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    instance_id INTEGER NOT NULL,
+                    step_id TEXT NOT NULL,
+                    step_type TEXT NOT NULL,
+                    step_config_json TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    agent_id INTEGER,
+                    inputs_json TEXT,
+                    outputs_json TEXT,
+                    started_at DATETIME,
+                    completed_at DATETIME,
+                    error_message TEXT,
+                    FOREIGN KEY (instance_id) REFERENCES workflow_instances(id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_instance_steps_instance
+                ON instance_steps(instance_id)
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS instance_artifacts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    instance_id INTEGER NOT NULL,
+                    step_id TEXT,
+                    pr_number INTEGER,
+                    artifact_type TEXT,
+                    file_path TEXT,
+                    content_json TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (instance_id) REFERENCES workflow_instances(id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_instance_artifacts_instance
+                ON instance_artifacts(instance_id)
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS agents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    type TEXT NOT NULL,
+                    model TEXT,
+                    config_json TEXT,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             logger.info(f"Database initialized at {self.db_path}")
 
     def is_migration_done(self, name: str) -> bool:

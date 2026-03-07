@@ -17,7 +17,17 @@ def create_app():
     """Create and configure the Flask application."""
     app = Flask(__name__)
     register_blueprints(app)
+    _seed_workflow_data()
     return app
+
+
+def _seed_workflow_data():
+    """Seed built-in workflow templates and agents on startup."""
+    try:
+        from backend.workflows.seed import seed_builtin_data
+        seed_builtin_data()
+    except Exception as e:
+        logger.error(f"Failed to seed workflow data: {e}")
 
 
 def startup_refresh_workflow_caches():

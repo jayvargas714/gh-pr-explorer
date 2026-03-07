@@ -91,9 +91,10 @@ export function ReviewButton({ pr }: ReviewButtonProps) {
 
   // Review completed
   if (review.status === 'completed') {
+    const agentLabel = review.agent_name ? ` (${review.agent_name})` : ''
     return (
       <Button variant="ghost" size="sm" disabled>
-        ✓ Reviewed
+        ✓ Reviewed{agentLabel}
       </Button>
     )
   }

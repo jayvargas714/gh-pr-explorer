@@ -1,4 +1,8 @@
-"""Claude CLI subprocess management: start, cancel, poll, save to DB."""
+"""Review subprocess management: start, cancel, poll, save to DB.
+
+Routes through the pluggable AgentBackend abstraction. The legacy Claude CLI
+subprocess flow is preserved via ClaudeCLIAgent.
+"""
 
 import json
 import logging
@@ -6,26 +10,12 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from backend.agents import get_agent, AgentHandle, AgentStatus
 from backend.config import get_reviews_dir
 from backend.services.github_service import fetch_pr_head_sha, fetch_pr_state
 from backend.services.review_schema import markdown_to_json, validate_review_json, json_to_markdown, SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
-
-# Compact schema instructions embedded in the review prompt
-_SCHEMA_INSTRUCTIONS = (
-    "The JSON must have these top-level keys: "
-    '"schema_version" (set to "1.0.0"), '
-    '"metadata" (object with pr_number, repository, pr_url, pr_title, author, branch {head, base}, '
-    "review_date, review_type, files_changed, additions, deletions), "
-    '"summary" (string), '
-    '"sections" (array of objects with type=critical|major|minor, display_name, and issues array), '
-    '"highlights" (array of strings), '
-    '"recommendations" (array of {priority: must_fix|high|medium|low, text}), '
-    '"score" (object with overall 0-10, optional breakdown array of {category, score, comment}, optional summary). '
-    "Each issue MUST have: title (string), location (object with file, start_line, end_line), "
-    "problem (string), and optionally fix (string) and code_snippet (string). "
-)
 
 
 def save_review_to_db(key, review, status, reviews_db):
@@ -131,13 +121,50 @@ def save_review_to_db(key, review, status, reviews_db):
 
 
 def check_review_status(key, active_reviews, reviews_lock, reviews_db):
-    """Check and update the status of a review process."""
+    """Check and update the status of a review process.
+
+    Supports both the legacy subprocess path (process key) and the new
+    agent abstraction path (handle key).
+    """
     with reviews_lock:
         if key not in active_reviews:
             return None
         review = active_reviews[key]
+
+        if review["status"] != "running":
+            return review
+
+        handle = review.get("handle")
         process = review.get("process")
-        if process and review["status"] == "running":
+
+        if handle and isinstance(handle, AgentHandle):
+            agent_status = check_agent_review_status(handle)
+            if agent_status in (AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED):
+                status = "completed" if agent_status == AgentStatus.COMPLETED else "failed"
+                review["status"] = status
+                review["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+                if agent_status == AgentStatus.COMPLETED:
+                    logger.info(f"Review completed successfully: {key}")
+                    try:
+                        agent = get_agent(handle.agent_name)
+                        artifact = agent.get_output(handle)
+                        if artifact.file_path:
+                            review["review_file"] = artifact.file_path
+                    except Exception as e:
+                        logger.warning(f"Could not get agent output for {key}: {e}")
+                else:
+                    try:
+                        agent = get_agent(handle.agent_name)
+                        artifact = agent.get_output(handle)
+                        review["error_output"] = artifact.error or "Unknown error"
+                    except Exception:
+                        review["error_output"] = "Unknown error"
+                    logger.error(f"Review failed: {key}")
+
+                save_review_to_db(key, review, status, reviews_db)
+
+        elif process:
             exit_code = process.poll()
             if exit_code is not None:
                 try:
@@ -167,91 +194,46 @@ def check_review_status(key, active_reviews, reviews_lock, reviews_db):
         return review
 
 
-def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, previous_review_content=None):
-    """Start a Claude CLI review process in the background.
+def start_review_process(pr_url, owner, repo, pr_number, is_followup=False,
+                         previous_review_content=None, agent_name="claude"):
+    """Start a review process via the agent abstraction layer.
 
-    Args:
-        previous_review_content: For follow-ups, the JSON string of the previous review's content_json.
+    Uses the pluggable AgentBackend. Defaults to 'claude' (ClaudeCLIAgent)
+    which preserves the original subprocess behaviour.
 
     Returns:
-        tuple: (process, review_file_path_or_error, is_followup)
+        tuple: (handle_or_process, review_file_path_or_error, is_followup)
+               handle_or_process is an AgentHandle for the new path.
+               For backward compat, callers can still check `.process` on the handle metadata.
     """
-    reviews_dir = get_reviews_dir()
-    reviews_dir.mkdir(parents=True, exist_ok=True)
+    context = {
+        "pr_url": pr_url,
+        "owner": owner,
+        "repo": repo,
+        "pr_number": pr_number,
+        "is_followup": is_followup,
+        "previous_review_content": previous_review_content,
+    }
 
-    repo_safe = repo.replace("/", "-")
-    suffix = "-followup" if is_followup else ""
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S") if is_followup else ""
-    if is_followup:
-        review_file = reviews_dir / f"{owner}-{repo_safe}-pr-{pr_number}{suffix}-{timestamp}.md"
-    else:
-        review_file = reviews_dir / f"{owner}-{repo_safe}-pr-{pr_number}.md"
-
-    json_file = str(review_file).replace(".md", ".json")
-
-    if is_followup and previous_review_content:
-        # Convert raw JSON to readable markdown for the prompt
-        previous_review_markdown = previous_review_content
-        try:
-            parsed_prev = json.loads(previous_review_content)
-            previous_review_markdown = json_to_markdown(parsed_prev)
-        except (json.JSONDecodeError, TypeError, Exception):
-            pass  # Fall back to raw string if conversion fails
-
-        prompt = (
-            f"Review PR #{pr_number} at {pr_url}. "
-            f"This is a FOLLOW-UP review. Previous review:\n\n"
-            f"---PREVIOUS REVIEW---\n{previous_review_markdown[:8000]}\n---END PREVIOUS REVIEW---\n\n"
-            f"Focus on: changes since last review, whether previous issues were addressed. "
-            f"Include a 'followup' section with 'resolution_status' array tracking each previous issue. "
-            f"Use the elite-code-reviewer agent. "
-            f"Write the review to {review_file}. "
-            f"ALSO write a structured JSON version to {json_file} following this schema: "
-            f"{_SCHEMA_INSTRUCTIONS} "
-            f"IMPORTANT: Include a final score from 0-10 in both formats."
-        )
-    else:
-        prompt = (
-            f"Review PR #{pr_number} at {pr_url}. "
-            f"Use the elite-code-reviewer agent. "
-            f"Write the review to {review_file}. "
-            f"ALSO write a structured JSON version to {json_file} following this schema: "
-            f"{_SCHEMA_INSTRUCTIONS} "
-            f"IMPORTANT: Include a final score from 0-10 in both formats."
-        )
-
-    # --dangerously-skip-permissions is required for non-interactive subprocess execution.
-    # This app is single-user/local-only; the flag does not expose a network attack surface.
-    # allowedTools is restricted to read-only git/gh commands + file tools.
-    cmd = [
-        "claude",
-        "-p", prompt,
-        "--allowedTools", (
-            "Bash(git status*),Bash(git log*),Bash(git show*),"
-            "Bash(git diff*),Bash(git blame*),Bash(git branch*),"
-            "Bash(gh pr view*),Bash(gh pr diff*),Bash(gh pr checks*),"
-            "Bash(gh api*),Read,Glob,Grep,Write,Task"
-        ),
-        "--dangerously-skip-permissions"
-    ]
-
-    review_type = "follow-up " if is_followup else ""
-    logger.info(f"Starting {review_type}review for PR #{pr_number} ({owner}/{repo})")
-    logger.debug(f"Review command: {' '.join(cmd)}")
+    prompt = f"Review PR #{pr_number} at {pr_url}. Use the elite-code-reviewer agent."
 
     try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
+        agent = get_agent(agent_name)
+        handle = agent.start_review(prompt, context)
+        review_file = handle.metadata.get("review_file", "")
+        logger.info(
+            f"Started review via '{agent_name}' for PR #{pr_number} ({owner}/{repo})"
         )
-        logger.info(f"Review process started with PID {process.pid} for {owner}/{repo}/#{pr_number}")
-        return process, str(review_file), is_followup
-    except FileNotFoundError:
-        error_msg = "Claude CLI not found. Please ensure 'claude' is installed and in PATH."
-        logger.error(f"Failed to start review: {error_msg}")
-        return None, error_msg, is_followup
+        return handle, review_file, is_followup
     except Exception as e:
         logger.error(f"Failed to start review process: {e}")
         return None, str(e), is_followup
+
+
+def check_agent_review_status(handle: AgentHandle) -> AgentStatus:
+    """Check the status of an agent-based review."""
+    try:
+        agent = get_agent(handle.agent_name)
+        return agent.check_status(handle)
+    except Exception:
+        return AgentStatus.FAILED

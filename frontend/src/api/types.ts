@@ -348,6 +348,8 @@ export interface Review {
   review_file: string
   exit_code: number | null
   error_output: string
+  is_followup?: boolean
+  agent_name?: string
 }
 
 export interface ReviewHistoryItem {

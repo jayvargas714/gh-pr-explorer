@@ -5,10 +5,13 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
+from backend.agents import AgentHandle, AgentStatus
 from backend.extensions import logger, active_reviews, reviews_lock
 from backend.database import get_reviews_db
 from backend.services.github_service import fetch_pr_head_sha
-from backend.services.review_service import save_review_to_db, check_review_status, start_review_process
+from backend.services.review_service import (
+    save_review_to_db, check_review_status, start_review_process, check_agent_review_status,
+)
 from backend.services.inline_comments_service import post_inline_comments, preview_section_issues
 from backend.services.verdict_service import post_verdict
 from backend.routes import error_response
@@ -105,35 +108,41 @@ def start_review():
                 logger.warning(f"No previous review found for follow-up, proceeding as normal review")
                 is_followup = False
 
-        process, result, is_followup = start_review_process(
+        agent_name = data.get("agent", "claude")
+
+        handle, review_file, is_followup = start_review_process(
             pr_url, owner, repo, pr_number,
             is_followup=is_followup,
-            previous_review_content=previous_review_content
+            previous_review_content=previous_review_content,
+            agent_name=agent_name,
         )
 
-        if process is None:
-            logger.error(f"Failed to start review for {key}: {result}")
-            return jsonify({"error": result}), 500
+        if handle is None:
+            logger.error(f"Failed to start review for {key}: {review_file}")
+            return jsonify({"error": review_file}), 500
 
         with reviews_lock:
             active_reviews[key] = {
-                "process": process,
+                "handle": handle,
+                "process": None,
                 "status": "running",
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "pr_url": pr_url,
-                "review_file": result,
+                "review_file": review_file,
                 "is_followup": is_followup,
                 "parent_review_id": parent_id,
                 "pr_title": pr_title,
-                "pr_author": pr_author
+                "pr_author": pr_author,
+                "agent_name": agent_name,
             }
 
         return jsonify({
             "message": "Review started",
             "key": key,
             "status": "running",
-            "review_file": result,
-            "is_followup": is_followup
+            "review_file": review_file,
+            "is_followup": is_followup,
+            "agent": agent_name,
         }), 201
 
     except Exception as e:
@@ -153,21 +162,26 @@ def cancel_review(owner, repo, pr_number):
             return jsonify({"error": "Review not found"}), 404
 
         review = active_reviews[key]
+        handle = review.get("handle")
         process = review.get("process")
 
-        if process and review["status"] == "running":
+        if review["status"] == "running":
             try:
-                logger.info(f"Terminating review process (PID {process.pid}) for {key}")
-                process.terminate()
-                try:
-                    process.wait(timeout=2)
-                    logger.info(f"Review process terminated gracefully for {key}")
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    logger.warning(f"Review process killed (did not terminate gracefully) for {key}")
+                if handle and isinstance(handle, AgentHandle):
+                    from backend.agents import get_agent
+                    agent = get_agent(handle.agent_name)
+                    agent.cancel(handle)
+                    logger.info(f"Cancelled agent review for {key}")
+                elif process:
+                    logger.info(f"Terminating review process (PID {process.pid}) for {key}")
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
                 review["status"] = "cancelled"
             except Exception as e:
-                return error_response("Failed to terminate review process", 500, f"Failed to terminate review process for {key}: {e}")
+                return error_response("Failed to terminate review process", 500, f"Failed to terminate review for {key}: {e}")
 
         del active_reviews[key]
         logger.info(f"Review cancelled and removed: {key}")

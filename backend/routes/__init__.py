@@ -23,6 +23,7 @@ from backend.routes.review_routes import review_bp
 from backend.routes.history_routes import history_bp
 from backend.routes.settings_routes import settings_bp
 from backend.routes.cache_routes import cache_bp
+from backend.routes.workflow_engine_routes import workflow_engine_bp
 
 
 def register_blueprints(app):
@@ -38,3 +39,4 @@ def register_blueprints(app):
     app.register_blueprint(history_bp)
     app.register_blueprint(settings_bp)
     app.register_blueprint(cache_bp)
+    app.register_blueprint(workflow_engine_bp)

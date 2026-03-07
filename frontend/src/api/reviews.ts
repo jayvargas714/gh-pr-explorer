@@ -29,7 +29,8 @@ export async function startReview(data: {
   author?: string
   is_followup?: boolean
   previous_review_id?: number
-}): Promise<{ message: string; key: string; status: string }> {
+  agent?: string
+}): Promise<{ message: string; key: string; status: string; agent?: string }> {
   return api.post('/reviews', data)
 }
 
