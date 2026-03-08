@@ -128,6 +128,14 @@ class WorkflowDB:
                 "WHERE id=?", (status, instance_id),
             )
 
+    def update_instance_config(self, instance_id: int, config: dict):
+        with self.db.connection() as conn:
+            conn.execute(
+                "UPDATE workflow_instances SET config_json=?, updated_at=CURRENT_TIMESTAMP "
+                "WHERE id=?",
+                (json.dumps(config), instance_id),
+            )
+
     # --- Steps ---
 
     def create_step(self, instance_id: int, step_id: str, step_type: str,

@@ -41,6 +41,9 @@ class HumanGateExecutor(StepExecutor):
 
         unique_domains = sorted({p.get("domain", "") for p in prompts if p.get("domain")})
 
+        gate_id = self.step_config.get("_step_id", "")
+        fb_history, iteration = self._feedback_context(inputs, gate_id)
+
         gate_payload = {
             "type": "prompt_review",
             "prompts": prompts,
@@ -51,6 +54,8 @@ class HumanGateExecutor(StepExecutor):
             "domain_count": len(unique_domains),
             "domains_list": unique_domains,
             "prompts_per_pr": len(prompts) // max(len(prs), 1),
+            "feedback_history": fb_history,
+            "iteration": iteration,
         }
 
         return StepResult(
@@ -64,6 +69,9 @@ class HumanGateExecutor(StepExecutor):
         mode = inputs.get("mode", "team-review")
         synthesis = inputs.get("synthesis", {})
         freshness = inputs.get("freshness", [])
+
+        gate_id = self.step_config.get("_step_id", "")
+        fb_history, iteration = self._feedback_context(inputs, gate_id)
 
         gate_payload = {
             "type": "review_gate",
@@ -83,6 +91,9 @@ class HumanGateExecutor(StepExecutor):
             "checklist_completion": self._aggregate_checklists(reviews),
             "finding_staleness": self._extract_staleness(freshness),
         }
+
+        gate_payload["feedback_history"] = fb_history
+        gate_payload["iteration"] = iteration
 
         followup_results = inputs.get("followup_results")
         if followup_results is not None:
@@ -105,6 +116,13 @@ class HumanGateExecutor(StepExecutor):
             awaiting_gate=True,
             gate_payload=gate_payload,
         )
+
+    @staticmethod
+    def _feedback_context(inputs: dict, gate_id: str) -> tuple[list[dict], int]:
+        """Extract feedback history relevant to this gate and compute iteration."""
+        all_fb = inputs.get("human_feedback", [])
+        relevant = [f for f in all_fb if f.get("gate_step_id") == gate_id]
+        return relevant, len(relevant) + 1
 
     @staticmethod
     def _aggregate_questions(reviews: list) -> list[str]:

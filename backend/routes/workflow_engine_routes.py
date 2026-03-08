@@ -220,6 +220,54 @@ def gate_action(instance_id):
     if not template_data:
         return jsonify({"error": "Template not found"}), 500
 
+    if action == "revise":
+        feedback_text = data.get("feedback", "").strip()
+        if not feedback_text:
+            return jsonify({"error": "Feedback text is required for revise"}), 400
+
+        steps = db.get_steps(instance_id)
+        gate_step = next((s for s in steps if s["status"] == "awaiting_gate"), None)
+        if not gate_step:
+            return jsonify({"error": "No gate step awaiting action"}), 400
+
+        step_config = json.loads(gate_step.get("step_config_json") or "{}")
+        retry_target = step_config.get("retry_target")
+
+        if not retry_target:
+            for edge in template_data["template"].get("edges", []):
+                if edge["to"] == gate_step["step_id"]:
+                    retry_target = edge["from"]
+                    break
+        if not retry_target:
+            return jsonify({"error": "Cannot determine retry target for this gate"}), 400
+
+        config = json.loads(instance.get("config_json") or "{}")
+        fb_list = config.setdefault("human_feedback", [])
+        iteration = len([f for f in fb_list
+                         if f.get("gate_step_id") == gate_step["step_id"]]) + 1
+        fb_list.append({
+            "gate_step_id": gate_step["step_id"],
+            "retry_target": retry_target,
+            "feedback": feedback_text,
+            "iteration": iteration,
+        })
+        db.update_instance_config(instance_id, config)
+
+        db.update_step_status(instance_id, gate_step["step_id"], "failed",
+                              error=f"Revised: {feedback_text[:100]}")
+        db.update_instance_status(instance_id, "running")
+
+        refreshed_instance = db.get_instance(instance_id)
+        thread = threading.Thread(
+            target=_retry_from_step,
+            args=(instance_id, template_data["template"],
+                  refreshed_instance or instance, retry_target),
+            daemon=True,
+        )
+        thread.start()
+        return jsonify({"ok": True, "status": "running",
+                        "retrying_from": retry_target, "iteration": iteration})
+
     db.update_instance_status(instance_id, "running")
 
     thread = threading.Thread(
@@ -447,6 +495,9 @@ def _retry_from_step(instance_id: int, template: dict, instance: dict, step_id: 
                     pass
 
         config = json.loads(instance.get("config_json") or "{}")
+        if "human_feedback" in config:
+            all_outputs["human_feedback"] = config["human_feedback"]
+
         result = runtime.retry_from_step(
             retry_step_id=step_id,
             all_outputs=all_outputs,
