@@ -21,6 +21,13 @@ from backend.services.review_schema import (
 
 logger = logging.getLogger(__name__)
 
+_NON_INTERACTIVE = (
+    "\n\nCRITICAL: You are running in a fully automated, non-interactive pipeline. "
+    "NEVER ask the user questions, request clarification, or wait for input. "
+    "Make your own best-judgment decisions and continue autonomously. "
+    "Do NOT output phrases like 'How would you like me to proceed?' or similar.\n"
+)
+
 _SCHEMA_INSTRUCTIONS = (
     "The JSON must have these top-level keys: "
     '"schema_version" (set to "1.0.0"), '
@@ -55,7 +62,13 @@ class _ProcessState:
         self._stderr_thread.start()
 
     def _read_stream_json(self):
-        """Parse stream-json stdout, extracting text deltas for live display."""
+        """Parse stream-json stdout, extracting text deltas for live display.
+
+        Each ``assistant`` message from ``--stream-partial-output`` is
+        *cumulative* — it contains all content blocks produced so far.
+        We replace ``_live_lines`` with the latest message's content
+        to avoid duplication.
+        """
         try:
             for raw_line in self.process.stdout:
                 raw_line = raw_line.strip()
@@ -70,18 +83,18 @@ class _ProcessState:
                 msg_type = msg.get("type", "")
                 if msg_type == "assistant":
                     content = msg.get("message", {}).get("content", [])
+                    new_lines: list[str] = []
                     for block in content:
                         if block.get("type") == "text":
                             text = block.get("text", "")
                             if text:
-                                with self._lock:
-                                    self._live_lines.append(text)
-                                    if len(self._live_lines) > 1000:
-                                        self._live_lines = self._live_lines[-500:]
+                                new_lines.append(text)
                         elif block.get("type") == "tool_use":
                             tool_name = block.get("name", "tool")
-                            with self._lock:
-                                self._live_lines.append(f"\n[Using tool: {tool_name}]\n")
+                            new_lines.append(f"\n[Using tool: {tool_name}]\n")
+                    if new_lines:
+                        with self._lock:
+                            self._live_lines = new_lines
                 elif msg_type == "result":
                     self._result_text = msg.get("result", "")
         except (ValueError, OSError):
@@ -327,7 +340,7 @@ class CursorCLIAgent(AgentBackend):
         # Non-review tasks (expert_generation, synthesis, holistic) — return
         # the user prompt as-is, no file-write instructions.
         if task and task != "review":
-            return user_prompt
+            return user_prompt + _NON_INTERACTIVE
 
         if is_followup and previous_review:
             prev_md = previous_review
@@ -347,6 +360,7 @@ class CursorCLIAgent(AgentBackend):
                 f"ALSO write a structured JSON version to {json_file} following this schema: "
                 f"{_SCHEMA_INSTRUCTIONS} "
                 f"IMPORTANT: Include a final score from 0-10 in both formats."
+                f"{_NON_INTERACTIVE}"
             )
 
         if user_prompt:
@@ -356,6 +370,7 @@ class CursorCLIAgent(AgentBackend):
                 f"ALSO write a structured JSON version to {json_file} following this schema: "
                 f"{_SCHEMA_INSTRUCTIONS} "
                 f"IMPORTANT: Include a final score from 0-10 in both formats."
+                f"{_NON_INTERACTIVE}"
             )
 
         return (
@@ -365,4 +380,5 @@ class CursorCLIAgent(AgentBackend):
             f"ALSO write a structured JSON version to {json_file} following this schema: "
             f"{_SCHEMA_INSTRUCTIONS} "
             f"IMPORTANT: Include a final score from 0-10 in both formats."
+            f"{_NON_INTERACTIVE}"
         )

@@ -17,6 +17,13 @@ from backend.services.review_schema import (
 
 logger = logging.getLogger(__name__)
 
+_NON_INTERACTIVE = (
+    "\n\nCRITICAL: You are running in a fully automated, non-interactive pipeline. "
+    "NEVER ask the user questions, request clarification, or wait for input. "
+    "Make your own best-judgment decisions and continue autonomously. "
+    "Do NOT output phrases like 'How would you like me to proceed?' or similar.\n"
+)
+
 _SCHEMA_INSTRUCTIONS = (
     "The JSON must have these top-level keys: "
     '"schema_version" (set to "1.0.0"), '
@@ -250,7 +257,7 @@ class ClaudeCLIAgent(AgentBackend):
         task = context.get("task", "")
 
         if task and task != "review":
-            return user_prompt
+            return user_prompt + _NON_INTERACTIVE
 
         if is_followup and previous_review:
             prev_md = previous_review
@@ -270,6 +277,7 @@ class ClaudeCLIAgent(AgentBackend):
                 f"ALSO write a structured JSON version to {json_file} following this schema: "
                 f"{_SCHEMA_INSTRUCTIONS} "
                 f"IMPORTANT: Include a final score from 0-10 in both formats."
+                f"{_NON_INTERACTIVE}"
             )
 
         if user_prompt:
@@ -279,6 +287,7 @@ class ClaudeCLIAgent(AgentBackend):
                 f"ALSO write a structured JSON version to {json_file} following this schema: "
                 f"{_SCHEMA_INSTRUCTIONS} "
                 f"IMPORTANT: Include a final score from 0-10 in both formats."
+                f"{_NON_INTERACTIVE}"
             )
 
         return (
@@ -288,4 +297,5 @@ class ClaudeCLIAgent(AgentBackend):
             f"ALSO write a structured JSON version to {json_file} following this schema: "
             f"{_SCHEMA_INSTRUCTIONS} "
             f"IMPORTANT: Include a final score from 0-10 in both formats."
+            f"{_NON_INTERACTIVE}"
         )
