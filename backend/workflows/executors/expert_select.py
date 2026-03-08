@@ -191,34 +191,20 @@ class ExpertSelectExecutor(StepExecutor):
         db = get_workflow_db()
 
         feedback = _get_relevant_feedback(inputs or {}, "experts")
+
+        all_files, diff_sample, total_lines = self._collect_pr_content(prs, owner, repo)
+
         if not feedback:
             cached = db.list_expert_domains(active_only=True, repo=full_repo)
             if cached:
-                logger.info(f"Using {len(cached)} cached AI-generated domains for {full_repo}")
-                return self._build_result_from_domains(cached, prs, owner, repo)
+                scored = self._score_cached_domains(cached, prs, owner, repo,
+                                                    all_files, diff_sample, total_lines)
+                if scored is not None:
+                    return scored
+                logger.info(f"Cached domains not relevant to current PR(s), regenerating for {full_repo}")
         else:
             logger.info(f"Human feedback present (iteration {feedback[-1].get('iteration', '?')}), "
                         f"bypassing expert cache for {full_repo}")
-
-        all_files: list[str] = []
-        all_diff_lines: list[str] = []
-        total_lines = 0
-
-        for pr in prs:
-            pr_number = pr.get("number", 0)
-            additions = pr.get("additions", 0)
-            deletions = pr.get("deletions", 0)
-            total_lines += additions + deletions
-
-            files = self._fetch_changed_files(owner, repo, pr_number)
-            all_files.extend(files)
-
-            diff_content = self._fetch_diff_content(owner, repo, pr_number)
-            if diff_content:
-                all_diff_lines.extend(diff_content.splitlines())
-
-        all_files = sorted(set(all_files))
-        diff_sample = "\n".join(all_diff_lines[:3000])
 
         prompt = self._build_expert_generation_prompt(all_files, diff_sample, feedback)
 
@@ -229,10 +215,27 @@ class ExpertSelectExecutor(StepExecutor):
             logger.info(f"Cached {len(ai_experts)} AI-generated domains for {full_repo}")
             fresh = db.list_expert_domains(active_only=True, repo=full_repo)
             if fresh:
-                return self._build_result_from_domains(fresh, prs, owner, repo)
+                scored = self._score_cached_domains(fresh, prs, owner, repo,
+                                                    all_files, diff_sample, total_lines)
+                if scored is not None:
+                    return scored
 
         logger.warning(f"AI expert generation failed for {full_repo}, falling back to static matching")
         return self._fallback_static_match(prs, owner, repo, total_lines)
+
+    def _collect_pr_content(self, prs: list, owner: str, repo: str
+                            ) -> tuple[list[str], str, int]:
+        all_files: list[str] = []
+        all_diff_lines: list[str] = []
+        total_lines = 0
+        for pr in prs:
+            total_lines += pr.get("additions", 0) + pr.get("deletions", 0)
+            files = self._fetch_changed_files(owner, repo, pr.get("number", 0))
+            all_files.extend(files)
+            diff_content = self._fetch_diff_content(owner, repo, pr.get("number", 0))
+            if diff_content:
+                all_diff_lines.extend(diff_content.splitlines())
+        return sorted(set(all_files)), "\n".join(all_diff_lines[:3000]), total_lines
 
     def _build_expert_generation_prompt(self, files: list[str], diff_sample: str,
                                         feedback: list[dict] | None = None) -> str:
@@ -388,28 +391,52 @@ class ExpertSelectExecutor(StepExecutor):
 
         return validated if validated else None
 
-    def _build_result_from_domains(self, domains: list[dict], prs: list,
-                                   owner: str, repo: str) -> StepResult:
-        total_lines = 0
+    def _score_cached_domains(self, domains: list[dict], prs: list,
+                              owner: str, repo: str,
+                              all_files: list[str], diff_sample: str,
+                              total_lines: int) -> StepResult | None:
+        """Score cached domains against actual PR content. Returns None on cache miss."""
+        files_lower = " ".join(f.lower() for f in all_files)
+        diff_lower = diff_sample.lower()
+
+        _MIN_RELEVANCE = 2.0
+
+        scored: list[tuple[dict, float]] = []
+        for d in domains:
+            relevance = self._compute_domain_relevance(d, all_files, files_lower, diff_lower)
+            if relevance >= _MIN_RELEVANCE:
+                scored.append((d, relevance))
+
+        if not scored:
+            return None
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        max_experts = self._expert_count_cap(total_lines)
+        selected = scored[:max_experts]
+        selected_ids = {d["domain_id"] for d, _ in selected}
+
+        logger.info(
+            f"Scored {len(scored)}/{len(domains)} cached domains as relevant; "
+            f"selected top {len(selected)}: "
+            + ", ".join(f'{d["domain_id"]}({s:.0f}%)' for d, s in selected)
+        )
+
         pr_domains: list[dict] = []
-
         for pr in prs:
-            pr_number = pr.get("number", 0)
-            additions = pr.get("additions", 0)
-            deletions = pr.get("deletions", 0)
-            total_lines += additions + deletions
-
-            files = self._fetch_changed_files(owner, repo, pr_number)
+            pr_files = self._fetch_changed_files(owner, repo, pr.get("number", 0))
+            pr_files_lower = " ".join(f.lower() for f in pr_files)
+            pr_matched = []
+            for d, _ in selected:
+                if self._compute_domain_relevance(d, pr_files, pr_files_lower, diff_lower) > 0:
+                    pr_matched.append(d["domain_id"])
             pr_domains.append({
-                "pr_number": pr_number,
-                "domains": [d["domain_id"] for d in domains],
-                "file_count": len(files),
+                "pr_number": pr.get("number", 0),
+                "domains": pr_matched or [d["domain_id"] for d, _ in selected],
+                "file_count": len(pr_files),
             })
 
-        max_experts = self._expert_count_cap(total_lines)
-
         experts = []
-        for d in domains[:max_experts]:
+        for d, relevance in selected:
             experts.append({
                 "domain_id": d["domain_id"],
                 "display_name": d["display_name"],
@@ -417,12 +444,10 @@ class ExpertSelectExecutor(StepExecutor):
                 "scope": d["scope"],
                 "checklist": d.get("checklist", []),
                 "anti_patterns": d.get("anti_patterns", []),
-                "matched_files": [],
-                "relevance_pct": 100.0,
+                "matched_files": [f for f in all_files
+                                  if self._file_matches_domain(f, d)],
+                "relevance_pct": round(relevance, 1),
             })
-
-        if not experts:
-            experts = [self._generic_expert()]
 
         return StepResult(
             success=True,
@@ -438,10 +463,158 @@ class ExpertSelectExecutor(StepExecutor):
                     "total_domains": len(experts),
                     "total_lines_analyzed": total_lines,
                     "max_experts_cap": max_experts,
-                    "source": "ai_generated",
+                    "source": "ai_cached_scored",
                 },
             }],
         )
+
+    _DOMAIN_STOP_WORDS = frozenset({
+        "the", "and", "for", "with", "from", "that", "this", "are", "was",
+        "has", "have", "been", "will", "can", "not", "but", "all", "any",
+        "its", "also", "into", "more", "such", "each", "than", "other",
+        "about", "over", "across", "review", "code", "expert", "engineer",
+        "senior", "principal", "specializing", "experience", "including",
+        "ensure", "check", "verify", "focus", "specific", "based",
+    })
+
+    _EXT_TO_LANG: dict[str, list[str]] = {
+        ".py": ["python"], ".pyx": ["python", "cython"],
+        ".js": ["javascript"], ".ts": ["typescript"], ".tsx": ["typescript", "react"],
+        ".jsx": ["javascript", "react"],
+        ".go": ["go", "golang"], ".rs": ["rust"],
+        ".cpp": ["c++", "cpp"], ".cc": ["c++", "cpp"], ".cxx": ["c++", "cpp"],
+        ".c": ["c"], ".h": ["c", "c++", "cpp"], ".hpp": ["c++", "cpp"],
+        ".java": ["java"], ".kt": ["kotlin"], ".scala": ["scala"],
+        ".rb": ["ruby"], ".php": ["php"],
+        ".sql": ["sql", "database", "query"],
+        ".sh": ["bash", "shell", "script", "ops", "infra"],
+        ".yml": ["yaml", "config", "ci", "infra"], ".yaml": ["yaml", "config", "ci", "infra"],
+        ".tf": ["terraform", "infra"], ".hcl": ["terraform", "infra"],
+        ".dockerfile": ["docker", "container", "infra"],
+        ".proto": ["protobuf", "grpc"],
+        ".graphql": ["graphql", "api"],
+        ".css": ["css", "frontend", "style"], ".scss": ["css", "frontend", "style"],
+        ".html": ["html", "frontend"],
+        ".md": ["docs", "documentation"],
+    }
+
+    _DIR_SIGNALS: dict[str, list[str]] = {
+        "test": ["testing", "test"], "tests": ["testing", "test"],
+        "spec": ["testing", "test"],
+        "ops": ["ops", "operations", "infra", "infrastructure"],
+        "deploy": ["deployment", "infra", "ci"],
+        "ci": ["ci", "continuous", "pipeline"],
+        "infra": ["infra", "infrastructure"],
+        "db": ["database", "sql"], "database": ["database", "sql"],
+        "migration": ["database", "migration", "sql"],
+        "api": ["api", "backend"],
+        "frontend": ["frontend", "ui"],
+        "security": ["security", "auth"],
+        "auth": ["auth", "security", "authentication"],
+    }
+
+    def _compute_domain_relevance(self, domain: dict, files: list[str],
+                                  files_lower: str, diff_lower: str) -> float:
+        """Score a domain's relevance to the given files and diff content.
+
+        Returns 0-100. Uses keywords extracted from domain metadata matched
+        against file paths and diff text.
+        """
+        name = (domain.get("display_name", "") or "").lower()
+        scope = (domain.get("scope", "") or "").lower()
+        persona = (domain.get("persona", "") or "").lower()
+
+        raw_tokens = re.split(r'[\s,;/\-_&|():.]+', f"{name} {scope}")
+        keywords = {t for t in raw_tokens
+                    if len(t) >= 2 and t not in self._DOMAIN_STOP_WORDS}
+
+        checklist_text = " ".join(domain.get("checklist", [])).lower()
+        for tok in re.split(r'[\s,;/\-_&|():.?]+', checklist_text):
+            if len(tok) >= 4 and tok not in self._DOMAIN_STOP_WORDS:
+                keywords.add(tok)
+
+        file_signals = self._extract_file_signals(files)
+        keywords.update(self._extract_language_keywords(name, scope, persona))
+
+        if not keywords:
+            return 0
+
+        file_hits = sum(1 for kw in keywords if kw in files_lower)
+        signal_hits = sum(1 for kw in keywords if kw in file_signals)
+        diff_hits = sum(1 for kw in keywords if kw in diff_lower)
+
+        total_possible = len(keywords)
+        score = ((file_hits * 4) + (signal_hits * 3) + diff_hits) / total_possible * 12.5
+
+        return min(score, 100.0)
+
+    def _extract_file_signals(self, files: list[str]) -> str:
+        """Extract language/framework signals from file paths and extensions."""
+        signals: list[str] = []
+        for f in files:
+            f_lower = f.lower()
+            parts = f_lower.replace("\\", "/").split("/")
+            for part in parts:
+                dir_sigs = self._DIR_SIGNALS.get(part, [])
+                signals.extend(dir_sigs)
+
+            for ext, langs in self._EXT_TO_LANG.items():
+                if f_lower.endswith(ext):
+                    signals.extend(langs)
+                    break
+
+            if "dockerfile" in f_lower:
+                signals.extend(["docker", "container", "infra"])
+            if "makefile" in f_lower:
+                signals.extend(["build", "make"])
+            if "cron" in f_lower:
+                signals.extend(["cron", "scheduling", "ops", "infra"])
+
+        return " ".join(signals)
+
+    @staticmethod
+    def _extract_language_keywords(name: str, scope: str, persona: str) -> set[str]:
+        """Pull language/framework identifiers that may need special handling."""
+        combined = f"{name} {scope} {persona}"
+        keywords: set[str] = set()
+        lang_patterns = [
+            (r'\bc\+\+\b', {"c++", "cpp"}),
+            (r'\bc#\b', {"c#", "csharp"}),
+            (r'\bnode\.?js\b', {"node", "nodejs", "javascript"}),
+            (r'\breact\b', {"react", "jsx", "tsx"}),
+            (r'\bflask\b', {"flask", "python"}),
+            (r'\bdjango\b', {"django", "python"}),
+            (r'\bfastapi\b', {"fastapi", "python"}),
+            (r'\bspring\b', {"spring", "java"}),
+            (r'\bgraphql\b', {"graphql"}),
+            (r'\bgrpc\b', {"grpc", "protobuf"}),
+            (r'\bpostgres(?:ql)?\b', {"postgres", "postgresql", "sql", "database"}),
+            (r'\bmysql\b', {"mysql", "sql", "database"}),
+            (r'\bredis\b', {"redis", "cache"}),
+            (r'\bdocker\b', {"docker", "container"}),
+            (r'\bkubernetes\b|k8s', {"kubernetes", "k8s", "infra"}),
+            (r'\bterraform\b', {"terraform", "infra"}),
+            (r'\baws\b', {"aws", "cloud"}),
+            (r'\bgcp\b', {"gcp", "cloud"}),
+            (r'\bazure\b', {"azure", "cloud"}),
+            (r'\bs3\b', {"s3", "aws", "cloud", "storage"}),
+        ]
+        for pattern, kws in lang_patterns:
+            if re.search(pattern, combined, re.IGNORECASE):
+                keywords.update(kws)
+        return keywords
+
+    @staticmethod
+    def _file_matches_domain(filepath: str, domain: dict) -> bool:
+        """Quick check: does this file path relate to this domain?"""
+        scope = (domain.get("scope", "") or "").lower()
+        name = (domain.get("display_name", "") or "").lower()
+        combined = f"{name} {scope}"
+        f_lower = filepath.lower()
+        parts = f_lower.replace("\\", "/").split("/")
+        tokens = set(re.split(r'[\s,;/\-_&|():.]+', combined))
+        return any(t in f_lower for t in tokens if len(t) >= 3) or \
+               any(p in combined for p in parts if len(p) >= 3)
 
     def _fallback_static_match(self, prs: list, owner: str, repo: str,
                                total_lines: int) -> StepResult:
