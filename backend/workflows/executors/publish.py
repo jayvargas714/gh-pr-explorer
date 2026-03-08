@@ -54,38 +54,63 @@ def build_gh_comment(synthesis: dict, mode: str = "team-review",
             "",
         ])
 
-    blocking = _collect_blocking(agreed, a_only, b_only)
+    holistic_blocking = synthesis.get("_holistic_blocking", [])
+    holistic_non_blocking = synthesis.get("_holistic_non_blocking", [])
+    cross_cutting = synthesis.get("_cross_cutting", [])
+
+    if holistic_blocking or holistic_non_blocking:
+        blocking = holistic_blocking
+        non_blocking_items = holistic_non_blocking
+    else:
+        blocking = _collect_blocking(agreed, a_only, b_only)
+        non_blocking_items = _collect_non_blocking(agreed, a_only, b_only)
+
     if blocking:
         lines.append("### Blocking Findings")
         lines.append("")
         for i, f in enumerate(blocking, 1):
-            inner = f.get("finding_a", f.get("finding", {}))
+            inner = f.get("finding_a", f.get("finding", f))
             loc = inner.get("location", {})
             file_ref = _format_file_ref(loc)
-            source = f.get("source", "")
-            lines.append(f'{i}. **{inner.get("title", "Untitled")}** [{source}] — `{file_ref}`')
-            if inner.get("problem"):
-                lines.append(f'   {inner["problem"]}')
+            source = f.get("source", f.get("domain", ""))
+            severity = inner.get("severity", "")
+            sev_tag = f" [{severity}]" if severity else ""
+            lines.append(f'{i}. **{inner.get("title", "Untitled")}**{sev_tag} — `{file_ref}`')
+            if inner.get("problem") or inner.get("description"):
+                lines.append(f'   {inner.get("problem") or inner.get("description")}')
             if inner.get("evidence"):
                 lines.append(f'   Evidence: {inner["evidence"]}')
-            if inner.get("fix"):
-                lines.append(f'   **Suggested fix:** {inner["fix"]}')
+            if inner.get("fix") or inner.get("suggestion"):
+                lines.append(f'   **Suggested fix:** {inner.get("fix") or inner.get("suggestion")}')
             lines.append("")
     else:
         lines.extend(["### Blocking Findings", "", "None — approving.", ""])
 
-    non_blocking = _collect_non_blocking(agreed, a_only, b_only)
-    if non_blocking:
+    if non_blocking_items:
         lines.append("### Non-Blocking Suggestions")
         lines.append("")
-        for i, f in enumerate(non_blocking, 1):
-            inner = f.get("finding_a", f.get("finding", {}))
+        for i, f in enumerate(non_blocking_items, 1):
+            inner = f.get("finding_a", f.get("finding", f))
             loc = inner.get("location", {})
             file_ref = _format_file_ref(loc)
-            source = f.get("source", "")
-            lines.append(f'{i}. **{inner.get("title", "Untitled")}** [{source}] — `{file_ref}`')
-            if inner.get("problem"):
-                lines.append(f'   {inner["problem"]}')
+            severity = inner.get("severity", "")
+            sev_tag = f" [{severity}]" if severity else ""
+            lines.append(f'{i}. **{inner.get("title", "Untitled")}**{sev_tag} — `{file_ref}`')
+            if inner.get("problem") or inner.get("description"):
+                lines.append(f'   {inner.get("problem") or inner.get("description")}')
+            lines.append("")
+
+    if cross_cutting:
+        lines.append("### Cross-Cutting Concerns")
+        lines.append("")
+        for i, cc in enumerate(cross_cutting, 1):
+            title = cc.get("title", "Untitled")
+            desc = cc.get("description", "")
+            domains = cc.get("domains", [])
+            domain_str = f" ({', '.join(domains)})" if domains else ""
+            lines.append(f"{i}. **{title}**{domain_str}")
+            if desc:
+                lines.append(f"   {desc}")
             lines.append("")
 
     questions = synthesis.get("questions", [])
@@ -164,10 +189,17 @@ class PublishExecutor(StepExecutor):
 
     def execute(self, inputs: dict) -> StepResult:
         synthesis = inputs.get("synthesis", {})
+        holistic = inputs.get("holistic", {})
         mode = inputs.get("mode", "team-review")
         owner = inputs.get("owner", "")
-        repo = inputs.get("repo", "")
+        repo_name = inputs.get("repo", "")
         freshness = inputs.get("freshness", [])
+        prs = inputs.get("prs", [])
+
+        if not owner or not repo_name:
+            full = inputs.get("full_repo", "")
+            if "/" in full:
+                owner, repo_name = full.split("/", 1)
 
         if mode == "self-review":
             return StepResult(
@@ -175,15 +207,24 @@ class PublishExecutor(StepExecutor):
                 outputs={"published": False, "reason": "self-review mode: local only"},
             )
 
+        if holistic:
+            synthesis = self._enrich_synthesis_with_holistic(synthesis, holistic)
+
+        fallback_pr = prs[0].get("number") if prs else None
+
         per_pr = synthesis.get("per_pr", [])
         if per_pr:
             results = []
             for pr_synth in per_pr:
-                result = self._publish_single_pr(pr_synth, owner, repo, mode, freshness)
+                if not pr_synth.get("pr_number") and fallback_pr:
+                    pr_synth = {**pr_synth, "pr_number": fallback_pr}
+                result = self._publish_single_pr(pr_synth, owner, repo_name, mode, freshness)
                 results.append(result)
             all_success = all(r.get("published", False) for r in results)
+            any_failed = any(not r.get("published", False) for r in results)
             return StepResult(
-                success=True,
+                success=not any_failed,
+                error="Some PRs failed to publish" if any_failed else None,
                 outputs={"published": results, "all_published": all_success},
                 artifacts=[
                     {"type": "gh_comment", "pr_number": r.get("pr_number"), "data": r}
@@ -191,7 +232,9 @@ class PublishExecutor(StepExecutor):
                 ],
             )
         else:
-            return self._publish_single_pr_result(synthesis, owner, repo, mode, freshness)
+            if not synthesis.get("pr_number") and fallback_pr:
+                synthesis = {**synthesis, "pr_number": fallback_pr}
+            return self._publish_single_pr_result(synthesis, owner, repo_name, mode, freshness)
 
     def _publish_single_pr(self, synthesis: dict, owner: str, repo: str,
                            mode: str, freshness: list) -> dict:
@@ -214,7 +257,9 @@ class PublishExecutor(StepExecutor):
         }
         gh_event = event_map.get(verdict, "COMMENT")
 
-        success = self._post_to_github(owner, repo, pr_number, comment_body, gh_event)
+        post_result = self._post_to_github(owner, repo, pr_number, comment_body, gh_event)
+        success = post_result.get("ok", False)
+        comment_url = post_result.get("url")
 
         instance_id = self.instance_config.get("_instance_id", 0)
         if success and verdict in ("CHANGES_REQUESTED", "NEEDS_DISCUSSION"):
@@ -229,6 +274,7 @@ class PublishExecutor(StepExecutor):
             "gh_event": gh_event,
             "body": comment_body,
             "posted": success,
+            "comment_url": comment_url,
         }
 
     def _publish_single_pr_result(self, synthesis: dict, owner: str, repo: str,
@@ -237,13 +283,18 @@ class PublishExecutor(StepExecutor):
         result = self._publish_single_pr(synthesis, owner, repo, mode, freshness)
         if "error" in result:
             return StepResult(success=False, error=result["error"])
+        posted = result.get("posted", False)
         return StepResult(
-            success=True,
+            success=posted,
+            error=f"Failed to post review to GitHub PR #{result.get('pr_number')}" if not posted else None,
             outputs={
                 "published": result["published"],
                 "pr_number": result["pr_number"],
                 "verdict": result["verdict"],
                 "gh_event": result["gh_event"],
+                "comment_url": result.get("comment_url"),
+                "comment_body": result.get("body"),
+                "event_type": result["gh_event"],
             },
             artifacts=[{
                 "type": "gh_comment",
@@ -252,6 +303,23 @@ class PublishExecutor(StepExecutor):
                          "posted": result["posted"]},
             }],
         )
+
+    @staticmethod
+    def _enrich_synthesis_with_holistic(synthesis: dict, holistic: dict) -> dict:
+        """Overlay holistic blocking/non-blocking onto synthesis for richer publication."""
+        enriched = dict(synthesis)
+        blocking = holistic.get("blocking_findings", [])
+        non_blocking = holistic.get("non_blocking_findings", [])
+        if blocking or non_blocking:
+            enriched["_holistic_blocking"] = blocking
+            enriched["_holistic_non_blocking"] = non_blocking
+        if holistic.get("verdict"):
+            enriched["verdict"] = holistic["verdict"]
+        if holistic.get("summary"):
+            enriched["summary"] = holistic["summary"]
+        if holistic.get("cross_cutting_findings"):
+            enriched["_cross_cutting"] = holistic["cross_cutting_findings"]
+        return enriched
 
     def _fetch_existing_findings(self, owner: str, repo: str, pr_number: int) -> set[str]:
         """Fetch titles/summaries of findings already raised by other reviewers."""
@@ -308,7 +376,7 @@ class PublishExecutor(StepExecutor):
         return filtered
 
     def _post_to_github(self, owner: str, repo: str, pr_number: int,
-                         body: str, event: str) -> bool:
+                         body: str, event: str) -> dict:
         if event in ("APPROVE", "REQUEST_CHANGES"):
             cmd = [
                 "gh", "pr", "review", str(pr_number),
@@ -327,16 +395,17 @@ class PublishExecutor(StepExecutor):
             ]
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             if result.returncode == 0:
                 logger.info(f"Published {event} review to {owner}/{repo} PR {pr_number}")
-                return True
+                url = result.stdout.strip() if result.stdout.strip().startswith("http") else None
+                return {"ok": True, "url": url}
             else:
                 logger.error(f"gh command failed: {result.stderr}")
-                return False
+                return {"ok": False, "error": result.stderr}
         except Exception as e:
             logger.error(f"Failed to publish to GitHub: {e}")
-            return False
+            return {"ok": False, "error": str(e)}
 
     @staticmethod
     def _create_followup_entries(owner: str, repo: str, pr_number: int,
