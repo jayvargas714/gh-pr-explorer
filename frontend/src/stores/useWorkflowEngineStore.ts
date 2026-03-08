@@ -27,6 +27,7 @@ interface WorkflowEngineState {
   startRun: (templateId: number, repo: string, config?: Record<string, unknown>) => Promise<number | null>
   approveGate: (instanceId: number, data?: Record<string, unknown>) => Promise<void>
   rejectGate: (instanceId: number, data?: Record<string, unknown>) => Promise<void>
+  reviseGate: (instanceId: number, feedback: string) => Promise<void>
   cancelRun: (instanceId: number) => Promise<void>
   clearError: () => void
 }
@@ -106,6 +107,17 @@ export const useWorkflowEngineStore = create<WorkflowEngineState>((set, get) => 
     set({ loading: true, error: null })
     try {
       await gateAction(instanceId, 'reject', data)
+      await get().fetchInstance(instanceId)
+      set({ loading: false })
+    } catch (e) {
+      set({ error: String(e), loading: false })
+    }
+  },
+
+  reviseGate: async (instanceId: number, feedback: string) => {
+    set({ loading: true, error: null })
+    try {
+      await gateAction(instanceId, 'revise', { feedback })
       await get().fetchInstance(instanceId)
       set({ loading: false })
     } catch (e) {

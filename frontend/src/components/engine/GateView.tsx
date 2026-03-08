@@ -26,7 +26,7 @@ function PromptReviewGate({ instance, gateOutputs, onBack }: {
   gateOutputs: Record<string, unknown>
   onBack: () => void
 }) {
-  const { approveGate, rejectGate, loading } = useWorkflowEngineStore()
+  const { approveGate, rejectGate, reviseGate, loading } = useWorkflowEngineStore()
   const payload = (gateOutputs?.gate_payload ?? gateOutputs) as Record<string, unknown>
   const initialPrompts = (payload.prompts ?? []) as Array<{
     pr_number?: number; pr_title?: string; domain?: string; prompt?: string; [key: string]: unknown
@@ -39,10 +39,15 @@ function PromptReviewGate({ instance, gateOutputs, onBack }: {
   const expertSource = payload.expert_source as string | undefined
   const domainCount = (payload.domain_count ?? 0) as number
   const promptsPerPr = (payload.prompts_per_pr ?? 0) as number
+  const feedbackHistory = (payload.feedback_history ?? []) as Array<{ feedback?: string; iteration?: number }>
+  const iteration = (payload.iteration ?? 1) as number
 
   const [editedPrompts, setEditedPrompts] = useState(initialPrompts.map(p => ({ ...p, enabled: true, editedText: p.prompt ?? '' })))
   const [submitting, setSubmitting] = useState(false)
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
+  const [showReviseForm, setShowReviseForm] = useState(false)
+  const [reviseFeedback, setReviseFeedback] = useState('')
+  const [showFeedbackHistory, setShowFeedbackHistory] = useState(false)
 
   const handleToggle = (idx: number) => {
     setEditedPrompts(prev => prev.map((p, i) => i === idx ? { ...p, enabled: !p.enabled } : p))
@@ -51,6 +56,8 @@ function PromptReviewGate({ instance, gateOutputs, onBack }: {
   const handleEdit = (idx: number, text: string) => {
     setEditedPrompts(prev => prev.map((p, i) => i === idx ? { ...p, editedText: text } : p))
   }
+
+  const hasEdits = editedPrompts.some((p, i) => p.editedText !== (initialPrompts[i]?.prompt ?? ''))
 
   const handleApprove = async () => {
     setSubmitting(true)
@@ -62,9 +69,19 @@ function PromptReviewGate({ instance, gateOutputs, onBack }: {
     onBack()
   }
 
-  const handleReject = async () => {
+  const handleRevise = async () => {
+    if (!reviseFeedback.trim()) return
+    if (hasEdits && !confirm('Revising will regenerate all experts and prompts. Your edits will be lost. Continue?')) return
     setSubmitting(true)
-    await rejectGate(instance.id, { reason: 'Prompts rejected by user' })
+    await reviseGate(instance.id, reviseFeedback.trim())
+    setSubmitting(false)
+    onBack()
+  }
+
+  const handleCancel = async () => {
+    if (!confirm('This will permanently cancel the workflow. Continue?')) return
+    setSubmitting(true)
+    await rejectGate(instance.id, { reason: 'Cancelled by user' })
     setSubmitting(false)
     onBack()
   }
@@ -78,8 +95,30 @@ function PromptReviewGate({ instance, gateOutputs, onBack }: {
         <div className="mx-gate-view__title">
           <h3>Prompt Review Gate — Run #{instance.id}</h3>
           <Badge variant="warning">Awaiting Prompt Review</Badge>
+          {iteration > 1 && <Badge variant="info" size="sm">Iteration {iteration}</Badge>}
         </div>
       </div>
+
+      {feedbackHistory.length > 0 && (
+        <div className="mx-gate-view__feedback-history">
+          <button
+            className="mx-gate-view__feedback-toggle"
+            onClick={() => setShowFeedbackHistory(!showFeedbackHistory)}
+          >
+            Previous Feedback ({feedbackHistory.length}) {showFeedbackHistory ? '▾' : '▸'}
+          </button>
+          {showFeedbackHistory && (
+            <div className="mx-gate-view__feedback-list">
+              {feedbackHistory.map((fb, i) => (
+                <div key={i} className="mx-gate-view__feedback-entry">
+                  <Badge variant="neutral" size="sm">Iteration {fb.iteration}</Badge>
+                  <span>{fb.feedback}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="mx-gate-view__stats">
         <div className="mx-gate-view__stat">
@@ -179,20 +218,51 @@ function PromptReviewGate({ instance, gateOutputs, onBack }: {
       </div>
 
       <div className="mx-gate-view__actions">
-        <Button
-          variant="primary"
-          onClick={handleApprove}
-          disabled={submitting || loading || enabledCount === 0}
-        >
-          {submitting ? <Spinner size="sm" /> : `Approve & Run Agents (${enabledCount} prompts)`}
-        </Button>
-        <Button
-          variant="danger"
-          onClick={handleReject}
-          disabled={submitting || loading}
-        >
-          Reject
-        </Button>
+        {!showReviseForm ? (
+          <>
+            <Button
+              variant="primary"
+              onClick={handleApprove}
+              disabled={submitting || loading || enabledCount === 0}
+            >
+              {submitting ? <Spinner size="sm" /> : `Approve & Run Agents (${enabledCount} prompts)`}
+            </Button>
+            <Button
+              variant="warning"
+              onClick={() => setShowReviseForm(true)}
+              disabled={submitting || loading}
+            >
+              Revise
+            </Button>
+            <button
+              className="mx-gate-view__cancel-link"
+              onClick={handleCancel}
+              disabled={submitting || loading}
+            >
+              Cancel Workflow
+            </button>
+          </>
+        ) : (
+          <div className="mx-gate-view__revise-form">
+            <textarea
+              className="mx-gate-view__reject-textarea"
+              placeholder="Describe what should change (e.g., &quot;add an expert for aerodynamic simulation code&quot;, &quot;prompts should emphasize thread safety&quot;)..."
+              value={reviseFeedback}
+              onChange={(e) => setReviseFeedback(e.target.value)}
+              rows={3}
+            />
+            <div className="mx-gate-view__reject-btns">
+              <Button
+                variant="warning"
+                onClick={handleRevise}
+                disabled={!reviseFeedback.trim() || submitting}
+              >
+                {submitting ? <Spinner size="sm" /> : 'Revise & Regenerate'}
+              </Button>
+              <Button variant="ghost" onClick={() => setShowReviseForm(false)}>Back</Button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -373,10 +443,10 @@ function ComparisonView({ reviews, perDomainSynthesis }: {
 }
 
 export function GateView({ instance, onBack }: GateViewProps) {
-  const { selectedInstance, fetchInstance, approveGate, rejectGate, loading } = useWorkflowEngineStore()
+  const { selectedInstance, fetchInstance, approveGate, rejectGate, reviseGate, loading } = useWorkflowEngineStore()
   const [tab, setTab] = useState<GateTab>('overview')
-  const [rejectReason, setRejectReason] = useState('')
-  const [showRejectForm, setShowRejectForm] = useState(false)
+  const [reviseFeedback, setReviseFeedback] = useState('')
+  const [showReviseForm, setShowReviseForm] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
   const inst = selectedInstance ?? instance
@@ -449,6 +519,10 @@ export function GateView({ instance, onBack }: GateViewProps) {
   const crossCuttingFindings = (holisticData.cross_cutting_findings ?? []) as Array<{ title?: string; domains?: string[]; description?: string; origin?: string }>
   const holisticSummary = holisticData.summary as string | undefined
 
+  const feedbackHistory = (gatePayload.feedback_history ?? []) as Array<{ feedback?: string; iteration?: number }>
+  const iteration = (gatePayload.iteration ?? 1) as number
+  const [showFeedbackHistory, setShowFeedbackHistory] = useState(false)
+
   const handleApprove = async () => {
     setSubmitting(true)
     await approveGate(inst.id)
@@ -456,10 +530,18 @@ export function GateView({ instance, onBack }: GateViewProps) {
     onBack()
   }
 
-  const handleReject = async () => {
-    if (!rejectReason.trim()) return
+  const handleRevise = async () => {
+    if (!reviseFeedback.trim()) return
     setSubmitting(true)
-    await rejectGate(inst.id, { reason: rejectReason.trim() })
+    await reviseGate(inst.id, reviseFeedback.trim())
+    setSubmitting(false)
+    onBack()
+  }
+
+  const handleCancel = async () => {
+    if (!confirm('This will permanently cancel the workflow. Continue?')) return
+    setSubmitting(true)
+    await rejectGate(inst.id, { reason: 'Cancelled by user' })
     setSubmitting(false)
     onBack()
   }
@@ -481,8 +563,30 @@ export function GateView({ instance, onBack }: GateViewProps) {
         <div className="mx-gate-view__title">
           <h3>Review Gate — Run #{inst.id}</h3>
           <Badge variant={isResolved ? 'success' : 'warning'}>{isResolved ? 'Resolved' : 'Awaiting Decision'}</Badge>
+          {iteration > 1 && <Badge variant="info" size="sm">Iteration {iteration}</Badge>}
         </div>
       </div>
+
+      {feedbackHistory.length > 0 && (
+        <div className="mx-gate-view__feedback-history">
+          <button
+            className="mx-gate-view__feedback-toggle"
+            onClick={() => setShowFeedbackHistory(!showFeedbackHistory)}
+          >
+            Previous Feedback ({feedbackHistory.length}) {showFeedbackHistory ? '▾' : '▸'}
+          </button>
+          {showFeedbackHistory && (
+            <div className="mx-gate-view__feedback-list">
+              {feedbackHistory.map((fb, i) => (
+                <div key={i} className="mx-gate-view__feedback-entry">
+                  <Badge variant="neutral" size="sm">Iteration {fb.iteration}</Badge>
+                  <span>{fb.feedback}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="mx-gate-view__stats">
         <div className="mx-gate-view__stat">
@@ -760,7 +864,7 @@ export function GateView({ instance, onBack }: GateViewProps) {
 
       {!isResolved && (
         <div className="mx-gate-view__actions">
-          {!showRejectForm ? (
+          {!showReviseForm ? (
             <>
               <Button
                 variant="primary"
@@ -770,31 +874,38 @@ export function GateView({ instance, onBack }: GateViewProps) {
                 {submitting ? <Spinner size="sm" /> : 'Approve & Continue'}
               </Button>
               <Button
-                variant="danger"
-                onClick={() => setShowRejectForm(true)}
+                variant="warning"
+                onClick={() => setShowReviseForm(true)}
                 disabled={submitting || loading}
               >
-                Reject
+                Revise
               </Button>
+              <button
+                className="mx-gate-view__cancel-link"
+                onClick={handleCancel}
+                disabled={submitting || loading}
+              >
+                Cancel Workflow
+              </button>
             </>
           ) : (
-            <div className="mx-gate-view__reject-form">
+            <div className="mx-gate-view__revise-form">
               <textarea
                 className="mx-gate-view__reject-textarea"
-                placeholder="Reason for rejection (required)..."
-                value={rejectReason}
-                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder="Describe what synthesis or holistic analysis should reconsider..."
+                value={reviseFeedback}
+                onChange={(e) => setReviseFeedback(e.target.value)}
                 rows={3}
               />
               <div className="mx-gate-view__reject-btns">
                 <Button
-                  variant="danger"
-                  onClick={handleReject}
-                  disabled={!rejectReason.trim() || submitting}
+                  variant="warning"
+                  onClick={handleRevise}
+                  disabled={!reviseFeedback.trim() || submitting}
                 >
-                  {submitting ? <Spinner size="sm" /> : 'Confirm Reject'}
+                  {submitting ? <Spinner size="sm" /> : 'Revise & Re-synthesize'}
                 </Button>
-                <Button variant="ghost" onClick={() => setShowRejectForm(false)}>Cancel</Button>
+                <Button variant="ghost" onClick={() => setShowReviseForm(false)}>Back</Button>
               </div>
             </div>
           )}

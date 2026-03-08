@@ -105,9 +105,9 @@ export async function getInstance(id: number): Promise<WorkflowInstance> {
 
 export async function gateAction(
   instanceId: number,
-  action: 'approve' | 'reject',
+  action: 'approve' | 'reject' | 'revise',
   data?: Record<string, unknown>
-): Promise<{ ok: boolean; status: string }> {
+): Promise<{ ok: boolean; status: string; retrying_from?: string; iteration?: number }> {
   return api.post(`/workflows/instances/${instanceId}/gate`, { action, ...data })
 }
 

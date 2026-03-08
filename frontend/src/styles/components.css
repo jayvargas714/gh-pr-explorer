@@ -77,6 +77,17 @@
   opacity: 0.9;
 }
 
+.mx-button--warning {
+  background-color: var(--mx-color-warning, #d97706);
+  color: #ffffff;
+  border-color: var(--mx-color-warning, #d97706);
+  font-weight: var(--mx-font-weight-bold);
+}
+
+.mx-button--warning:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
 .mx-button--ghost {
   background-color: transparent;
   color: var(--mx-color-text-secondary);
