@@ -1219,3 +1219,46 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Live agent output terminal */
+.mx-step-content__live {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-space-2);
+  height: 100%;
+}
+
+.mx-step-content__live-header {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-space-2);
+  font-size: var(--mx-font-sm);
+  font-weight: 500;
+  color: var(--mx-color-text-secondary);
+  padding: var(--mx-space-2) 0;
+}
+
+.mx-step-content__live-terminal {
+  flex: 1;
+  min-height: 300px;
+  max-height: 600px;
+  overflow-y: auto;
+  background: var(--mx-color-bg-tertiary, #1a1a2e);
+  color: var(--mx-color-text-on-dark, #e0e0e0);
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: var(--mx-space-3);
+  border-radius: var(--mx-radius-md);
+  border: 1px solid var(--mx-color-border);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mx-step-content__running {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-space-2);
+  padding: var(--mx-space-4);
+  color: var(--mx-color-text-secondary);
+}

@@ -1,5 +1,8 @@
+import { useEffect, useRef, useState } from 'react'
 import { Badge } from '../common/Badge'
+import { Spinner } from '../common/Spinner'
 import { FindingCard } from './FindingCard'
+import { getStepLiveOutput } from '../../api/workflow-engine'
 import type { WorkflowStep, WorkflowArtifact } from '../../api/workflow-engine'
 
 interface StepContentViewerProps {
@@ -317,7 +320,50 @@ const VIEWERS: Record<string, React.FC<{ content: ParsedContent; step: WorkflowS
   holistic_review: ({ content }) => <HolisticView content={content} />,
 }
 
-export function StepContentViewer({ step, artifacts }: StepContentViewerProps) {
+function LiveAgentOutput({ instanceId, stepId }: { instanceId: number; stepId: string }) {
+  const [output, setOutput] = useState('')
+  const termRef = useRef<HTMLPreElement>(null)
+
+  useEffect(() => {
+    let active = true
+    const poll = async () => {
+      try {
+        const text = await getStepLiveOutput(instanceId, stepId)
+        if (active && text) setOutput(text)
+      } catch { /* ignore */ }
+    }
+    poll()
+    const iv = setInterval(poll, 3000)
+    return () => { active = false; clearInterval(iv) }
+  }, [instanceId, stepId])
+
+  useEffect(() => {
+    if (termRef.current) {
+      termRef.current.scrollTop = termRef.current.scrollHeight
+    }
+  }, [output])
+
+  if (!output) {
+    return (
+      <div className="mx-step-content__running">
+        <Spinner size="sm" />
+        <span>Agent is working... waiting for output</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mx-step-content__live">
+      <div className="mx-step-content__live-header">
+        <Spinner size="sm" />
+        <span>Agent output (live)</span>
+      </div>
+      <pre ref={termRef} className="mx-step-content__live-terminal">{output}</pre>
+    </div>
+  )
+}
+
+export function StepContentViewer({ step, artifacts, instanceId }: StepContentViewerProps & { instanceId?: number }) {
   const stepArtifacts = artifacts.filter((a) => a.step_id === step.step_id)
   const Viewer = VIEWERS[step.step_type] ?? (({ content }: { content: ParsedContent }) => <DefaultView content={content} />)
 
@@ -326,7 +372,10 @@ export function StepContentViewer({ step, artifacts }: StepContentViewerProps) {
   }
 
   if (step.status === 'running') {
-    return <div className="mx-step-content__running">Step in progress...</div>
+    if (step.step_type === 'agent_review' && instanceId) {
+      return <LiveAgentOutput instanceId={instanceId} stepId={step.step_id} />
+    }
+    return <div className="mx-step-content__running"><Spinner size="sm" /> Step in progress...</div>
   }
 
   if (step.error_message) {

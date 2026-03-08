@@ -1,6 +1,7 @@
 """Agent Review step — dispatches prompts to a configured AI agent and collects results."""
 
 import logging
+import threading
 import time
 
 from backend.agents import get_agent, AgentStatus
@@ -11,6 +12,28 @@ logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL = 5
 
+_live_output_store: dict[str, str] = {}
+_live_output_lock = threading.Lock()
+
+
+def get_agent_live_output(instance_id: int, step_id: str) -> str:
+    """Retrieve live agent output for a running step (called from the API layer)."""
+    key = f"{instance_id}:{step_id}"
+    with _live_output_lock:
+        return _live_output_store.get(key, "")
+
+
+def _set_live_output(instance_id: int, step_id: str, text: str):
+    key = f"{instance_id}:{step_id}"
+    with _live_output_lock:
+        _live_output_store[key] = text
+
+
+def _clear_live_output(instance_id: int, step_id: str):
+    key = f"{instance_id}:{step_id}"
+    with _live_output_lock:
+        _live_output_store.pop(key, None)
+
 
 @register_step("agent_review")
 class AgentReviewExecutor(StepExecutor):
@@ -18,6 +41,8 @@ class AgentReviewExecutor(StepExecutor):
     def execute(self, inputs: dict) -> StepResult:
         agent_name = self.step_config.get("agent", "claude")
         prompts = inputs.get("prompts", [])
+        inst_id = self.instance_config.get("_instance_id", 0)
+        step_id = self.step_config.get("_step_id", "")
 
         if not prompts:
             return StepResult(success=False, error="No prompts provided to agent_review step")
@@ -55,6 +80,10 @@ class AgentReviewExecutor(StepExecutor):
                 status = agent.check_status(handle)
                 if status in (AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED):
                     break
+                if inst_id and step_id:
+                    live = agent.get_live_output(handle)
+                    if live:
+                        _set_live_output(inst_id, step_id, live)
                 time.sleep(_POLL_INTERVAL)
 
             if status == AgentStatus.COMPLETED:
@@ -77,6 +106,9 @@ class AgentReviewExecutor(StepExecutor):
                     "agent_name": agent_name,
                     "error": artifact.error,
                 })
+
+        if inst_id and step_id:
+            _clear_live_output(inst_id, step_id)
 
         completed_reviews = [r for r in reviews if r["status"] == "completed"]
         failed_reviews = [r for r in reviews if r["status"] == "failed"]

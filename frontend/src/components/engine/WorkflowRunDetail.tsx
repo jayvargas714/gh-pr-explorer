@@ -171,7 +171,7 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
                 </Badge>
               </div>
               <div className="mx-run-detail__content-body">
-                <StepContentViewer step={selectedStep} artifacts={artifacts} />
+                <StepContentViewer step={selectedStep} artifacts={artifacts} instanceId={inst.id} />
               </div>
             </>
           ) : (

@@ -122,3 +122,8 @@ export async function listAgents(): Promise<Agent[]> {
 export async function getAvailableStepTypes(): Promise<{ available: string[] }> {
   return api.get<{ available: string[] }>('/step-types')
 }
+
+export async function getStepLiveOutput(instanceId: number, stepId: string): Promise<string> {
+  const res = await api.get<{ output: string }>(`/workflows/instances/${instanceId}/steps/${stepId}/live`)
+  return res.output
+}

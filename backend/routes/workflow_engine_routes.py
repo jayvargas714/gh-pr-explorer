@@ -233,6 +233,13 @@ def cancel_instance(instance_id):
     return jsonify({"ok": True})
 
 
+@workflow_engine_bp.route("/api/workflows/instances/<int:instance_id>/steps/<step_id>/live", methods=["GET"])
+def get_step_live_output(instance_id, step_id):
+    from backend.workflows.executors.agent_review import get_agent_live_output
+    text = get_agent_live_output(instance_id, step_id)
+    return jsonify({"output": text})
+
+
 # --- Agents ---
 
 @workflow_engine_bp.route("/api/agents", methods=["GET"])

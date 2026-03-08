@@ -3,6 +3,7 @@
 import json
 import logging
 import subprocess
+import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -47,6 +48,25 @@ class _ProcessState:
         self.stdout: Optional[str] = None
         self.stderr: Optional[str] = None
         self.exit_code: Optional[int] = None
+        self._live_lines: list[str] = []
+        self._lock = threading.Lock()
+        self._reader_thread = threading.Thread(target=self._read_stdout, daemon=True)
+        self._reader_thread.start()
+
+    def _read_stdout(self):
+        try:
+            for line in self.process.stdout:
+                with self._lock:
+                    self._live_lines.append(line)
+                    if len(self._live_lines) > 500:
+                        self._live_lines = self._live_lines[-300:]
+        except (ValueError, OSError):
+            pass
+
+    def get_live_text(self, tail: int = 200) -> str:
+        with self._lock:
+            lines = self._live_lines[-tail:]
+        return "".join(lines)
 
 
 class ClaudeCLIAgent(AgentBackend):
@@ -114,15 +134,23 @@ class ClaudeCLIAgent(AgentBackend):
         if exit_code is None:
             return AgentStatus.RUNNING
 
+        state._reader_thread.join(timeout=2)
+        state.stdout = state.get_live_text()
+
         try:
-            stdout, stderr = state.process.communicate(timeout=1)
-            state.stdout = stdout.strip()[-500:] if stdout else None
+            stderr = state.process.stderr.read() if state.process.stderr else None
             state.stderr = stderr.strip()[-2000:] if stderr else None
-        except (subprocess.TimeoutExpired, Exception):
+        except Exception:
             pass
 
         state.exit_code = exit_code
         return AgentStatus.COMPLETED if exit_code == 0 else AgentStatus.FAILED
+
+    def get_live_output(self, handle: AgentHandle) -> str:
+        state = self._processes.get(handle.handle_id)
+        if state is None:
+            return ""
+        return state.get_live_text()
 
     def get_output(self, handle: AgentHandle) -> ReviewArtifact:
         state = self._processes.get(handle.handle_id)

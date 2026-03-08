@@ -50,55 +50,139 @@ class WorkflowRuntime:
                     self._update_step_status(step_id, "failed", error=error_msg)
             return {"status": "failed", "outputs": {}, "error": error_msg}
 
-        topo_order = self._topological_sort()
+        levels = self._parallel_levels()
         step_outputs: dict[str, dict] = {}
         all_outputs = dict(initial_inputs)
 
-        for step_id in topo_order:
-            step_def = self.steps[step_id]
-            step_type = step_def["type"]
-            step_config = step_def.get("config", {})
+        for level in levels:
+            if len(level) == 1:
+                result = self._execute_single_step(
+                    level[0], step_outputs, all_outputs, instance_config
+                )
+                if result is not None:
+                    return result
+            else:
+                result = self._execute_parallel_steps(
+                    level, step_outputs, all_outputs, instance_config
+                )
+                if result is not None:
+                    return result
 
+        return {"status": "completed", "outputs": all_outputs}
+
+    def _execute_single_step(self, step_id: str, step_outputs: dict,
+                              all_outputs: dict, instance_config: dict) -> Optional[dict]:
+        """Run one step. Returns a result dict if the workflow should stop, else None."""
+        step_def = self.steps[step_id]
+        step_type = step_def["type"]
+        step_config = step_def.get("config", {})
+
+        upstream_ids = self._get_upstream(step_id)
+        inputs = dict(all_outputs)
+        for uid in upstream_ids:
+            if uid in step_outputs:
+                self._merge_outputs(inputs, step_outputs[uid])
+
+        self._update_step_status(step_id, "running")
+
+        try:
+            executor_cls = get_executor_class(step_type)
+            enriched_config = {**step_config, "_step_id": step_id}
+            enriched_inst = {**instance_config, "_instance_id": self.instance_id}
+            executor = executor_cls(step_config=enriched_config, instance_config=enriched_inst)
+            result = executor.execute(inputs)
+        except Exception as e:
+            logger.error(f"Step {step_id} ({step_type}) failed: {e}")
+            self._update_step_status(step_id, "failed", error=str(e))
+            return {"status": "failed", "outputs": all_outputs, "error": str(e)}
+
+        if not result.success:
+            self._update_step_status(step_id, "failed", error=result.error)
+            return {"status": "failed", "outputs": all_outputs, "error": result.error}
+
+        if result.awaiting_gate:
+            self._update_step_status(step_id, "awaiting_gate")
+            self._save_gate_payload(step_id, result.gate_payload)
+            return {
+                "status": "awaiting_gate",
+                "outputs": all_outputs,
+                "gate_step_id": step_id,
+                "gate_payload": result.gate_payload,
+            }
+
+        step_outputs[step_id] = result.outputs
+        all_outputs.update(result.outputs)
+        self._update_step_status(step_id, "completed")
+        self._save_step_outputs(step_id, result.outputs)
+
+        for artifact in result.artifacts:
+            self._save_artifact(step_id, artifact)
+
+        return None
+
+    def _execute_parallel_steps(self, step_ids: list[str], step_outputs: dict,
+                                 all_outputs: dict, instance_config: dict) -> Optional[dict]:
+        """Run multiple steps concurrently. Returns a result dict if workflow should stop, else None."""
+        logger.info(f"Running {len(step_ids)} steps in parallel: {step_ids}")
+
+        per_step_inputs = {}
+        for step_id in step_ids:
             upstream_ids = self._get_upstream(step_id)
             inputs = dict(all_outputs)
             for uid in upstream_ids:
                 if uid in step_outputs:
                     self._merge_outputs(inputs, step_outputs[uid])
+            per_step_inputs[step_id] = inputs
 
-            self._update_step_status(step_id, "running")
+        for sid in step_ids:
+            self._update_step_status(sid, "running")
 
-            try:
+        futures = {}
+        with ThreadPoolExecutor(max_workers=len(step_ids)) as pool:
+            for step_id in step_ids:
+                step_def = self.steps[step_id]
+                step_type = step_def["type"]
+                step_config = step_def.get("config", {})
+
                 executor_cls = get_executor_class(step_type)
-                executor = executor_cls(step_config=step_config, instance_config=instance_config)
-                result = executor.execute(inputs)
-            except Exception as e:
-                logger.error(f"Step {step_id} ({step_type}) failed: {e}")
-                self._update_step_status(step_id, "failed", error=str(e))
-                return {"status": "failed", "outputs": all_outputs, "error": str(e)}
+                enriched_config = {**step_config, "_step_id": step_id}
+                enriched_inst = {**instance_config, "_instance_id": self.instance_id}
+                executor = executor_cls(step_config=enriched_config, instance_config=enriched_inst)
 
-            if not result.success:
-                self._update_step_status(step_id, "failed", error=result.error)
-                return {"status": "failed", "outputs": all_outputs, "error": result.error}
+                future = pool.submit(executor.execute, per_step_inputs[step_id])
+                futures[future] = step_id
 
-            if result.awaiting_gate:
-                self._update_step_status(step_id, "awaiting_gate")
-                self._save_gate_payload(step_id, result.gate_payload)
-                return {
-                    "status": "awaiting_gate",
-                    "outputs": all_outputs,
-                    "gate_step_id": step_id,
-                    "gate_payload": result.gate_payload,
-                }
+            for future in as_completed(futures):
+                step_id = futures[future]
+                step_type = self.steps[step_id]["type"]
+                try:
+                    result = future.result()
+                except Exception as e:
+                    logger.error(f"Step {step_id} ({step_type}) failed: {e}")
+                    self._update_step_status(step_id, "failed", error=str(e))
+                    return {"status": "failed", "outputs": all_outputs, "error": str(e)}
 
-            step_outputs[step_id] = result.outputs
-            all_outputs.update(result.outputs)
-            self._update_step_status(step_id, "completed")
-            self._save_step_outputs(step_id, result.outputs)
+                if not result.success:
+                    self._update_step_status(step_id, "failed", error=result.error)
+                    return {"status": "failed", "outputs": all_outputs, "error": result.error}
 
-            for artifact in result.artifacts:
-                self._save_artifact(step_id, artifact)
+                if result.awaiting_gate:
+                    self._update_step_status(step_id, "awaiting_gate")
+                    self._save_gate_payload(step_id, result.gate_payload)
+                    return {
+                        "status": "awaiting_gate", "outputs": all_outputs,
+                        "gate_step_id": step_id, "gate_payload": result.gate_payload,
+                    }
 
-        return {"status": "completed", "outputs": all_outputs}
+                step_outputs[step_id] = result.outputs
+                self._merge_outputs(all_outputs, result.outputs)
+                self._update_step_status(step_id, "completed")
+                self._save_step_outputs(step_id, result.outputs)
+
+                for artifact in result.artifacts:
+                    self._save_artifact(step_id, artifact)
+
+        return None
 
     def execute_fan_out(self, step_id: str, items: list, inputs: dict, instance_config: dict,
                         max_parallel: int = 4) -> list[StepResult]:
@@ -158,7 +242,9 @@ class WorkflowRuntime:
 
             try:
                 executor_cls = get_executor_class(step_type)
-                executor = executor_cls(step_config=step_config, instance_config=instance_config)
+                enriched_config = {**step_config, "_step_id": step_id}
+                enriched_inst = {**instance_config, "_instance_id": self.instance_id}
+                executor = executor_cls(step_config=enriched_config, instance_config=enriched_inst)
                 result = executor.execute(all_outputs)
             except Exception as e:
                 self._update_step_status(step_id, "failed", error=str(e))
@@ -241,6 +327,37 @@ class WorkflowRuntime:
             raise ValueError("Workflow template contains a cycle")
 
         return result
+
+    def _parallel_levels(self) -> list[list[str]]:
+        """Group steps into execution levels. Steps in the same level share no
+        dependency on each other and can run concurrently."""
+        in_degree = defaultdict(int)
+        adjacency = defaultdict(list)
+        all_step_ids = set(self.steps.keys())
+
+        for edge in self.edges:
+            src, dst = edge["from"], edge["to"]
+            adjacency[src].append(dst)
+            in_degree[dst] += 1
+
+        for sid in all_step_ids:
+            if sid not in in_degree:
+                in_degree[sid] = 0
+
+        levels: list[list[str]] = []
+        queue = [sid for sid in all_step_ids if in_degree[sid] == 0]
+
+        while queue:
+            levels.append(sorted(queue))
+            next_queue = []
+            for node in queue:
+                for neighbor in adjacency[node]:
+                    in_degree[neighbor] -= 1
+                    if in_degree[neighbor] == 0:
+                        next_queue.append(neighbor)
+            queue = next_queue
+
+        return levels
 
     @staticmethod
     def _merge_outputs(target: dict, source: dict):
