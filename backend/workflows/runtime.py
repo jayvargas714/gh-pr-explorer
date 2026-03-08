@@ -200,6 +200,12 @@ class WorkflowRuntime:
                 for artifact in result.artifacts:
                     self._save_artifact(step_id, artifact)
 
+        if early_exit is not None and early_exit["status"] == "failed":
+            for f, sid in futures.items():
+                if sid not in step_outputs:
+                    self._update_step_status(sid, "cancelled",
+                                             error="Cancelled: sibling step failed")
+
         return early_exit
 
     def execute_fan_out(self, step_id: str, items: list, inputs: dict, instance_config: dict,
@@ -425,7 +431,7 @@ class WorkflowRuntime:
 
         return levels
 
-    _MERGEABLE_LIST_KEYS = {"reviews"}
+    _MERGEABLE_LIST_KEYS = {"reviews", "findings", "followup_results"}
 
     @staticmethod
     def _merge_outputs(target: dict, source: dict):
@@ -469,6 +475,11 @@ class WorkflowRuntime:
                 self.db.save_gate_payload(self.instance_id, step_id, payload)
             except Exception as e:
                 logger.warning(f"Failed to save gate payload: {e}")
+
+
+def merge_outputs(target: dict, source: dict):
+    """Module-level alias for WorkflowRuntime._merge_outputs."""
+    WorkflowRuntime._merge_outputs(target, source)
 
 
 def validate_template(template: dict) -> list[str]:

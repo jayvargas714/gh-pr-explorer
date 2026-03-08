@@ -237,6 +237,9 @@ class SynthesisExecutor(StepExecutor):
 
     def _ai_verify(self, mechanical_result: StepResult, reviews: list, inputs: dict) -> StepResult:
         """Dispatch per-domain AI agents in parallel to verify mechanical synthesis."""
+        from backend.workflows.cancellation import (
+            is_cancelled, register_agent, unregister_agent, AGENT_POLL_TIMEOUT,
+        )
         synthesis = mechanical_result.outputs.get("synthesis", {})
         owner = inputs.get("owner", "")
         repo = inputs.get("repo", "")
@@ -255,7 +258,6 @@ class SynthesisExecutor(StepExecutor):
         if not per_domain:
             return self._ai_verify_single(agent, synthesis, reviews, owner, repo, prs, inst_id, step_id)
 
-        # Group reviews by domain
         reviews_by_domain: dict[str, dict] = {}
         for r in reviews:
             domain = r.get("domain", "general")
@@ -297,9 +299,20 @@ class SynthesisExecutor(StepExecutor):
 
             try:
                 handle = agent.start_review(prompt, context)
+                if inst_id:
+                    register_agent(inst_id, agent, handle)
+                elapsed = 0
                 while True:
+                    if inst_id and is_cancelled(inst_id):
+                        agent.cancel(handle)
+                        domain_synth["ai_verified"] = False
+                        return domain_synth
                     status = agent.check_status(handle)
                     if status in (AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED):
+                        break
+                    if elapsed >= AGENT_POLL_TIMEOUT:
+                        logger.error(f"AI verify timed out for domain {domain} after {elapsed}s")
+                        agent.cancel(handle)
                         break
                     live = agent.get_live_output(handle)
                     if live and inst_id and step_id:
@@ -310,11 +323,16 @@ class SynthesisExecutor(StepExecutor):
                             )
                         _set_live_output(inst_id, step_id, composite)
                     time.sleep(5)
+                    elapsed += 5
 
+                if inst_id:
+                    unregister_agent(inst_id, handle)
                 if status == AgentStatus.COMPLETED:
                     artifact = agent.get_output(handle)
+                    agent.cleanup(handle)
                     return self._parse_domain_verification(artifact.content_md, domain_synth)
                 else:
+                    agent.cleanup(handle)
                     logger.warning(f"AI verification failed for domain {domain}")
                     domain_synth["ai_verified"] = False
                     return domain_synth
@@ -344,6 +362,9 @@ class SynthesisExecutor(StepExecutor):
                           owner: str, repo: str, prs: list,
                           inst_id: int, step_id: str) -> StepResult:
         """Fallback: single AI verification for team-review (no per-domain)."""
+        from backend.workflows.cancellation import (
+            is_cancelled, register_agent, unregister_agent, AGENT_POLL_TIMEOUT,
+        )
         review_a = next((r for r in reviews if r.get("phase") == "a"), reviews[0] if reviews else None)
         review_b = next((r for r in reviews if r.get("phase") == "b"), reviews[1] if len(reviews) > 1 else None)
 
@@ -363,22 +384,37 @@ class SynthesisExecutor(StepExecutor):
 
         try:
             handle = agent.start_review(prompt, context)
+            if inst_id:
+                register_agent(inst_id, agent, handle)
+            elapsed = 0
             while True:
+                if inst_id and is_cancelled(inst_id):
+                    agent.cancel(handle)
+                    break
                 status = agent.check_status(handle)
                 if status in (AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED):
+                    break
+                if elapsed >= AGENT_POLL_TIMEOUT:
+                    logger.error(f"AI verify single timed out after {elapsed}s")
+                    agent.cancel(handle)
                     break
                 live = agent.get_live_output(handle)
                 if live and inst_id and step_id:
                     _set_live_output(inst_id, step_id, live)
                 time.sleep(5)
+                elapsed += 5
 
+            if inst_id:
+                unregister_agent(inst_id, handle)
             if inst_id and step_id:
                 _clear_live_output(inst_id, step_id)
 
             if status == AgentStatus.COMPLETED:
                 artifact = agent.get_output(handle)
+                agent.cleanup(handle)
                 verified = self._parse_domain_verification(artifact.content_md, synthesis)
                 return StepResult(success=True, outputs={"synthesis": verified})
+            agent.cleanup(handle)
         except Exception as e:
             logger.error(f"AI verify single error: {e}")
             if inst_id and step_id:
@@ -495,14 +531,26 @@ class SynthesisExecutor(StepExecutor):
         if fenced:
             text = fenced[0].strip()
 
-        # Brace-depth extraction
         data = None
         try:
             data = json_mod.loads(text)
         except json_mod.JSONDecodeError:
             depth = 0
             start_idx = -1
+            in_string = False
+            escape = False
             for i, ch in enumerate(text):
+                if escape:
+                    escape = False
+                    continue
+                if ch == '\\' and in_string:
+                    escape = True
+                    continue
+                if ch == '"' and not escape:
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
                 if ch == '{':
                     if depth == 0:
                         start_idx = i

@@ -25,12 +25,17 @@ export function ExpertDomainManager({ onClose }: ExpertDomainManagerProps) {
     checklist: [] as string[], anti_patterns: [] as string[],
   })
 
+  const [error, setError] = useState<string | null>(null)
+
   const refresh = async () => {
     setLoading(true)
+    setError(null)
     try {
       const data = await listExpertDomains()
       setDomains(data)
-    } catch { /* ignore */ }
+    } catch (e) {
+      setError(`Failed to load domains: ${e}`)
+    }
     setLoading(false)
   }
 
@@ -64,6 +69,12 @@ export function ExpertDomainManager({ onClose }: ExpertDomainManagerProps) {
 
   return (
     <div className="mx-domain-mgr">
+      {error && (
+        <div className="mx-alert mx-alert--error" style={{ marginBottom: 'var(--mx-space-4)' }}>
+          <div className="mx-alert__content">{error}</div>
+          <button className="mx-alert__close" onClick={() => setError(null)}>x</button>
+        </div>
+      )}
       <div className="mx-domain-mgr__header">
         <h3>Expert Domain Catalog</h3>
         <div>

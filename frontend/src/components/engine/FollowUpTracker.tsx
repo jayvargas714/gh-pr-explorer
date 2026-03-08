@@ -34,12 +34,17 @@ export function FollowUpTracker({ repo, onClose }: FollowUpTrackerProps) {
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState<number | null>(null)
 
+  const [error, setError] = useState<string | null>(null)
+
   const refresh = async () => {
     setLoading(true)
+    setError(null)
     try {
       const data = await listFollowups(repo || undefined)
       setFollowups(data)
-    } catch { /* ignore */ }
+    } catch (e) {
+      setError(`Failed to load follow-ups: ${e}`)
+    }
     setLoading(false)
   }
 
@@ -54,6 +59,12 @@ export function FollowUpTracker({ repo, onClose }: FollowUpTrackerProps) {
         <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
       </div>
 
+      {error && (
+        <div className="mx-alert mx-alert--error" style={{ marginBottom: 'var(--mx-space-4)' }}>
+          <div className="mx-alert__content">{error}</div>
+          <button className="mx-alert__close" onClick={() => setError(null)}>x</button>
+        </div>
+      )}
       {followups.length === 0 ? (
         <p className="mx-followup__empty">No follow-ups yet. Published reviews with blocking findings will appear here.</p>
       ) : (

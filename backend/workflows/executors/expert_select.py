@@ -93,7 +93,8 @@ class ExpertSelectExecutor(StepExecutor):
 
         full_repo = f"{owner}/{repo}"
 
-        if full_repo == "scala-computing/scala":
+        static_match_repos = self.step_config.get("static_match_repos", [])
+        if full_repo in static_match_repos:
             return self._static_domain_match_flow(prs, owner, repo)
 
         return self._ai_expert_generation_flow(prs, owner, repo, full_repo, inputs)
@@ -244,6 +245,9 @@ class ExpertSelectExecutor(StepExecutor):
         )
 
     def _dispatch_ai_agent(self, prompt: str, owner: str, repo: str) -> list[dict] | None:
+        from backend.workflows.cancellation import (
+            is_cancelled, register_agent, unregister_agent, AGENT_POLL_TIMEOUT,
+        )
         agent_name = self.step_config.get("agent", "cursor-opus")
         inst_id = self.instance_config.get("_instance_id", 0)
         step_id = self.step_config.get("_step_id", "")
@@ -262,18 +266,34 @@ class ExpertSelectExecutor(StepExecutor):
             logger.error(f"Failed to start expert generation agent: {e}")
             return None
 
+        if inst_id:
+            register_agent(inst_id, agent, handle)
+
+        elapsed = 0
         while True:
+            if inst_id and is_cancelled(inst_id):
+                agent.cancel(handle)
+                return None
             status = agent.check_status(handle)
             if status in (AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED):
                 break
+            if elapsed >= AGENT_POLL_TIMEOUT:
+                logger.error(f"Expert generation timed out after {elapsed}s")
+                agent.cancel(handle)
+                return None
             if inst_id and step_id:
                 live = agent.get_live_output(handle)
                 if live:
                     _set_live_output(inst_id, step_id, live)
             time.sleep(_POLL_INTERVAL)
+            elapsed += _POLL_INTERVAL
 
+        if inst_id:
+            unregister_agent(inst_id, handle)
         if inst_id and step_id:
             _clear_live_output(inst_id, step_id)
+
+        agent.cleanup(handle)
 
         if status != AgentStatus.COMPLETED:
             artifact = agent.get_output(handle)
@@ -312,11 +332,23 @@ class ExpertSelectExecutor(StepExecutor):
         except json.JSONDecodeError:
             pass
 
-        # Second try: extract the outermost { ... } block
         if data is None:
             depth = 0
             start_idx = -1
+            in_string = False
+            escape = False
             for i, ch in enumerate(text):
+                if escape:
+                    escape = False
+                    continue
+                if ch == '\\' and in_string:
+                    escape = True
+                    continue
+                if ch == '"' and not escape:
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
                 if ch == '{':
                     if depth == 0:
                         start_idx = i

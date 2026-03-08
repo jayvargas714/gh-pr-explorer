@@ -20,10 +20,23 @@ export interface WorkflowStep {
   started_at?: string
   completed_at?: string
   error_message?: string
-  outputs_json?: string | null
+  outputs_json?: string | Record<string, unknown> | null
   step_config_json?: string | null
   agent_id?: number | null
   inputs_json?: string | null
+}
+
+/**
+ * Safely parse outputs_json which may be a string, object, or null.
+ */
+export function parseContent(raw: string | Record<string, unknown> | null | undefined): Record<string, unknown> | null {
+  if (!raw) return null
+  if (typeof raw === 'object') return raw
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
 }
 
 export interface WorkflowArtifact {

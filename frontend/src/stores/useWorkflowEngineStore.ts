@@ -18,6 +18,9 @@ interface WorkflowEngineState {
   agents: Agent[]
   selectedInstance: WorkflowInstance | null
   loading: boolean
+  loadingInstances: boolean
+  loadingInstance: boolean
+  submitting: boolean
   error: string | null
 
   fetchTemplates: () => Promise<void>
@@ -38,6 +41,9 @@ export const useWorkflowEngineStore = create<WorkflowEngineState>((set, get) => 
   agents: [],
   selectedInstance: null,
   loading: false,
+  loadingInstances: false,
+  loadingInstance: false,
+  submitting: false,
   error: null,
 
   fetchTemplates: async () => {
@@ -51,22 +57,22 @@ export const useWorkflowEngineStore = create<WorkflowEngineState>((set, get) => 
   },
 
   fetchInstances: async (repo?: string) => {
-    set({ loading: true, error: null })
+    set({ loadingInstances: true })
     try {
       const instances = await listInstances(repo)
-      set({ instances, loading: false })
+      set({ instances, loadingInstances: false })
     } catch (e) {
-      set({ error: String(e), loading: false })
+      set({ error: String(e), loadingInstances: false })
     }
   },
 
   fetchInstance: async (id: number) => {
-    set({ loading: true, error: null })
+    set({ loadingInstance: true })
     try {
       const instance = await getInstance(id)
-      set({ selectedInstance: instance, loading: false })
+      set({ selectedInstance: instance, loadingInstance: false })
     } catch (e) {
-      set({ error: String(e), loading: false })
+      set({ error: String(e), loadingInstance: false })
     }
   },
 
@@ -80,48 +86,48 @@ export const useWorkflowEngineStore = create<WorkflowEngineState>((set, get) => 
   },
 
   startRun: async (templateId: number, repo: string, config?: Record<string, unknown>) => {
-    set({ loading: true, error: null })
+    set({ submitting: true, error: null })
     try {
       const result = await runWorkflow({ template_id: templateId, repo, config })
       await get().fetchInstances()
-      set({ loading: false })
+      set({ submitting: false })
       return result.id
     } catch (e) {
-      set({ error: String(e), loading: false })
+      set({ error: String(e), submitting: false })
       return null
     }
   },
 
   approveGate: async (instanceId: number, data?: Record<string, unknown>) => {
-    set({ loading: true, error: null })
+    set({ submitting: true, error: null })
     try {
       await gateAction(instanceId, 'approve', data)
       await get().fetchInstance(instanceId)
-      set({ loading: false })
+      set({ submitting: false })
     } catch (e) {
-      set({ error: String(e), loading: false })
+      set({ error: String(e), submitting: false })
     }
   },
 
   rejectGate: async (instanceId: number, data?: Record<string, unknown>) => {
-    set({ loading: true, error: null })
+    set({ submitting: true, error: null })
     try {
       await gateAction(instanceId, 'reject', data)
       await get().fetchInstance(instanceId)
-      set({ loading: false })
+      set({ submitting: false })
     } catch (e) {
-      set({ error: String(e), loading: false })
+      set({ error: String(e), submitting: false })
     }
   },
 
   reviseGate: async (instanceId: number, feedback: string) => {
-    set({ loading: true, error: null })
+    set({ submitting: true, error: null })
     try {
       await gateAction(instanceId, 'revise', { feedback })
       await get().fetchInstance(instanceId)
-      set({ loading: false })
+      set({ submitting: false })
     } catch (e) {
-      set({ error: String(e), loading: false })
+      set({ error: String(e), submitting: false })
     }
   },
 

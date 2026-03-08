@@ -7,7 +7,7 @@ import threading
 from flask import Blueprint, request, jsonify, Response
 
 from backend.database import get_workflow_db
-from backend.workflows.runtime import WorkflowRuntime, validate_template
+from backend.workflows.runtime import WorkflowRuntime, validate_template, merge_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -191,8 +191,28 @@ def get_instance(instance_id):
     return jsonify(instance)
 
 
+_gate_locks: dict[int, threading.Lock] = {}
+_gate_locks_lock = threading.Lock()
+
+def _get_gate_lock(instance_id: int) -> threading.Lock:
+    with _gate_locks_lock:
+        if instance_id not in _gate_locks:
+            _gate_locks[instance_id] = threading.Lock()
+        return _gate_locks[instance_id]
+
+
 @workflow_engine_bp.route("/api/workflows/instances/<int:instance_id>/gate", methods=["POST"])
 def gate_action(instance_id):
+    lock = _get_gate_lock(instance_id)
+    if not lock.acquire(blocking=False):
+        return jsonify({"error": "Gate action already in progress"}), 409
+    try:
+        return _gate_action_inner(instance_id)
+    finally:
+        lock.release()
+
+
+def _gate_action_inner(instance_id):
     db = get_workflow_db()
     instance = db.get_instance(instance_id)
     if not instance:
@@ -286,6 +306,13 @@ def cancel_instance(instance_id):
     instance = db.get_instance(instance_id)
     if not instance:
         return jsonify({"error": "Instance not found"}), 404
+    from backend.workflows.cancellation import cancel as cancel_running
+    cancel_running(instance_id)
+    steps = db.get_steps(instance_id)
+    for step in steps:
+        if step["status"] in ("running", "awaiting_gate"):
+            db.update_step_status(instance_id, step["step_id"], "cancelled",
+                                  error="Cancelled by user")
     db.update_instance_status(instance_id, "cancelled")
     return jsonify({"ok": True})
 
@@ -492,7 +519,7 @@ def _resume_workflow(instance_id: int, template: dict, instance: dict, gate_deci
             if s["status"] == "completed" and s.get("outputs_json"):
                 try:
                     step_out = json.loads(s["outputs_json"])
-                    all_outputs.update(step_out)
+                    merge_outputs(all_outputs, step_out)
                 except (json.JSONDecodeError, TypeError):
                     pass
 
@@ -523,7 +550,7 @@ def _retry_from_step(instance_id: int, template: dict, instance: dict, step_id: 
             if s["status"] == "completed" and s["step_id"] not in downstream and s.get("outputs_json"):
                 try:
                     step_out = json.loads(s["outputs_json"])
-                    all_outputs.update(step_out)
+                    merge_outputs(all_outputs, step_out)
                 except (json.JSONDecodeError, TypeError):
                     pass
 

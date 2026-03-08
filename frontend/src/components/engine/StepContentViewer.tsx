@@ -3,7 +3,7 @@ import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
 import { FindingCard } from './FindingCard'
-import { getStepLiveOutput, getAgentDomains, cancelAgentDomain, rerunAgentDomain } from '../../api/workflow-engine'
+import { getStepLiveOutput, getAgentDomains, cancelAgentDomain, rerunAgentDomain, parseContent as parseOutputs } from '../../api/workflow-engine'
 import type { WorkflowStep, WorkflowArtifact, AgentDomainInfo } from '../../api/workflow-engine'
 
 interface StepContentViewerProps {
@@ -421,15 +421,10 @@ function FreshnessView({ content }: { content: ParsedContent }) {
 
 function HumanGateView({ step }: { step: WorkflowStep }) {
   const statusLabel = step.status === 'awaiting_gate' ? 'Awaiting human decision' : step.status
-  const gateOutputs = (() => {
-    if (!step.outputs_json) return null
-    try {
-      const raw = step.outputs_json
-      return typeof raw === 'string' ? JSON.parse(raw) : raw
-    } catch { return null }
-  })()
-  const gateType = gateOutputs?.gate_payload?.type ?? gateOutputs?.type ?? 'unknown'
-  const payload = gateOutputs?.gate_payload ?? gateOutputs ?? {}
+  const gateOutputs = parseOutputs(step.outputs_json) as Record<string, unknown> | null
+  const gatePayload = (gateOutputs?.gate_payload ?? gateOutputs) as Record<string, unknown> | null
+  const gateType = (gatePayload?.type ?? 'unknown') as string
+  const payload = gatePayload ?? {} as Record<string, unknown>
 
   const typeLabel = gateType === 'prompt_review' ? 'Prompt Review Gate'
     : gateType === 'review_gate' ? 'Final Review Gate'
@@ -437,15 +432,15 @@ function HumanGateView({ step }: { step: WorkflowStep }) {
 
   let contextLine = ''
   if (gateType === 'prompt_review') {
-    const promptCount = (payload.prompts ?? []).length
-    const expertCount = (payload.experts ?? []).length
+    const promptCount = (payload.prompts as unknown[] ?? []).length
+    const expertCount = (payload.experts as unknown[] ?? []).length
     contextLine = `${promptCount} prompts from ${expertCount} expert domains ready for review`
   } else if (gateType === 'review_gate') {
-    const synth = payload.synthesis ?? {}
-    const holistic = payload.holistic ?? {}
-    const total = synth.total_findings ?? 0
-    const blocking = ((holistic as Record<string, unknown>).blocking_findings as unknown[] ?? []).length
-    const verdict = ((holistic as Record<string, unknown>).verdict ?? synth.verdict ?? '') as string
+    const synth = (payload.synthesis ?? {}) as Record<string, unknown>
+    const holistic = (payload.holistic ?? {}) as Record<string, unknown>
+    const total = (synth.total_findings ?? 0) as number
+    const blocking = (holistic.blocking_findings as unknown[] ?? []).length
+    const verdict = ((holistic.verdict ?? synth.verdict ?? '') as string)
     contextLine = `${verdict ? verdict + ' — ' : ''}${total} findings, ${blocking} blocking`
   }
 
@@ -1122,12 +1117,7 @@ export function StepContentViewer({ step, artifacts, instanceId }: StepContentVi
 
   const outputsRaw = step.outputs_json
   if (outputsRaw) {
-    let parsed: ParsedContent | null = null
-    if (typeof outputsRaw === 'string') {
-      try { parsed = JSON.parse(outputsRaw) } catch { parsed = null }
-    } else if (typeof outputsRaw === 'object') {
-      parsed = outputsRaw as ParsedContent
-    }
+    let parsed: ParsedContent | null = parseOutputs(outputsRaw) as ParsedContent | null
     if (parsed) {
       const WRAPPER_KEYS: Record<string, string> = {
         synthesis: 'synthesis',

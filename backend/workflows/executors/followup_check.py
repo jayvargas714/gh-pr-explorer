@@ -149,8 +149,11 @@ class FollowupCheckExecutor(StepExecutor):
     @staticmethod
     def _count_new_comments(owner: str, repo: str, pr_number: int,
                              since: str) -> int:
+        url = f"repos/{owner}/{repo}/issues/{pr_number}/comments"
+        if since:
+            url += f"?since={since}"
         cmd = [
-            "gh", "api", f"repos/{owner}/{repo}/issues/{pr_number}/comments",
+            "gh", "api", url,
             "--paginate", "--jq", "length",
         ]
         try:

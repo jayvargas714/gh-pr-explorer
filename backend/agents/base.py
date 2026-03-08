@@ -65,3 +65,6 @@ class AgentBackend(ABC):
     def cancel(self, handle: AgentHandle) -> bool:
         """Attempt to cancel a running review. Returns True if cancelled."""
         return False
+
+    def cleanup(self, handle: AgentHandle) -> None:
+        """Release resources (file descriptors, process entries) after a review completes or is cancelled."""

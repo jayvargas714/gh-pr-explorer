@@ -20,9 +20,11 @@ class Database:
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get a database connection with row factory."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
         return conn
 
     @contextmanager
@@ -418,8 +420,21 @@ class Database:
                     last_checked DATETIME,
                     notes TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (source_run_id) REFERENCES workflow_instances(id)
+                    FOREIGN KEY (source_run_id) REFERENCES workflow_instances(id) ON DELETE CASCADE
                 )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_review_followups_instance
+                ON review_followups(instance_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_review_followups_repo_status
+                ON review_followups(repo, status)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_review_followups_source_run
+                ON review_followups(source_run_id)
             """)
 
             cursor.execute("""
@@ -433,11 +448,86 @@ class Database:
                     author_response TEXT,
                     resolution_notes TEXT,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (followup_id) REFERENCES review_followups(id)
+                    FOREIGN KEY (followup_id) REFERENCES review_followups(id) ON DELETE CASCADE
                 )
             """)
 
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_followup_findings_followup
+                ON followup_findings(followup_id)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_code_owner_registry_reviewer
+                ON code_owner_registry(is_reviewer)
+            """)
+
+            # Migration: add CASCADE to review_followups and followup_findings FKs
+            if not self.is_migration_done_raw(cursor, "add_cascade_followups"):
+                try:
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS review_followups_new (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            instance_id INTEGER NOT NULL,
+                            pr_number INTEGER NOT NULL,
+                            repo TEXT NOT NULL,
+                            source_run_id INTEGER NOT NULL,
+                            verdict TEXT NOT NULL,
+                            published_at DATETIME,
+                            review_sha TEXT,
+                            status TEXT NOT NULL DEFAULT 'NO_RESPONSE',
+                            last_checked DATETIME,
+                            notes TEXT,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (source_run_id) REFERENCES workflow_instances(id) ON DELETE CASCADE
+                        )
+                    """)
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO review_followups_new "
+                        "SELECT * FROM review_followups"
+                    )
+                    cursor.execute("DROP TABLE IF EXISTS review_followups")
+                    cursor.execute("ALTER TABLE review_followups_new RENAME TO review_followups")
+
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS followup_findings_new (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            followup_id INTEGER NOT NULL,
+                            finding_id TEXT NOT NULL,
+                            original_text TEXT,
+                            severity TEXT,
+                            status TEXT NOT NULL DEFAULT 'OPEN',
+                            author_response TEXT,
+                            resolution_notes TEXT,
+                            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (followup_id) REFERENCES review_followups(id) ON DELETE CASCADE
+                        )
+                    """)
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO followup_findings_new "
+                        "SELECT * FROM followup_findings"
+                    )
+                    cursor.execute("DROP TABLE IF EXISTS followup_findings")
+                    cursor.execute("ALTER TABLE followup_findings_new RENAME TO followup_findings")
+
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO migrations (name) VALUES (?)",
+                        ("add_cascade_followups",),
+                    )
+                    logger.info("Migrated followup tables to use ON DELETE CASCADE")
+                except Exception as e:
+                    logger.warning(f"CASCADE migration skipped: {e}")
+
             logger.info(f"Database initialized at {self.db_path}")
+
+    @staticmethod
+    def is_migration_done_raw(cursor, name: str) -> bool:
+        """Check migration status using an existing cursor (for use inside _init_db)."""
+        try:
+            cursor.execute("SELECT 1 FROM migrations WHERE name = ?", (name,))
+            return cursor.fetchone() is not None
+        except Exception:
+            return False
 
     def is_migration_done(self, name: str) -> bool:
         """Check if a migration has been executed."""

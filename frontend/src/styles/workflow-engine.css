@@ -446,7 +446,9 @@
 .mx-run-detail__step-indicator--completed { background: var(--mx-color-success); }
 .mx-run-detail__step-indicator--running { background: var(--mx-color-info); }
 .mx-run-detail__step-indicator--waiting { background: var(--mx-color-warning); }
+.mx-run-detail__step-indicator--awaiting_gate { background: var(--mx-color-warning); }
 .mx-run-detail__step-indicator--failed { background: var(--mx-color-error); }
+.mx-run-detail__step-indicator--cancelled { background: var(--mx-color-text-muted); opacity: 0.6; }
 .mx-run-detail__step-indicator--pending { background: var(--mx-color-text-muted); opacity: 0.4; }
 
 .mx-run-detail__step-pulse {

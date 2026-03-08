@@ -494,17 +494,5 @@ def seed_builtin_data():
 
 def _seed_code_owners(db):
     """Seed code owner registry from legacy adversarial review spec."""
-    with db.db.connection() as conn:
-        for handle, name, boost in CODE_OWNERS:
-            existing = conn.execute(
-                "SELECT id FROM code_owner_registry WHERE github_handle=?",
-                (handle,),
-            ).fetchone()
-            if existing is None:
-                conn.execute(
-                    "INSERT INTO code_owner_registry "
-                    "(github_handle, display_name, priority_boost, is_reviewer) "
-                    "VALUES (?, ?, ?, 1)",
-                    (handle, name, boost),
-                )
-                logger.debug(f"Seeded code owner: {handle}")
+    for handle, name, boost in CODE_OWNERS:
+        db.upsert_code_owner(handle, name, boost)

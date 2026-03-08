@@ -120,13 +120,6 @@ class ClaudeCLIAgent(AgentBackend):
             "--dangerously-skip-permissions",
         ]
 
-        # WS8: Claude CLI does not support --workspace; phase-b isolation for
-        # Claude agents relies on file-path separation (review files written to
-        # distinct paths per phase) rather than workspace-level sandboxing.
-        if context.get("phase") == "b":
-            phase_b_dir = base_reviews_dir / "phase-b"
-            phase_b_dir.mkdir(parents=True, exist_ok=True)
-
         try:
             process = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
@@ -247,6 +240,7 @@ class ClaudeCLIAgent(AgentBackend):
             state.process.kill()
         state.exit_code = -1
         logger.info(f"ClaudeCLI: cancelled handle {handle.handle_id[:8]}")
+        self.cleanup(handle)
         return True
 
     def _build_prompt(self, user_prompt: str, context: dict, review_file: str, json_file: str) -> str:

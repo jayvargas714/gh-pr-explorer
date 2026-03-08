@@ -4,6 +4,7 @@ import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
 import { FindingCard } from './FindingCard'
 import { useWorkflowEngineStore } from '../../stores/useWorkflowEngineStore'
+import { parseContent } from '../../api/workflow-engine'
 import type { WorkflowInstance } from '../../api/workflow-engine'
 
 type GateTab = 'overview' | 'comparison' | 'publish' | 'freshness' | 'synthesis_log' | 'questions' | 'domains'
@@ -26,7 +27,7 @@ function PromptReviewGate({ instance, gateOutputs, onBack }: {
   gateOutputs: Record<string, unknown>
   onBack: () => void
 }) {
-  const { approveGate, rejectGate, reviseGate, loading } = useWorkflowEngineStore()
+  const { approveGate, rejectGate, reviseGate, submitting: loading } = useWorkflowEngineStore()
   const payload = (gateOutputs?.gate_payload ?? gateOutputs) as Record<string, unknown>
   const initialPrompts = (payload.prompts ?? []) as Array<{
     pr_number?: number; pr_title?: string; domain?: string; prompt?: string; [key: string]: unknown
@@ -443,7 +444,7 @@ function ComparisonView({ reviews, perDomainSynthesis }: {
 }
 
 export function GateView({ instance, onBack }: GateViewProps) {
-  const { selectedInstance, fetchInstance, approveGate, rejectGate, reviseGate, loading } = useWorkflowEngineStore()
+  const { selectedInstance, fetchInstance, approveGate, rejectGate, reviseGate, submitting: loading } = useWorkflowEngineStore()
   const [tab, setTab] = useState<GateTab>('overview')
   const [reviseFeedback, setReviseFeedback] = useState('')
   const [showReviseForm, setShowReviseForm] = useState(false)
@@ -462,13 +463,7 @@ export function GateView({ instance, onBack }: GateViewProps) {
     ?? [...steps].reverse().find((s) => s.step_type === 'human_gate')
   const isResolved = activeGateStep?.status === 'completed'
 
-  const gateOutputs = (() => {
-    if (!activeGateStep?.outputs_json) return null
-    try {
-      const raw = activeGateStep.outputs_json
-      return typeof raw === 'string' ? JSON.parse(raw) : raw
-    } catch { return null }
-  })() as Record<string, unknown> | null
+  const gateOutputs = parseContent(activeGateStep?.outputs_json) as Record<string, unknown> | null
 
   const gatePayload = (gateOutputs?.gate_payload ?? gateOutputs ?? {}) as Record<string, unknown>
   const gateType = (gatePayload?.type ?? gateOutputs?.type) as string | undefined

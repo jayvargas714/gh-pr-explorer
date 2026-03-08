@@ -56,28 +56,46 @@ class HolisticReviewExecutor(StepExecutor):
             "instance_id": inst_id,
         }
 
+        from backend.workflows.cancellation import (
+            is_cancelled, register_agent, unregister_agent, AGENT_POLL_TIMEOUT,
+        )
         try:
             handle = agent.start_review(prompt, context)
+            if inst_id:
+                register_agent(inst_id, agent, handle)
+            elapsed = 0
             while True:
+                if inst_id and is_cancelled(inst_id):
+                    agent.cancel(handle)
+                    return self._heuristic_holistic(synthesis, reviews, experts)
                 status = agent.check_status(handle)
                 if status in (AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED):
+                    break
+                if elapsed >= AGENT_POLL_TIMEOUT:
+                    logger.error(f"Holistic review timed out after {elapsed}s")
+                    agent.cancel(handle)
                     break
                 live = agent.get_live_output(handle)
                 if live and inst_id and step_id:
                     _set_live_output(inst_id, step_id, live)
                 time.sleep(5)
+                elapsed += 5
 
+            if inst_id:
+                unregister_agent(inst_id, handle)
             if inst_id and step_id:
                 _clear_live_output(inst_id, step_id)
 
             if status == AgentStatus.COMPLETED:
                 artifact = agent.get_output(handle)
+                agent.cleanup(handle)
                 holistic = self._parse_holistic_output(artifact.content_md, synthesis)
                 return StepResult(
                     success=True,
                     outputs={"holistic": holistic},
                 )
             else:
+                agent.cleanup(handle)
                 logger.warning("AI holistic review failed, falling back to heuristic")
                 return self._heuristic_holistic(synthesis, reviews, experts)
         except Exception as e:
@@ -269,21 +287,36 @@ class HolisticReviewExecutor(StepExecutor):
     # ------------------------------------------------------------------
 
     def _parse_holistic_output(self, content: str, synthesis: dict) -> dict:
-        """Parse AI holistic review output."""
-        json_match = re.search(r'\{[\s\S]*\}', content)
-        if not json_match:
-            logger.warning("Could not parse AI holistic JSON, falling back")
-            return {
-                "verdict": synthesis.get("verdict", "COMMENT"),
-                "raw_content": content,
-                "ai_powered": True,
-                "parse_failed": True,
-            }
+        """Parse AI holistic review output using brace-depth counting."""
+        parsed = None
+
+        fenced = re.findall(r"```(?:json)?\s*\n(.*?)```", content, re.DOTALL)
+        text = fenced[0].strip() if fenced else content
 
         try:
-            parsed = json.loads(json_match.group())
+            parsed = json.loads(text.strip())
         except (json.JSONDecodeError, ValueError):
-            logger.warning("Invalid JSON from AI holistic, falling back")
+            pass
+
+        if parsed is None:
+            depth = 0
+            start_idx = -1
+            for i, ch in enumerate(text):
+                if ch == '{':
+                    if depth == 0:
+                        start_idx = i
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0 and start_idx >= 0:
+                        try:
+                            parsed = json.loads(text[start_idx:i + 1])
+                            break
+                        except json.JSONDecodeError:
+                            start_idx = -1
+
+        if parsed is None:
+            logger.warning("Could not parse AI holistic JSON, falling back")
             return {
                 "verdict": synthesis.get("verdict", "COMMENT"),
                 "raw_content": content,

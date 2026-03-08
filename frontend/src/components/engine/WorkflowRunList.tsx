@@ -55,7 +55,7 @@ interface WorkflowRunListProps {
 
 export function WorkflowRunList({ onSelectInstance, onNewRun, onOpenDomains, onOpenFollowups }: WorkflowRunListProps) {
   const { selectedRepo } = useAccountStore()
-  const { instances, loading, error, fetchInstances, cancelRun, clearError } = useWorkflowEngineStore()
+  const { instances, loadingInstances, error, fetchInstances, cancelRun, clearError } = useWorkflowEngineStore()
   const [filter, setFilter] = useState<StatusFilter>('all')
 
   const repoFullName = selectedRepo ? `${selectedRepo.owner.login}/${selectedRepo.name}` : ''
@@ -64,11 +64,15 @@ export function WorkflowRunList({ onSelectInstance, onNewRun, onOpenDomains, onO
     if (repoFullName) fetchInstances(repoFullName)
   }, [repoFullName, fetchInstances])
 
+  const hasActiveRuns = instances.some(
+    (i) => i.status === 'running' || i.status === 'pending' || i.status === 'awaiting_gate'
+  )
+
   useEffect(() => {
-    if (!repoFullName) return
+    if (!repoFullName || !hasActiveRuns) return
     const iv = setInterval(() => fetchInstances(repoFullName), 5000)
     return () => clearInterval(iv)
-  }, [repoFullName, fetchInstances])
+  }, [repoFullName, hasActiveRuns, fetchInstances])
 
   const filtered = instances.filter((i) => matchesFilter(i.status, filter))
 
@@ -119,7 +123,7 @@ export function WorkflowRunList({ onSelectInstance, onNewRun, onOpenDomains, onO
         </div>
       )}
 
-      {loading && instances.length === 0 ? (
+      {loadingInstances && instances.length === 0 ? (
         <div className="mx-engine-list__loading">
           <Spinner size="lg" />
           <p>Loading workflow runs...</p>

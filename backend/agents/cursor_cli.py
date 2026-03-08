@@ -308,6 +308,7 @@ class CursorCLIAgent(AgentBackend):
             state.process.kill()
         state.exit_code = -1
         logger.info(f"CursorCLI: cancelled handle {handle.handle_id[:8]}")
+        self.cleanup(handle)
         return True
 
     @staticmethod

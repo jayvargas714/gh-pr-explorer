@@ -58,7 +58,7 @@ function formatDuration(start?: string, end?: string): string {
 }
 
 export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunDetailProps) {
-  const { selectedInstance, fetchInstance, loading } = useWorkflowEngineStore()
+  const { selectedInstance, fetchInstance, loadingInstance } = useWorkflowEngineStore()
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
 
   const inst = selectedInstance ?? instance
@@ -98,7 +98,7 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
     }
   }, [steps, selectedStepId])
 
-  if (loading && !selectedInstance) {
+  if (loadingInstance && !selectedInstance) {
     return <div className="mx-run-detail__loading"><Spinner /></div>
   }
 

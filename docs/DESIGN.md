@@ -461,10 +461,10 @@ The Review Workflows tab provides a UI for composable code review pipelines impl
 
 | Module | Description |
 |--------|-------------|
-| `base.py` | `AgentBackend` ABC, `AgentHandle`, `AgentStatus`, `ReviewArtifact`, `get_live_output()` |
-| `claude_cli.py` | `ClaudeCLIAgent` — wraps subprocess calls to `claude` CLI with live output streaming |
+| `base.py` | `AgentBackend` ABC with `start_review`, `check_status`, `get_output`, `cancel`, `cleanup` lifecycle methods; `AgentHandle`, `AgentStatus`, `ReviewArtifact` |
+| `claude_cli.py` | `ClaudeCLIAgent` — wraps subprocess calls to `claude` CLI with live output streaming. `cancel()` terminates subprocess and calls `cleanup()` to close pipes and remove `_processes` entries |
 | `openai_api.py` | `OpenAIAgent` — OpenAI chat completions via `httpx` |
-| `cursor_cli.py` | `CursorCLIAgent` — wraps `agent` CLI with live output streaming |
+| `cursor_cli.py` | `CursorCLIAgent` — wraps `agent` CLI with stream-json live output. `cancel()` terminates subprocess and calls `cleanup()` |
 | `registry.py` | `get_agent(name)`, `list_agents()`, agent type registry |
 
 **Workflows** (`backend/workflows/`):
@@ -473,8 +473,9 @@ The Review Workflows tab provides a UI for composable code review pipelines impl
 |--------|-------------|
 | `step_types.py` | `StepType` enum, `@register_step` decorator, `STEP_REGISTRY` |
 | `executor.py` | `StepExecutor` ABC, `StepResult` dataclass |
-| `runtime.py` | `WorkflowRuntime` — level-based parallel execution, fan-out, gate pausing |
-| `seed.py` | Built-in templates (Quick/Team/Self/Deep/Follow-Up Review), agents, 10 expert domains, code owners |
+| `runtime.py` | `WorkflowRuntime` — level-based parallel execution, fan-out, gate pausing. `_merge_outputs()` concatenates list-valued keys in `_MERGEABLE_LIST_KEYS` (reviews, findings, followup_results). Module-level `merge_outputs()` alias used by route handlers for consistent output reconstruction |
+| `cancellation.py` | Cooperative cancellation registry: `cancel()` signals instance cancellation and terminates registered agents; `is_cancelled()` checked by all polling loops; `register_agent()`/`unregister_agent()` for tracking live agents. `AGENT_POLL_TIMEOUT` (30min) prevents infinite hangs |
+| `seed.py` | Built-in templates (Quick/Team/Self/Deep/Follow-Up Review), agents, 10 expert domains, code owners. Uses `WorkflowDB.upsert_code_owner()` abstraction |
 
 **Step Executors** (`backend/workflows/executors/`):
 
@@ -493,9 +494,9 @@ The Review Workflows tab provides a UI for composable code review pipelines impl
 | `followup_check.py` | `followup_check` | Checks PR state, new commits, author responses; classifies follow-up status |
 | `followup_action.py` | `followup_action` | Posts follow-up comments using templates (RESOLVED, PARTIALLY_RESOLVED, AUTHOR_DISAGREES, NO_RESPONSE) |
 
-**Database** (`backend/database/workflows.py`): CRUD for templates, instances, steps, artifacts, agents, expert domains, follow-ups.
+**Database** (`backend/database/workflows.py`): CRUD for templates, instances, steps, artifacts, agents, expert domains, follow-ups, code owners. `base.py` configures SQLite with WAL journal mode and 5s busy_timeout for safe concurrent access from parallel step execution.
 
-**Routes** (`backend/routes/workflow_engine_routes.py`): Template CRUD, instance lifecycle, gate actions, agent list, expert domain CRUD, follow-up listing.
+**Routes** (`backend/routes/workflow_engine_routes.py`): Template CRUD, instance lifecycle, gate actions (with per-instance mutex for idempotency), instance cancellation (signals running agents via cancellation registry), agent list, expert domain CRUD, follow-up listing. Resume/retry paths use `merge_outputs()` for correct list-valued key concatenation.
 
 #### Database Tables
 
@@ -524,11 +525,13 @@ CREATE TABLE skip_list (id, pr_number, repo, reason, skipped_at, instance_id, UN
 -- Expert domain catalog (10 built-in domains from legacy adversarial spec)
 CREATE TABLE expert_domains (id, domain_id UNIQUE, display_name, persona, scope, triggers_json, checklist_json, anti_patterns_json, is_builtin, is_active, created_at);
 
--- Follow-up tracking for published reviews
-CREATE TABLE review_followups (id, instance_id, pr_number, repo, source_run_id FK, verdict, published_at, review_sha, status DEFAULT 'NO_RESPONSE', last_checked, notes, created_at);
+-- Follow-up tracking for published reviews (ON DELETE CASCADE from workflow_instances)
+CREATE TABLE review_followups (id, instance_id, pr_number, repo, source_run_id FK CASCADE, verdict, published_at, review_sha, status DEFAULT 'NO_RESPONSE', last_checked, notes, created_at);
+-- Indexes: instance_id, repo+status, source_run_id
 
--- Per-finding status within a follow-up
-CREATE TABLE followup_findings (id, followup_id FK, finding_id, original_text, severity, status DEFAULT 'OPEN', author_response, resolution_notes, updated_at);
+-- Per-finding status within a follow-up (ON DELETE CASCADE from review_followups)
+CREATE TABLE followup_findings (id, followup_id FK CASCADE, finding_id, original_text, severity, status DEFAULT 'OPEN', author_response, resolution_notes, updated_at);
+-- Index: followup_id
 ```
 
 #### Expert Domain Catalog

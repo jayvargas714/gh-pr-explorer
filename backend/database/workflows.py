@@ -504,6 +504,23 @@ class WorkflowDB:
                 (status, author_response, resolution_notes, now, finding_id),
             )
 
+    # --- Code Owners ---
+
+    def upsert_code_owner(self, github_handle: str, display_name: str,
+                          priority_boost: int = 0, is_reviewer: bool = True):
+        with self.db.connection() as conn:
+            existing = conn.execute(
+                "SELECT id FROM code_owner_registry WHERE github_handle=?",
+                (github_handle,),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    "INSERT INTO code_owner_registry "
+                    "(github_handle, display_name, priority_boost, is_reviewer) "
+                    "VALUES (?, ?, ?, ?)",
+                    (github_handle, display_name, priority_boost, is_reviewer),
+                )
+
     def get_followup_findings(self, followup_id: int) -> list[dict]:
         with self.db.connection() as conn:
             rows = conn.execute(

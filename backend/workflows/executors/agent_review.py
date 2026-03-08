@@ -163,8 +163,23 @@ class AgentReviewExecutor(StepExecutor):
                 _register_domain(key, domain, None, None, p, agent_name,
                                  status="failed", error=str(e))
 
+        from backend.workflows.cancellation import is_cancelled, AGENT_POLL_TIMEOUT
+
         results: dict[str, dict] = {}
+        elapsed = 0
         while True:
+            if inst_id and is_cancelled(inst_id):
+                with _agent_domain_lock:
+                    snapshot = dict(_agent_domain_store.get(key, {}))
+                for domain, info in snapshot.items():
+                    if domain in results:
+                        continue
+                    agent_ref = info.get("agent_ref")
+                    handle_ref = info.get("handle_ref")
+                    if agent_ref and handle_ref and info.get("status") == "running":
+                        agent_ref.cancel(handle_ref)
+                break
+
             self._process_reruns(key, agent, phase, inst_id, agent_name, results)
 
             all_done = True
@@ -209,8 +224,22 @@ class AgentReviewExecutor(StepExecutor):
             if all_done:
                 break
 
+            if elapsed >= AGENT_POLL_TIMEOUT:
+                logger.error(f"Agent review timed out after {elapsed}s, cancelling remaining")
+                with _agent_domain_lock:
+                    snapshot = dict(_agent_domain_store.get(key, {}))
+                for domain, info in snapshot.items():
+                    if domain in results:
+                        continue
+                    agent_ref = info.get("agent_ref")
+                    handle_ref = info.get("handle_ref")
+                    if agent_ref and handle_ref and info.get("status") == "running":
+                        agent_ref.cancel(handle_ref)
+                break
+
             self._update_composite(inst_id, step_id, key)
             time.sleep(_POLL_INTERVAL)
+            elapsed += _POLL_INTERVAL
 
         _clear_live_output(inst_id, step_id)
         with _agent_domain_lock:
