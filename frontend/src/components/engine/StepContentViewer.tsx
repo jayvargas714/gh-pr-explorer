@@ -38,7 +38,7 @@ function PRSelectView({ content }: { content: ParsedContent }) {
             #{pr.number}
           </a>
           <span className="mx-step-content__pr-title">{pr.title ?? ''}</span>
-          {pr.author && <span className="mx-step-content__pr-author">@{pr.author}</span>}
+          {pr.author && <span className="mx-step-content__pr-author">@{typeof pr.author === 'object' ? pr.author.login ?? pr.author.name : pr.author}</span>}
         </div>
       ))}
     </div>
