@@ -47,7 +47,7 @@ class FreshnessCheckExecutor(StepExecutor):
                 classification = "UNKNOWN"
                 changed_files: list[str] = []
             elif not review_sha:
-                classification = "CURRENT"
+                classification = "UNKNOWN"
                 changed_files = []
             elif current_sha == review_sha:
                 classification = "CURRENT"

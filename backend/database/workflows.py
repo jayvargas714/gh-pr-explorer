@@ -306,9 +306,9 @@ class WorkflowDB:
         Returns a list of inserted row IDs.
         """
         ids = []
-        for expert in experts:
-            domain_id = f"{repo.replace('/', '-')}-{expert['domain_id']}"
-            with self.db.connection() as conn:
+        with self.db.connection() as conn:
+            for expert in experts:
+                domain_id = f"{repo.replace('/', '-')}-{expert['domain_id']}"
                 existing = conn.execute(
                     "SELECT id FROM expert_domains WHERE domain_id=?", (domain_id,)
                 ).fetchone()

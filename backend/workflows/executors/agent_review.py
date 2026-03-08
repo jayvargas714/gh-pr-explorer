@@ -109,6 +109,8 @@ class AgentReviewExecutor(StepExecutor):
 
             if status == AgentStatus.COMPLETED:
                 artifact = agent.get_output(handle)
+                if hasattr(agent, 'cleanup'):
+                    agent.cleanup(handle)
                 entry = {
                     "pr_number": pr_number,
                     "status": "completed",
@@ -125,6 +127,8 @@ class AgentReviewExecutor(StepExecutor):
                 return entry
             else:
                 artifact = agent.get_output(handle)
+                if hasattr(agent, 'cleanup'):
+                    agent.cleanup(handle)
                 return {
                     "pr_number": pr_number,
                     "status": "failed",

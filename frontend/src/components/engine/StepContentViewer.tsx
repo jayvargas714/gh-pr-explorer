@@ -358,8 +358,8 @@ function FreshnessView({ content }: { content: ParsedContent }) {
     recommendation?: string; affected_findings?: string[]; unaffected_findings?: string[]
     changed_files?: string[]; current_sha?: string
   }>
-  if (!checks.length) return <p className="mx-step-content__empty">No freshness data.</p>
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
+  if (!checks.length) return <p className="mx-step-content__empty">No freshness data.</p>
 
   return (
     <div className="mx-step-content__freshness">

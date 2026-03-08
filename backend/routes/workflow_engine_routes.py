@@ -204,8 +204,17 @@ def gate_action(instance_id):
     action = data.get("action", "approve")
 
     if action == "reject":
+        reason = data.get("reason", "Rejected by user")
+        steps = db.get_steps(instance_id)
+        for step in steps:
+            if step["status"] == "awaiting_gate":
+                db.update_step_status(instance_id, step["step_id"], "failed",
+                                      error=f"Gate rejected: {reason}")
+            elif step["status"] == "running":
+                db.update_step_status(instance_id, step["step_id"], "failed",
+                                      error="Cancelled: workflow rejected")
         db.update_instance_status(instance_id, "cancelled")
-        return jsonify({"ok": True, "status": "cancelled"})
+        return jsonify({"ok": True, "status": "cancelled", "reason": reason})
 
     template_data = db.get_template(instance["template_id"])
     if not template_data:

@@ -111,7 +111,7 @@ class WorkflowRuntime:
             }
 
         step_outputs[step_id] = result.outputs
-        all_outputs.update(result.outputs)
+        self._merge_outputs(all_outputs, result.outputs)
         self._update_step_status(step_id, "completed")
         self._save_step_outputs(step_id, result.outputs)
 
@@ -152,27 +152,45 @@ class WorkflowRuntime:
                 future = pool.submit(executor.execute, per_step_inputs[step_id])
                 futures[future] = step_id
 
+            early_exit = None
             for future in as_completed(futures):
                 step_id = futures[future]
                 step_type = self.steps[step_id]["type"]
+
+                if early_exit is not None:
+                    continue
+
                 try:
                     result = future.result()
                 except Exception as e:
                     logger.error(f"Step {step_id} ({step_type}) failed: {e}")
                     self._update_step_status(step_id, "failed", error=str(e))
-                    return {"status": "failed", "outputs": all_outputs, "error": str(e)}
+                    for f, sid in futures.items():
+                        if f is not future and not f.done():
+                            f.cancel()
+                        elif f is not future and f.done():
+                            self._update_step_status(sid, "failed", error="Cancelled: sibling step failed")
+                    early_exit = {"status": "failed", "outputs": all_outputs, "error": str(e)}
+                    continue
 
                 if not result.success:
                     self._update_step_status(step_id, "failed", error=result.error)
-                    return {"status": "failed", "outputs": all_outputs, "error": result.error}
+                    for f, sid in futures.items():
+                        if f is not future and not f.done():
+                            f.cancel()
+                        elif f is not future and f.done():
+                            self._update_step_status(sid, "failed", error="Cancelled: sibling step failed")
+                    early_exit = {"status": "failed", "outputs": all_outputs, "error": result.error}
+                    continue
 
                 if result.awaiting_gate:
                     self._update_step_status(step_id, "awaiting_gate")
                     self._save_gate_payload(step_id, result.gate_payload)
-                    return {
+                    early_exit = {
                         "status": "awaiting_gate", "outputs": all_outputs,
                         "gate_step_id": step_id, "gate_payload": result.gate_payload,
                     }
+                    continue
 
                 step_outputs[step_id] = result.outputs
                 self._merge_outputs(all_outputs, result.outputs)
@@ -182,7 +200,7 @@ class WorkflowRuntime:
                 for artifact in result.artifacts:
                     self._save_artifact(step_id, artifact)
 
-        return None
+        return early_exit
 
     def execute_fan_out(self, step_id: str, items: list, inputs: dict, instance_config: dict,
                         max_parallel: int = 4) -> list[StepResult]:
@@ -228,7 +246,7 @@ class WorkflowRuntime:
         """
         if "prompts" in gate_decision:
             all_outputs["prompts"] = gate_decision["prompts"]
-        all_outputs.update(gate_decision)
+        self._merge_outputs(all_outputs, gate_decision)
 
         self._update_step_status(gate_step_id, "completed")
 
@@ -387,8 +405,10 @@ class WorkflowRuntime:
         levels: list[list[str]] = []
         queue = [sid for sid in all_step_ids if in_degree[sid] == 0]
 
+        visited = 0
         while queue:
             levels.append(sorted(queue))
+            visited += len(queue)
             next_queue = []
             for node in queue:
                 for neighbor in adjacency[node]:
@@ -397,9 +417,15 @@ class WorkflowRuntime:
                         next_queue.append(neighbor)
             queue = next_queue
 
+        if visited != len(all_step_ids):
+            raise ValueError(
+                f"Workflow template contains a cycle: {len(all_step_ids) - visited} "
+                f"steps are unreachable"
+            )
+
         return levels
 
-    _MERGEABLE_LIST_KEYS = {"reviews"}
+    _MERGEABLE_LIST_KEYS = {"reviews", "per_domain_synthesis", "prompts", "freshness_results", "freshness"}
 
     @staticmethod
     def _merge_outputs(target: dict, source: dict):
@@ -478,5 +504,26 @@ def validate_template(template: dict) -> list[str]:
     if len(steps) > 1 and orphans:
         for orphan in orphans:
             errors.append(f"Step '{orphan}' is not connected to any other step")
+
+    if edges:
+        in_degree = defaultdict(int)
+        adjacency = defaultdict(list)
+        for edge in edges:
+            adjacency[edge["from"]].append(edge["to"])
+            in_degree[edge["to"]] += 1
+        for sid in step_ids:
+            if sid not in in_degree:
+                in_degree[sid] = 0
+        queue = deque(sid for sid in step_ids if in_degree[sid] == 0)
+        visited = 0
+        while queue:
+            node = queue.popleft()
+            visited += 1
+            for neighbor in adjacency[node]:
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0:
+                    queue.append(neighbor)
+        if visited != len(step_ids):
+            errors.append("Template contains a cycle — some steps are unreachable")
 
     return errors

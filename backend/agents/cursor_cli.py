@@ -212,6 +212,22 @@ class CursorCLIAgent(AgentBackend):
         state.exit_code = exit_code
         return AgentStatus.COMPLETED if exit_code == 0 else AgentStatus.FAILED
 
+    def cleanup(self, handle: AgentHandle) -> None:
+        """Remove process state and close pipes to prevent FD leaks."""
+        state = self._processes.pop(handle.handle_id, None)
+        if state is None:
+            return
+        for pipe in (state.process.stdout, state.process.stderr):
+            try:
+                if pipe and not pipe.closed:
+                    pipe.close()
+            except Exception:
+                pass
+        try:
+            state.process.wait(timeout=1)
+        except Exception:
+            pass
+
     def get_output(self, handle: AgentHandle) -> ReviewArtifact:
         state = self._processes.get(handle.handle_id)
         if state is None:

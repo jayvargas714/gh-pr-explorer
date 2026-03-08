@@ -344,11 +344,17 @@ class PublishExecutor(StepExecutor):
         try:
             from backend.database import get_workflow_db
             db = get_workflow_db()
-            review_sha = ""
-            for cat in ("agreed", "a_only", "b_only"):
-                for f in synthesis.get(cat, []):
-                    inner = f.get("finding_a", f.get("finding", {}))
-                    if inner:
+            review_sha = synthesis.get("head_sha", "")
+            if not review_sha:
+                for cat in ("agreed", "a_only", "b_only"):
+                    for f in synthesis.get(cat, []):
+                        inner = f.get("finding_a", f.get("finding", {}))
+                        loc = inner.get("location", {}) if isinstance(inner, dict) else {}
+                        sha = inner.get("head_sha", "") or loc.get("head_sha", "")
+                        if sha:
+                            review_sha = sha
+                            break
+                    if review_sha:
                         break
 
             followup_id = db.create_followup(
