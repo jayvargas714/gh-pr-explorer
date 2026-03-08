@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 _POLL_INTERVAL = 5
 
 EXPERT_GENERATION_PROMPT = """\
-You are selecting expert reviewers for a code review. Analyze the changed files and diff below, then generate 2-4 expert domains that are ACTUALLY relevant to this codebase and these changes.
+You are selecting expert reviewers for a code review. Analyze the changed files and diff below, then generate 2-5 expert domains that are ACTUALLY relevant to this codebase and these changes.
 
 ## Changed Files
 {file_list}
@@ -31,11 +31,13 @@ You are selecting expert reviewers for a code review. Analyze the changed files 
 {diff_sample}
 
 ## Rules
-- Select 2-4 expert domains based on PR scale (<=300 lines: 2, 301-1500: 3, >1500: 4)
+- Select 2-5 expert domains based on PR scale (<=300 lines: 2, 301-1500: 3-4, >1500: 4-5)
 - Each domain must be relevant to the ACTUAL languages, frameworks, and patterns in the diff
 - Do NOT use generic domains like "General" — be specific to what the code actually does
 - If the repo uses Python+Flask, create a "Python Backend" expert, not a "Rust API" expert
 - If the repo uses React+TypeScript, create a "React Frontend" expert, not a "Go Backend" expert
+- Think about the DOMAIN PURPOSE of the code, not just the language — if the code constructs prompts for AI agents, include a "Prompt Engineering & AI Integration" expert; if it orchestrates LLM calls, include an "LLM Orchestration" expert; if it manages CI/CD pipelines, include a "DevOps" expert
+- Consider cross-cutting concerns: security, observability, data integrity, prompt quality, UX coherence
 
 ## Output Format
 You MUST output valid JSON and nothing else. No markdown, no explanation, just the JSON object:
@@ -543,9 +545,11 @@ class ExpertSelectExecutor(StepExecutor):
     def _expert_count_cap(total_lines: int) -> int:
         if total_lines <= 300:
             return 2
-        if total_lines <= 1500:
+        if total_lines <= 800:
             return 3
-        return 4
+        if total_lines <= 2000:
+            return 4
+        return 5
 
     @staticmethod
     def _generic_expert() -> dict:
