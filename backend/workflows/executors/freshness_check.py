@@ -71,6 +71,14 @@ class FreshnessCheckExecutor(StepExecutor):
                 "synthesis": synthesis,
                 "reviews": reviews,
             },
+            artifacts=[{
+                "type": "freshness",
+                "data": {
+                    "checks": freshness_results,
+                    "all_fresh": all_current,
+                    "any_stale_major": any_major,
+                },
+            }],
         )
 
     def _fetch_head_sha(self, owner: str, repo: str, pr_number: int) -> str:

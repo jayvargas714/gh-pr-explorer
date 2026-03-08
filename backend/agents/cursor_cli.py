@@ -82,7 +82,8 @@ class CursorCLIAgent(AgentBackend):
 
         full_prompt = self._build_prompt(prompt, context, str(review_file), json_file)
 
-        cmd = ["agent", "--print", "--trust"]
+        agent_bin = self.config.get("agent_path") or self._find_agent_binary()
+        cmd = [agent_bin, "--print", "--trust"]
 
         if self.model:
             cmd.extend(["--model", self.model])
@@ -194,6 +195,26 @@ class CursorCLIAgent(AgentBackend):
         state.exit_code = -1
         logger.info(f"CursorCLI: cancelled handle {handle.handle_id[:8]}")
         return True
+
+    @staticmethod
+    def _find_agent_binary() -> str:
+        """Locate the Cursor `agent` binary, checking common install paths."""
+        import shutil
+        from pathlib import Path as _P
+
+        found = shutil.which("agent")
+        if found:
+            return found
+
+        candidates = [
+            _P.home() / ".local" / "bin" / "agent",
+            _P("/usr/local/bin/agent"),
+        ]
+        for p in candidates:
+            if p.exists() and p.is_file():
+                return str(p)
+
+        return "agent"
 
     def _build_prompt(self, user_prompt: str, context: dict, review_file: str, json_file: str) -> str:
         pr_url = context.get("pr_url", "")

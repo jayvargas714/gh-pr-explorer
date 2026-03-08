@@ -203,13 +203,16 @@ class WorkflowDB:
                 ).fetchall()
             return [dict(r) for r in rows]
 
-    def save_gate_payload(self, instance_id: int, step_id: str, payload: dict):
+    def save_step_outputs(self, instance_id: int, step_id: str, outputs: dict):
         with self.db.connection() as conn:
             conn.execute(
                 "UPDATE instance_steps SET outputs_json=? "
                 "WHERE instance_id=? AND step_id=?",
-                (json.dumps(payload), instance_id, step_id),
+                (json.dumps(outputs), instance_id, step_id),
             )
+
+    def save_gate_payload(self, instance_id: int, step_id: str, payload: dict):
+        self.save_step_outputs(instance_id, step_id, payload)
 
     # --- Agents ---
 

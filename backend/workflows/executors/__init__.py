@@ -8,6 +8,8 @@ from backend.workflows.executors.prioritize import PrioritizeExecutor
 from backend.workflows.executors.synthesis import SynthesisExecutor
 from backend.workflows.executors.freshness_check import FreshnessCheckExecutor
 from backend.workflows.executors.publish import PublishExecutor
+from backend.workflows.executors.expert_select import ExpertSelectExecutor
+from backend.workflows.executors.holistic_review import HolisticReviewExecutor
 
 __all__ = [
     "PRSelectExecutor",
@@ -18,4 +20,6 @@ __all__ = [
     "SynthesisExecutor",
     "FreshnessCheckExecutor",
     "PublishExecutor",
+    "ExpertSelectExecutor",
+    "HolisticReviewExecutor",
 ]

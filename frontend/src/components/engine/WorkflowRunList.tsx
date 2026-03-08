@@ -12,75 +12,63 @@ const STATUS_VARIANTS: Record<string, 'success' | 'error' | 'warning' | 'info' |
   running: 'info',
   pending: 'neutral',
   awaiting_gate: 'warning',
+  waiting: 'warning',
   failed: 'error',
   cancelled: 'neutral',
 }
 
+type StatusFilter = 'all' | 'running' | 'waiting' | 'completed' | 'failed'
+
+const FILTERS: { id: StatusFilter; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'running', label: 'Running' },
+  { id: 'waiting', label: 'Awaiting Gate' },
+  { id: 'completed', label: 'Completed' },
+  { id: 'failed', label: 'Failed' },
+]
+
 function formatStatus(status: string): string {
-  return status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  return status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 function timeAgo(dateStr: string): string {
-  const date = new Date(dateStr)
-  const now = new Date()
-  const seconds = Math.floor((now.getTime() - date.getTime()) / 1000)
-
+  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000)
   if (seconds < 60) return 'just now'
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
   return `${Math.floor(seconds / 86400)}d ago`
 }
 
-interface WorkflowRunListProps {
-  onSelectInstance: (instance: WorkflowInstance) => void
+function matchesFilter(status: string, filter: StatusFilter): boolean {
+  if (filter === 'all') return true
+  if (filter === 'waiting') return status === 'awaiting_gate' || status === 'waiting'
+  if (filter === 'running') return status === 'running' || status === 'pending'
+  return status === filter
 }
 
-export function WorkflowRunList({ onSelectInstance }: WorkflowRunListProps) {
+interface WorkflowRunListProps {
+  onSelectInstance: (instance: WorkflowInstance) => void
+  onNewRun: () => void
+}
+
+export function WorkflowRunList({ onSelectInstance, onNewRun }: WorkflowRunListProps) {
   const { selectedRepo } = useAccountStore()
-  const {
-    templates,
-    instances,
-    loading,
-    error,
-    fetchTemplates,
-    fetchInstances,
-    startRun,
-    cancelRun,
-    clearError,
-  } = useWorkflowEngineStore()
-
-  const [selectedTemplate, setSelectedTemplate] = useState<number | null>(null)
-  const [starting, setStarting] = useState(false)
-
-  useEffect(() => {
-    fetchTemplates()
-  }, [fetchTemplates])
+  const { instances, loading, error, fetchInstances, cancelRun, clearError } = useWorkflowEngineStore()
+  const [filter, setFilter] = useState<StatusFilter>('all')
 
   const repoFullName = selectedRepo ? `${selectedRepo.owner.login}/${selectedRepo.name}` : ''
 
   useEffect(() => {
-    if (repoFullName) {
-      fetchInstances(repoFullName)
-    }
+    if (repoFullName) fetchInstances(repoFullName)
   }, [repoFullName, fetchInstances])
 
   useEffect(() => {
     if (!repoFullName) return
-    const interval = setInterval(() => {
-      fetchInstances(repoFullName)
-    }, 5000)
-    return () => clearInterval(interval)
+    const iv = setInterval(() => fetchInstances(repoFullName), 5000)
+    return () => clearInterval(iv)
   }, [repoFullName, fetchInstances])
 
-  const handleStartRun = async () => {
-    if (!selectedTemplate || !repoFullName) return
-    setStarting(true)
-    const instanceId = await startRun(selectedTemplate, repoFullName)
-    setStarting(false)
-    if (instanceId) {
-      setSelectedTemplate(null)
-    }
-  }
+  const filtered = instances.filter((i) => matchesFilter(i.status, filter))
 
   const handleCancel = async (e: React.MouseEvent, id: number) => {
     e.stopPropagation()
@@ -91,34 +79,33 @@ export function WorkflowRunList({ onSelectInstance }: WorkflowRunListProps) {
     <div className="mx-engine-list">
       <div className="mx-engine-list__header">
         <h3>Workflow Runs</h3>
-        <div className="mx-engine-list__actions">
-          <select
-            className="mx-select"
-            value={selectedTemplate ?? ''}
-            onChange={(e) => setSelectedTemplate(e.target.value ? Number(e.target.value) : null)}
-          >
-            <option value="">Select template...</option>
-            {templates.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-          <Button
-            variant="primary"
-            size="sm"
-            disabled={!selectedTemplate || !repoFullName || starting}
-            onClick={handleStartRun}
-          >
-            {starting ? <Spinner size="sm" /> : 'Start Run'}
-          </Button>
-        </div>
+        <Button variant="primary" size="sm" onClick={onNewRun}>
+          + New Run
+        </Button>
+      </div>
+
+      <div className="mx-engine-list__filters">
+        {FILTERS.map((f) => {
+          const count = f.id === 'all'
+            ? instances.length
+            : instances.filter((i) => matchesFilter(i.status, f.id)).length
+          return (
+            <button
+              key={f.id}
+              className={`mx-engine-list__filter ${filter === f.id ? 'mx-engine-list__filter--active' : ''}`}
+              onClick={() => setFilter(f.id)}
+            >
+              {f.label}
+              <span className="mx-engine-list__filter-count">{count}</span>
+            </button>
+          )
+        })}
       </div>
 
       {error && (
         <div className="mx-alert mx-alert--error" style={{ marginBottom: 'var(--mx-space-4)' }}>
           <div className="mx-alert__content">{error}</div>
-          <button className="mx-alert__close" onClick={clearError}>×</button>
+          <button className="mx-alert__close" onClick={clearError}>x</button>
         </div>
       )}
 
@@ -127,9 +114,9 @@ export function WorkflowRunList({ onSelectInstance }: WorkflowRunListProps) {
           <Spinner size="lg" />
           <p>Loading workflow runs...</p>
         </div>
-      ) : instances.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <Card className="mx-engine-list__empty">
-          <p>No workflow runs yet. Select a template and start one above.</p>
+          <p>{instances.length === 0 ? 'No workflow runs yet. Click "+ New Run" to start one.' : 'No runs match this filter.'}</p>
         </Card>
       ) : (
         <div className="mx-table-wrapper">
@@ -141,19 +128,13 @@ export function WorkflowRunList({ onSelectInstance }: WorkflowRunListProps) {
                 <th>Status</th>
                 <th>Started</th>
                 <th>Updated</th>
-                <th>Actions</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
-              {instances.map((inst) => (
-                <tr
-                  key={inst.id}
-                  className="mx-engine-list__row"
-                  onClick={() => onSelectInstance(inst)}
-                >
-                  <td>
-                    <span className="mx-engine-list__id">#{inst.id}</span>
-                  </td>
+              {filtered.map((inst) => (
+                <tr key={inst.id} className="mx-engine-list__row" onClick={() => onSelectInstance(inst)}>
+                  <td><span className="mx-engine-list__id">#{inst.id}</span></td>
                   <td>{inst.template_name || `Template #${inst.template_id}`}</td>
                   <td>
                     <Badge variant={STATUS_VARIANTS[inst.status] ?? 'neutral'} size="sm">
@@ -163,14 +144,8 @@ export function WorkflowRunList({ onSelectInstance }: WorkflowRunListProps) {
                   <td className="mx-engine-list__time">{timeAgo(inst.created_at)}</td>
                   <td className="mx-engine-list__time">{timeAgo(inst.updated_at)}</td>
                   <td>
-                    {(inst.status === 'running' || inst.status === 'pending' || inst.status === 'awaiting_gate') && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => handleCancel(e, inst.id)}
-                      >
-                        Cancel
-                      </Button>
+                    {(inst.status === 'running' || inst.status === 'pending' || inst.status === 'awaiting_gate' || inst.status === 'waiting') && (
+                      <Button variant="ghost" size="sm" onClick={(e) => handleCancel(e, inst.id)}>Cancel</Button>
                     )}
                   </td>
                 </tr>

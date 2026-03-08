@@ -521,10 +521,15 @@ CREATE TABLE skip_list (id, pr_number, repo, reason, skipped_at, instance_id, UN
 
 | Component | File | Description |
 |-----------|------|-------------|
-| `WorkflowEngineView` | `components/engine/WorkflowEngineView.tsx` | Container routing between list and detail views |
-| `WorkflowRunList` | `components/engine/WorkflowRunList.tsx` | Table of instances with status badges, template selector, start run |
-| `WorkflowRunDetail` | `components/engine/WorkflowRunDetail.tsx` | Step pipeline visualization with progress bar, status colors, artifact list |
-| `GatePanel` | `components/engine/GatePanel.tsx` | Human gate modal: synthesis summary, freshness badges, approve/reject/edit |
+| `WorkflowEngineView` | `components/engine/WorkflowEngineView.tsx` | Container routing between list, config, detail, and gate views |
+| `WorkflowRunList` | `components/engine/WorkflowRunList.tsx` | Table of instances with status filter bar, "+ New Run" action |
+| `RunConfigPanel` | `components/engine/RunConfigPanel.tsx` | Template card picker, agent assignment per review step, pipeline preview, start button |
+| `WorkflowRunDetail` | `components/engine/WorkflowRunDetail.tsx` | Two-panel layout: vertical step timeline (left) + content viewer (right) |
+| `StepContentViewer` | `components/engine/StepContentViewer.tsx` | Renders step output by type (PR list, prompt, review markdown, synthesis, freshness) |
+| `GateView` | `components/engine/GateView.tsx` | Full-page gate: synthesis overview, review comparison, publish preview, freshness, reject-with-reason |
+| `ReviewComparison` | `components/engine/ReviewComparison.tsx` | Side-by-side Agent A vs Agent B review columns with synthesis classification |
+| `PublishPreview` | `components/engine/PublishPreview.tsx` | Rendered markdown preview of the GitHub comment to be posted |
+| `FindingCard` | `components/engine/FindingCard.tsx` | Individual finding: severity badge, file location, problem, fix, classification |
 
 State management via `useWorkflowEngineStore` (Zustand). API client at `api/workflow-engine.ts`.
 

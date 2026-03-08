@@ -67,6 +67,7 @@ class AgentReviewExecutor(StepExecutor):
                     "content_json": artifact.content_json,
                     "file_path": artifact.file_path,
                     "score": artifact.score,
+                    "head_sha": prompt_data.get("head_sha", ""),
                 })
             else:
                 artifact = agent.get_output(handle)
@@ -77,6 +78,20 @@ class AgentReviewExecutor(StepExecutor):
                     "error": artifact.error,
                 })
 
+        completed_reviews = [r for r in reviews if r["status"] == "completed"]
+        failed_reviews = [r for r in reviews if r["status"] == "failed"]
+
+        if not completed_reviews and failed_reviews:
+            errors = "; ".join(
+                f'PR #{r["pr_number"]}: {r.get("error", "unknown")}'
+                for r in failed_reviews
+            )
+            return StepResult(
+                success=False,
+                error=f"All reviews failed ({agent_name}): {errors}",
+                outputs={"reviews": reviews, "agent_name": agent_name},
+            )
+
         return StepResult(
             success=True,
             outputs={
@@ -85,6 +100,6 @@ class AgentReviewExecutor(StepExecutor):
             },
             artifacts=[
                 {"type": "review", "pr_number": r["pr_number"], "data": r}
-                for r in reviews if r["status"] == "completed"
+                for r in completed_reviews
             ],
         )

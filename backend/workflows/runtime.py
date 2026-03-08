@@ -27,6 +27,7 @@ class WorkflowRuntime:
         self.steps = {s["id"]: s for s in template.get("steps", [])}
         self.edges = template.get("edges", [])
         self.fan_out_groups = template.get("fan_out_groups", [])
+        self._overlay_db_step_configs()
 
     def execute(self, initial_inputs: dict, instance_config: dict) -> dict:
         """Run the workflow from start to finish (or until a gate pause).
@@ -37,6 +38,18 @@ class WorkflowRuntime:
           - gate_step_id: if paused at a gate, the step that requires human input
           - error: if failed
         """
+        missing = self._check_executors()
+        if missing:
+            error_msg = (
+                f"Cannot run workflow: missing executors for step types: "
+                f"{', '.join(missing)}. These are Phase 3+ features not yet implemented."
+            )
+            logger.error(error_msg)
+            for step_id, step_def in self.steps.items():
+                if step_def["type"] in missing:
+                    self._update_step_status(step_id, "failed", error=error_msg)
+            return {"status": "failed", "outputs": {}, "error": error_msg}
+
         topo_order = self._topological_sort()
         step_outputs: dict[str, dict] = {}
         all_outputs = dict(initial_inputs)
@@ -50,7 +63,7 @@ class WorkflowRuntime:
             inputs = dict(all_outputs)
             for uid in upstream_ids:
                 if uid in step_outputs:
-                    inputs.update(step_outputs[uid])
+                    self._merge_outputs(inputs, step_outputs[uid])
 
             self._update_step_status(step_id, "running")
 
@@ -80,6 +93,7 @@ class WorkflowRuntime:
             step_outputs[step_id] = result.outputs
             all_outputs.update(result.outputs)
             self._update_step_status(step_id, "completed")
+            self._save_step_outputs(step_id, result.outputs)
 
             for artifact in result.artifacts:
                 self._save_artifact(step_id, artifact)
@@ -165,11 +179,38 @@ class WorkflowRuntime:
 
             all_outputs.update(result.outputs)
             self._update_step_status(step_id, "completed")
+            self._save_step_outputs(step_id, result.outputs)
 
             for artifact in result.artifacts:
                 self._save_artifact(step_id, artifact)
 
         return {"status": "completed", "outputs": all_outputs}
+
+    def _overlay_db_step_configs(self):
+        """Merge per-step configs from DB rows (which include run-time overrides)
+        on top of the template defaults."""
+        if not self.db:
+            return
+        try:
+            db_steps = self.db.get_steps(self.instance_id)
+            for row in db_steps:
+                sid = row["step_id"]
+                if sid in self.steps and row.get("step_config_json"):
+                    db_config = json.loads(row["step_config_json"])
+                    self.steps[sid]["config"] = db_config
+        except Exception as e:
+            logger.warning(f"Could not overlay DB step configs: {e}")
+
+    def _check_executors(self) -> list[str]:
+        """Check that all step types in this workflow have registered executors.
+        Returns list of missing step type names (empty = all good)."""
+        from backend.workflows.step_types import STEP_REGISTRY
+        missing = []
+        for step_def in self.steps.values():
+            st = step_def["type"]
+            if st not in STEP_REGISTRY and st not in missing:
+                missing.append(st)
+        return missing
 
     def _topological_sort(self) -> list[str]:
         """Topological sort of the step graph via Kahn's algorithm."""
@@ -201,6 +242,15 @@ class WorkflowRuntime:
 
         return result
 
+    @staticmethod
+    def _merge_outputs(target: dict, source: dict):
+        """Merge source outputs into target, concatenating lists for shared keys."""
+        for key, value in source.items():
+            if key in target and isinstance(target[key], list) and isinstance(value, list):
+                target[key] = target[key] + value
+            else:
+                target[key] = value
+
     def _get_upstream(self, step_id: str) -> list[str]:
         return [e["from"] for e in self.edges if e["to"] == step_id]
 
@@ -217,6 +267,13 @@ class WorkflowRuntime:
                 self.db.save_artifact(self.instance_id, step_id, artifact)
             except Exception as e:
                 logger.warning(f"Failed to save artifact: {e}")
+
+    def _save_step_outputs(self, step_id: str, outputs: dict):
+        if self.db and outputs:
+            try:
+                self.db.save_step_outputs(self.instance_id, step_id, outputs)
+            except Exception as e:
+                logger.warning(f"Failed to save step outputs: {e}")
 
     def _save_gate_payload(self, step_id: str, payload: Optional[dict]):
         if self.db and payload:

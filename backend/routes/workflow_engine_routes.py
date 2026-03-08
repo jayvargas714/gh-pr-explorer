@@ -140,12 +140,19 @@ def create_instance():
         config_json=config,
     )
 
+    step_overrides = config.get("step_overrides", {})
+    agent_overrides = config.get("agent_overrides", {})
     for step in template["template"].get("steps", []):
+        step_config = dict(step.get("config", {}))
+        if step["id"] in step_overrides:
+            step_config.update(step_overrides[step["id"]])
+        if step["id"] in agent_overrides:
+            step_config["agent"] = agent_overrides[step["id"]]
         db.create_step(
             instance_id=instance_id,
             step_id=step["id"],
             step_type=step["type"],
-            step_config=step.get("config", {}),
+            step_config=step_config,
         )
 
     # Ensure executors are registered
@@ -235,6 +242,13 @@ def list_agents():
     return jsonify(agents)
 
 
+@workflow_engine_bp.route("/api/step-types", methods=["GET"])
+def list_step_types():
+    import backend.workflows.executors  # noqa: F401
+    from backend.workflows.step_types import STEP_REGISTRY
+    return jsonify({"available": list(STEP_REGISTRY.keys())})
+
+
 # --- Background execution ---
 
 def _run_workflow(instance_id: int, template: dict, repo: str, config: dict):
@@ -264,12 +278,21 @@ def _resume_workflow(instance_id: int, template: dict, instance: dict, gate_deci
             db.update_instance_status(instance_id, "failed")
             return
 
+        all_outputs = {"repo": instance.get("repo", "")}
+        for s in steps:
+            if s["status"] == "completed" and s.get("outputs_json"):
+                try:
+                    step_out = json.loads(s["outputs_json"])
+                    all_outputs.update(step_out)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
         runtime = WorkflowRuntime(template, instance_id, db_accessor=db)
         config = json.loads(instance.get("config_json") or "{}")
         result = runtime.resume_after_gate(
             gate_step_id=gate_step["step_id"],
             gate_decision=gate_decision,
-            all_outputs={"repo": instance.get("repo", "")},
+            all_outputs=all_outputs,
             instance_config={"repo": instance.get("repo", ""), **config},
         )
         db.update_instance_status(instance_id, result["status"])

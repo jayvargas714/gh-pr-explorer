@@ -85,11 +85,24 @@ class PromptGenerateExecutor(StepExecutor):
                 "repo": repo,
                 "additions": additions,
                 "deletions": deletions,
+                "head_sha": pr.get("headRefOid", ""),
             })
 
         return StepResult(
             success=True,
             outputs={"prompts": prompts, "mode": mode},
+            artifacts=[{
+                "type": "prompts",
+                "data": {
+                    "prompts": [
+                        {"pr_number": p["pr_number"], "pr_title": p.get("pr_title", ""),
+                         "prompt": p["prompt"]}
+                        for p in prompts
+                    ],
+                    "mode": mode,
+                    "count": len(prompts),
+                },
+            }],
         )
 
     def _check_prior_reviews(self, owner: str, repo: str, pr_number: int) -> str:

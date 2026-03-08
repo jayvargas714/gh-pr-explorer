@@ -20,6 +20,10 @@ export interface WorkflowStep {
   started_at?: string
   completed_at?: string
   error_message?: string
+  outputs_json?: string | null
+  step_config_json?: string | null
+  agent_id?: number | null
+  inputs_json?: string | null
 }
 
 export interface WorkflowArtifact {
@@ -29,6 +33,7 @@ export interface WorkflowArtifact {
   pr_number?: number
   artifact_type: string
   file_path?: string
+  content_json?: string | Record<string, unknown> | null
   created_at: string
 }
 
@@ -112,4 +117,8 @@ export async function cancelInstance(id: number): Promise<{ ok: boolean }> {
 
 export async function listAgents(): Promise<Agent[]> {
   return api.get<Agent[]>('/agents')
+}
+
+export async function getAvailableStepTypes(): Promise<{ available: string[] }> {
+  return api.get<{ available: string[] }>('/step-types')
 }

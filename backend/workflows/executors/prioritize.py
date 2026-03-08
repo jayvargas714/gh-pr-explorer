@@ -54,6 +54,21 @@ class PrioritizeExecutor(StepExecutor):
                 "skipped_prs": skipped,
                 "batch_size": len(batch),
             },
+            artifacts=[{
+                "type": "scored_prs",
+                "data": {
+                    "prs": [
+                        {"number": p.get("number"), "title": p.get("title"),
+                         "priority_score": p.get("priority_score"),
+                         "priority_level": p.get("priority_level"),
+                         "priority_rationale": p.get("priority_rationale")}
+                        for p in batch
+                    ],
+                    "skipped": skipped,
+                    "total_scored": len(scored),
+                    "batch_size": len(batch),
+                },
+            }],
         )
 
     def _score_pr(self, pr: dict, code_owners: dict) -> tuple[float, list[str]]:

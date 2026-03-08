@@ -26,7 +26,7 @@ interface WorkflowEngineState {
   fetchAgents: () => Promise<void>
   startRun: (templateId: number, repo: string, config?: Record<string, unknown>) => Promise<number | null>
   approveGate: (instanceId: number, data?: Record<string, unknown>) => Promise<void>
-  rejectGate: (instanceId: number) => Promise<void>
+  rejectGate: (instanceId: number, data?: Record<string, unknown>) => Promise<void>
   cancelRun: (instanceId: number) => Promise<void>
   clearError: () => void
 }
@@ -102,10 +102,10 @@ export const useWorkflowEngineStore = create<WorkflowEngineState>((set, get) => 
     }
   },
 
-  rejectGate: async (instanceId: number) => {
+  rejectGate: async (instanceId: number, data?: Record<string, unknown>) => {
     set({ loading: true, error: null })
     try {
-      await gateAction(instanceId, 'reject')
+      await gateAction(instanceId, 'reject', data)
       await get().fetchInstance(instanceId)
       set({ loading: false })
     } catch (e) {
@@ -117,6 +117,9 @@ export const useWorkflowEngineStore = create<WorkflowEngineState>((set, get) => 
     try {
       await cancelInstance(instanceId)
       await get().fetchInstances()
+      if (get().selectedInstance?.id === instanceId) {
+        await get().fetchInstance(instanceId)
+      }
     } catch (e) {
       set({ error: String(e) })
     }

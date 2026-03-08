@@ -14,45 +14,82 @@ class SynthesisExecutor(StepExecutor):
 
     def execute(self, inputs: dict) -> StepResult:
         reviews = inputs.get("reviews", [])
-        if len(reviews) < 2:
+        completed = [r for r in reviews if r.get("status") == "completed"]
+
+        if not completed:
             return StepResult(
                 success=True,
-                outputs={"synthesis": reviews[0] if reviews else {}, "reviews": reviews},
+                outputs={"synthesis": {}, "reviews": reviews},
             )
 
-        review_a = reviews[0]
-        review_b = reviews[1]
+        by_pr: dict[int, list[dict]] = {}
+        for r in completed:
+            pr = r.get("pr_number", 0)
+            by_pr.setdefault(pr, []).append(r)
 
-        findings_a = self._extract_findings(review_a)
-        findings_b = self._extract_findings(review_b)
+        all_agreed = []
+        all_a_only = []
+        all_b_only = []
+        artifacts = []
 
-        classified = self._classify_findings(findings_a, findings_b)
+        for pr_number, pr_reviews in by_pr.items():
+            if len(pr_reviews) < 2:
+                continue
 
-        synthesis = {
-            "pr_number": review_a.get("pr_number"),
-            "agent_a": review_a.get("agent_name", "Agent A"),
-            "agent_b": review_b.get("agent_name", "Agent B"),
-            "score_a": review_a.get("score"),
-            "score_b": review_b.get("score"),
-            "agreed": classified["agreed"],
-            "a_only": classified["a_only"],
-            "b_only": classified["b_only"],
-            "total_findings": (
-                len(classified["agreed"]) + len(classified["a_only"]) + len(classified["b_only"])
-            ),
-            "agreed_count": len(classified["agreed"]),
-            "disputed_count": len(classified["a_only"]) + len(classified["b_only"]),
-            "verdict": self._compute_verdict(classified, review_a, review_b),
+            review_a = pr_reviews[0]
+            review_b = pr_reviews[1]
+
+            findings_a = self._extract_findings(review_a)
+            findings_b = self._extract_findings(review_b)
+            classified = self._classify_findings(findings_a, findings_b)
+
+            pr_synthesis = {
+                "pr_number": pr_number,
+                "agent_a": review_a.get("agent_name", "Agent A"),
+                "agent_b": review_b.get("agent_name", "Agent B"),
+                "score_a": review_a.get("score"),
+                "score_b": review_b.get("score"),
+                "agreed": classified["agreed"],
+                "a_only": classified["a_only"],
+                "b_only": classified["b_only"],
+                "total_findings": (
+                    len(classified["agreed"]) + len(classified["a_only"]) + len(classified["b_only"])
+                ),
+                "agreed_count": len(classified["agreed"]),
+                "disputed_count": len(classified["a_only"]) + len(classified["b_only"]),
+                "verdict": self._compute_verdict(classified, review_a, review_b),
+            }
+
+            all_agreed.extend(classified["agreed"])
+            all_a_only.extend(classified["a_only"])
+            all_b_only.extend(classified["b_only"])
+
+            artifacts.append({
+                "type": "synthesis",
+                "pr_number": pr_number,
+                "data": pr_synthesis,
+            })
+
+        total = len(all_agreed) + len(all_a_only) + len(all_b_only)
+        first_synth = artifacts[0]["data"] if artifacts else {}
+        summary_synthesis = first_synth if len(artifacts) == 1 else {
+            "pr_count": len(artifacts),
+            "agreed": all_agreed,
+            "a_only": all_a_only,
+            "b_only": all_b_only,
+            "total_findings": total,
+            "agreed_count": len(all_agreed),
+            "disputed_count": len(all_a_only) + len(all_b_only),
+            "verdict": first_synth.get("verdict", "COMMENT") if first_synth else "COMMENT",
+            "per_pr": [a["data"] for a in artifacts],
+            **({k: first_synth[k] for k in ("pr_number", "agent_a", "agent_b", "score_a", "score_b")
+                if k in first_synth}),
         }
 
         return StepResult(
             success=True,
-            outputs={"synthesis": synthesis, "reviews": reviews},
-            artifacts=[{
-                "type": "synthesis",
-                "pr_number": synthesis["pr_number"],
-                "data": synthesis,
-            }],
+            outputs={"synthesis": summary_synthesis, "reviews": reviews},
+            artifacts=artifacts,
         )
 
     def _extract_findings(self, review: dict) -> list[dict]:

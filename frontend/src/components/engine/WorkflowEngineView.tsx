@@ -1,30 +1,81 @@
 import { useState } from 'react'
 import { WorkflowRunList } from './WorkflowRunList'
 import { WorkflowRunDetail } from './WorkflowRunDetail'
-import { GatePanel } from './GatePanel'
+import { RunConfigPanel } from './RunConfigPanel'
+import { GateView } from './GateView'
+import { useAccountStore } from '../../stores/useAccountStore'
+import { useWorkflowEngineStore } from '../../stores/useWorkflowEngineStore'
 import type { WorkflowInstance } from '../../api/workflow-engine'
 
-export function WorkflowEngineView() {
-  const [selectedInstance, setSelectedInstance] = useState<WorkflowInstance | null>(null)
-  const [showGate, setShowGate] = useState(false)
+type View = 'list' | 'config' | 'detail' | 'gate'
 
-  if (selectedInstance) {
-    return (
-      <>
-        <WorkflowRunDetail
-          instance={selectedInstance}
-          onBack={() => setSelectedInstance(null)}
-          onOpenGate={() => setShowGate(true)}
-        />
-        {showGate && (
-          <GatePanel
-            instance={selectedInstance}
-            onClose={() => setShowGate(false)}
-          />
-        )}
-      </>
-    )
+export function WorkflowEngineView() {
+  const { selectedRepo } = useAccountStore()
+  const { fetchInstance } = useWorkflowEngineStore()
+  const [view, setView] = useState<View>('list')
+  const [activeInstance, setActiveInstance] = useState<WorkflowInstance | null>(null)
+
+  const repoFullName = selectedRepo ? `${selectedRepo.owner.login}/${selectedRepo.name}` : ''
+
+  const goToDetail = (inst: WorkflowInstance) => {
+    setActiveInstance(inst)
+    setView('detail')
   }
 
-  return <WorkflowRunList onSelectInstance={setSelectedInstance} />
+  const goToGate = () => setView('gate')
+
+  const goToList = () => {
+    setActiveInstance(null)
+    setView('list')
+  }
+
+  const handleStarted = async (instanceId: number) => {
+    await fetchInstance(instanceId)
+    const inst: WorkflowInstance = {
+      id: instanceId,
+      template_id: 0,
+      template_name: '',
+      repo: repoFullName,
+      status: 'running',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }
+    setActiveInstance(inst)
+    setView('detail')
+  }
+
+  switch (view) {
+    case 'config':
+      return (
+        <RunConfigPanel
+          repo={repoFullName}
+          onClose={() => setView('list')}
+          onStarted={handleStarted}
+        />
+      )
+    case 'detail':
+      if (!activeInstance) { setView('list'); return null }
+      return (
+        <WorkflowRunDetail
+          instance={activeInstance}
+          onBack={goToList}
+          onOpenGate={goToGate}
+        />
+      )
+    case 'gate':
+      if (!activeInstance) { setView('list'); return null }
+      return (
+        <GateView
+          instance={activeInstance}
+          onBack={() => setView('detail')}
+        />
+      )
+    default:
+      return (
+        <WorkflowRunList
+          onSelectInstance={goToDetail}
+          onNewRun={() => setView('config')}
+        />
+      )
+  }
 }

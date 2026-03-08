@@ -66,7 +66,7 @@ function App() {
         ) : (
           <>
             <ViewTabs />
-            <FilterPanel />
+            {(activeView === 'prs' || activeView === 'workflows') && <FilterPanel />}
             {renderView()}
           </>
         )}

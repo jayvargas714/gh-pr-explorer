@@ -37,6 +37,18 @@ class PRSelectExecutor(StepExecutor):
                 "repo": repo_name,
                 "full_repo": repo,
             },
+            artifacts=[{
+                "type": "pr_list",
+                "data": {
+                    "prs": [
+                        {"number": p.get("number"), "title": p.get("title"),
+                         "url": p.get("url"), "author": p.get("author")}
+                        for p in prs
+                    ],
+                    "mode": mode,
+                    "total": len(prs),
+                },
+            }],
         )
 
     def _fetch_open_prs(self, owner: str, repo: str) -> list[dict]:
@@ -44,7 +56,7 @@ class PRSelectExecutor(StepExecutor):
             "gh", "pr", "list", "--repo", f"{owner}/{repo}",
             "--state", "open", "--limit", "50",
             "--json", "number,title,author,createdAt,updatedAt,additions,deletions,"
-                      "changedFiles,headRefName,baseRefName,isDraft,url,body,labels,"
+                      "changedFiles,headRefName,headRefOid,baseRefName,isDraft,url,body,labels,"
                       "reviewDecision",
         ]
         try:
@@ -61,7 +73,7 @@ class PRSelectExecutor(StepExecutor):
             cmd = [
                 "gh", "pr", "view", str(num), "--repo", f"{owner}/{repo}",
                 "--json", "number,title,author,createdAt,updatedAt,additions,deletions,"
-                          "changedFiles,headRefName,baseRefName,isDraft,url,body,labels,"
+                          "changedFiles,headRefName,headRefOid,baseRefName,isDraft,url,body,labels,"
                           "reviewDecision",
             ]
             try:
