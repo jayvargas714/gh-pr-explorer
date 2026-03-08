@@ -156,8 +156,12 @@ function PromptReviewGate({ instance, gateOutputs, onBack }: {
                 />
                 <span style={{ fontSize: '12px', opacity: 0.6 }}>{isOpen ? '▼' : '▶'}</span>
                 {p.pr_number && <strong>#{p.pr_number}</strong>}
-                {p.pr_title && <span>{p.pr_title}</span>}
-                {p.domain && <Badge variant="info" size="sm">{p.domain}</Badge>}
+                {p.domain && <Badge variant="info" size="sm">
+                  {(p as Record<string, unknown>).domain_display_name as string
+                    ?? experts.find(e => e.domain_id === p.domain)?.display_name
+                    ?? p.domain}
+                </Badge>}
+                {p.pr_title && <span style={{ fontSize: '13px', opacity: 0.8 }}>{p.pr_title}</span>}
               </div>
               {isOpen && (
                 <div style={{ marginTop: '8px' }}>

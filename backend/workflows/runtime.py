@@ -425,7 +425,7 @@ class WorkflowRuntime:
 
         return levels
 
-    _MERGEABLE_LIST_KEYS = {"reviews", "per_domain_synthesis", "prompts", "freshness_results", "freshness"}
+    _MERGEABLE_LIST_KEYS = {"reviews"}
 
     @staticmethod
     def _merge_outputs(target: dict, source: dict):

@@ -47,8 +47,11 @@ class PromptGenerateExecutor(StepExecutor):
                     prompt_text = self._build_expert_prompt(
                         pr, expert, all_experts=experts, owner=owner, repo=repo, mode=mode
                     )
-                    prompts.append(self._prompt_entry(pr, owner, repo, prompt_text,
-                                                      domain=expert["domain_id"]))
+                    prompts.append(self._prompt_entry(
+                        pr, owner, repo, prompt_text,
+                        domain=expert["domain_id"],
+                        domain_display_name=expert.get("display_name"),
+                    ))
         else:
             dominant_domain = experts[0] if experts else None
             for pr in prs:
@@ -76,7 +79,8 @@ class PromptGenerateExecutor(StepExecutor):
 
     @staticmethod
     def _prompt_entry(pr: dict, owner: str, repo: str, prompt: str,
-                      domain: Optional[str] = None) -> dict:
+                      domain: Optional[str] = None,
+                      domain_display_name: Optional[str] = None) -> dict:
         pr_number = pr.get("number", 0)
         author = pr.get("author", {})
         author_login = author.get("login", "") if isinstance(author, dict) else str(author)
@@ -94,6 +98,8 @@ class PromptGenerateExecutor(StepExecutor):
         }
         if domain:
             entry["domain"] = domain
+        if domain_display_name:
+            entry["domain_display_name"] = domain_display_name
         return entry
 
     # --- Prompt builders ---
