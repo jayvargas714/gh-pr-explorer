@@ -50,6 +50,7 @@ class HolisticReviewExecutor(StepExecutor):
             "owner": owner,
             "repo": repo,
             "phase": "holistic",
+            "task": "holistic",
         }
 
         try:

@@ -244,6 +244,11 @@ class CursorCLIAgent(AgentBackend):
             except Exception as e:
                 logger.warning(f"Could not read markdown review: {e}")
 
+        # Fall back to captured stdout when no files were written (e.g.
+        # non-review tasks like expert_generation or synthesis).
+        if content_md is None and state.stdout:
+            content_md = state.stdout
+
         score = None
         if content_json and "score" in content_json:
             score = content_json["score"].get("overall")
@@ -299,6 +304,12 @@ class CursorCLIAgent(AgentBackend):
         pr_number = context.get("pr_number", 0)
         is_followup = context.get("is_followup", False)
         previous_review = context.get("previous_review_content")
+        task = context.get("task", "")
+
+        # Non-review tasks (expert_generation, synthesis, holistic) — return
+        # the user prompt as-is, no file-write instructions.
+        if task and task != "review":
+            return user_prompt
 
         if is_followup and previous_review:
             prev_md = previous_review

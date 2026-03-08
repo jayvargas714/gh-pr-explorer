@@ -234,38 +234,62 @@ class ExpertSelectExecutor(StepExecutor):
             return None
 
         artifact = agent.get_output(handle)
-        return self._parse_expert_json(artifact.content_md)
+        raw = artifact.content_md
+        if not raw:
+            logger.error("Expert generation agent returned empty content_md")
+            return None
+
+        logger.info(f"Expert generation raw output length: {len(raw)}")
+        logger.debug(f"Expert generation raw output (first 500): {raw[:500]}")
+
+        result = self._parse_expert_json(raw)
+        if result is None:
+            logger.error(f"Failed to parse expert JSON. Full output:\n{raw[:2000]}")
+        return result
 
     def _parse_expert_json(self, content: str | None) -> list[dict] | None:
         if not content:
             return None
 
         text = content.strip()
-        if text.startswith("```"):
-            lines = text.splitlines()
-            lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines).strip()
 
+        # Strip all markdown fenced code blocks (```json ... ``` or ``` ... ```)
+        fenced = re.findall(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
+        if fenced:
+            text = fenced[0].strip()
+
+        # First try: direct parse
+        data = None
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start >= 0 and end > start:
-                try:
-                    data = json.loads(text[start:end])
-                except json.JSONDecodeError:
-                    logger.error("Failed to parse AI expert generation output as JSON")
-                    return None
-            else:
-                logger.error("No JSON object found in AI expert generation output")
-                return None
+            pass
+
+        # Second try: extract the outermost { ... } block
+        if data is None:
+            depth = 0
+            start_idx = -1
+            for i, ch in enumerate(text):
+                if ch == '{':
+                    if depth == 0:
+                        start_idx = i
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0 and start_idx >= 0:
+                        try:
+                            data = json.loads(text[start_idx:i + 1])
+                            break
+                        except json.JSONDecodeError:
+                            start_idx = -1
+
+        if data is None:
+            logger.error("No valid JSON object found in AI expert generation output")
+            return None
 
         experts = data.get("experts", [])
         if not isinstance(experts, list) or not experts:
-            logger.error("AI output missing 'experts' array or array is empty")
+            logger.error(f"AI output missing 'experts' array or empty. Keys: {list(data.keys())}")
             return None
 
         validated = []

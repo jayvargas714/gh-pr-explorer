@@ -243,6 +243,7 @@ class SynthesisExecutor(StepExecutor):
             "owner": owner,
             "repo": repo,
             "phase": "synthesis",
+            "task": "synthesis",
         }
 
         try:

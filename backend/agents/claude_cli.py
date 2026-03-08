@@ -197,6 +197,9 @@ class ClaudeCLIAgent(AgentBackend):
             except Exception as e:
                 logger.warning(f"Could not read markdown review: {e}")
 
+        if content_md is None and state.stdout:
+            content_md = state.stdout
+
         score = None
         if content_json and "score" in content_json:
             score = content_json["score"].get("overall")
@@ -226,6 +229,10 @@ class ClaudeCLIAgent(AgentBackend):
         pr_number = context.get("pr_number", 0)
         is_followup = context.get("is_followup", False)
         previous_review = context.get("previous_review_content")
+        task = context.get("task", "")
+
+        if task and task != "review":
+            return user_prompt
 
         if is_followup and previous_review:
             prev_md = previous_review
