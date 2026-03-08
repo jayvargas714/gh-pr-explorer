@@ -84,6 +84,7 @@ class AgentReviewExecutor(StepExecutor):
                 "repo": prompt_data.get("repo", ""),
                 "phase": phase,
                 "domain": domain,
+                "instance_id": inst_id,
             }
 
             try:
@@ -112,6 +113,7 @@ class AgentReviewExecutor(StepExecutor):
                     "pr_number": pr_number,
                     "status": "completed",
                     "agent_name": agent_name,
+                    "phase": phase,
                     "content_md": artifact.content_md,
                     "content_json": artifact.content_json,
                     "file_path": artifact.file_path,

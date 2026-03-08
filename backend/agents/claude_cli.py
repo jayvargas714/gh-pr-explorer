@@ -82,7 +82,9 @@ class ClaudeCLIAgent(AgentBackend):
         self._processes: dict[str, _ProcessState] = {}
 
     def start_review(self, prompt: str, context: dict) -> AgentHandle:
-        reviews_dir = get_reviews_dir()
+        base_reviews_dir = get_reviews_dir()
+        instance_id = context.get("instance_id")
+        reviews_dir = base_reviews_dir / f"run-{instance_id}" if instance_id else base_reviews_dir
         reviews_dir.mkdir(parents=True, exist_ok=True)
 
         owner = context.get("owner", "unknown")
@@ -115,7 +117,7 @@ class ClaudeCLIAgent(AgentBackend):
         # Claude agents relies on file-path separation (review files written to
         # distinct paths per phase) rather than workspace-level sandboxing.
         if context.get("phase") == "b":
-            phase_b_dir = reviews_dir / "phase-b"
+            phase_b_dir = base_reviews_dir / "phase-b"
             phase_b_dir.mkdir(parents=True, exist_ok=True)
 
         try:

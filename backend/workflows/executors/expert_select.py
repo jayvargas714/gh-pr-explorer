@@ -207,7 +207,7 @@ class ExpertSelectExecutor(StepExecutor):
             logger.error(f"Failed to get agent '{agent_name}' for expert generation: {e}")
             return None
 
-        context = {"owner": owner, "repo": repo, "task": "expert_generation"}
+        context = {"owner": owner, "repo": repo, "task": "expert_generation", "instance_id": inst_id}
 
         try:
             handle = agent.start_review(prompt, context)

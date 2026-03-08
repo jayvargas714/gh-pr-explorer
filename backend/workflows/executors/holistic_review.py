@@ -51,6 +51,7 @@ class HolisticReviewExecutor(StepExecutor):
             "repo": repo,
             "phase": "holistic",
             "task": "holistic",
+            "instance_id": inst_id,
         }
 
         try:

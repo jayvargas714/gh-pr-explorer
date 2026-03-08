@@ -4,7 +4,7 @@ import json
 import logging
 import threading
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response
 
 from backend.database import get_workflow_db
 from backend.workflows.runtime import WorkflowRuntime, validate_template
@@ -240,6 +240,38 @@ def get_step_live_output(instance_id, step_id):
     return jsonify({"output": text})
 
 
+@workflow_engine_bp.route("/api/workflows/instances/<int:instance_id>/steps/<step_id>/retry", methods=["POST"])
+def retry_step(instance_id, step_id):
+    """Retry a workflow from a given step, re-executing it and all downstream steps."""
+    db = get_workflow_db()
+    instance = db.get_instance(instance_id)
+    if not instance:
+        return jsonify({"error": "Instance not found"}), 404
+
+    steps = db.get_steps(instance_id)
+    target = next((s for s in steps if s["step_id"] == step_id), None)
+    if not target:
+        return jsonify({"error": f"Step '{step_id}' not found"}), 404
+
+    if target["status"] == "running":
+        return jsonify({"error": "Step is currently running"}), 400
+
+    template_data = db.get_template(instance["template_id"])
+    if not template_data:
+        return jsonify({"error": "Template not found"}), 500
+
+    db.update_instance_status(instance_id, "running")
+
+    thread = threading.Thread(
+        target=_retry_from_step,
+        args=(instance_id, template_data["template"], instance, step_id),
+        daemon=True,
+    )
+    thread.start()
+
+    return jsonify({"ok": True, "status": "running", "retrying_from": step_id})
+
+
 # --- Agents ---
 
 @workflow_engine_bp.route("/api/agents", methods=["GET"])
@@ -386,3 +418,144 @@ def _resume_workflow(instance_id: int, template: dict, instance: dict, gate_deci
     except Exception as e:
         logger.error(f"Workflow resume for instance {instance_id} failed: {e}")
         db.update_instance_status(instance_id, "failed")
+
+
+def _retry_from_step(instance_id: int, template: dict, instance: dict, step_id: str):
+    db = get_workflow_db()
+    try:
+        steps = db.get_steps(instance_id)
+
+        all_outputs = {"repo": instance.get("repo", "")}
+        runtime = WorkflowRuntime(template, instance_id, db_accessor=db)
+        downstream = runtime._get_downstream_inclusive(step_id)
+
+        for s in steps:
+            if s["status"] == "completed" and s["step_id"] not in downstream and s.get("outputs_json"):
+                try:
+                    step_out = json.loads(s["outputs_json"])
+                    all_outputs.update(step_out)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        config = json.loads(instance.get("config_json") or "{}")
+        result = runtime.retry_from_step(
+            retry_step_id=step_id,
+            all_outputs=all_outputs,
+            instance_config={"repo": instance.get("repo", ""), **config},
+        )
+        db.update_instance_status(instance_id, result["status"])
+    except Exception as e:
+        logger.error(f"Workflow retry from {step_id} for instance {instance_id} failed: {e}")
+        db.update_instance_status(instance_id, "failed")
+
+
+@workflow_engine_bp.route(
+    "/api/workflows/instances/<int:instance_id>/steps/<step_id>/download", methods=["GET"]
+)
+def download_step_output(instance_id, step_id):
+    fmt = request.args.get("format", "md")
+    db = get_workflow_db()
+    steps = db.get_steps(instance_id)
+    step = next((s for s in steps if s["step_id"] == step_id), None)
+    if not step:
+        return jsonify({"error": "Step not found"}), 404
+    if not step.get("outputs_json"):
+        return jsonify({"error": "No output available"}), 404
+
+    outputs = json.loads(step["outputs_json"])
+    step_type = step["step_type"]
+
+    WRAPPER_KEYS = {
+        "synthesis": "synthesis",
+        "holistic_review": "holistic",
+    }
+    wrapper = WRAPPER_KEYS.get(step_type)
+    if wrapper and wrapper in outputs and isinstance(outputs[wrapper], dict):
+        outputs = outputs[wrapper]
+
+    if fmt == "json":
+        content = json.dumps(outputs, indent=2)
+        mime = "application/json"
+        ext = "json"
+    else:
+        content = _outputs_to_markdown(outputs, step_type, step_id, instance_id)
+        mime = "text/markdown"
+        ext = "md"
+
+    filename = f"run-{instance_id}-{step_id}.{ext}"
+    return Response(
+        content,
+        mimetype=mime,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _outputs_to_markdown(outputs: dict, step_type: str, step_id: str, instance_id: int) -> str:
+    lines = [f"# {step_type.replace('_', ' ').title()} — Run #{instance_id}, Step: {step_id}\n"]
+
+    if step_type in ("synthesis", "holistic_review"):
+        verdict = outputs.get("verdict", "N/A")
+        summary = outputs.get("summary", "")
+        lines.append(f"## Verdict: {verdict}\n")
+        if summary:
+            lines.append(f"{summary}\n")
+
+        for section_key, label in [
+            ("blocking_findings", "Blocking Findings"),
+            ("non_blocking_findings", "Non-Blocking Findings"),
+            ("agreed", "Agreed Findings"),
+            ("a_only", "Agent A Only"),
+            ("b_only", "Agent B Only"),
+            ("cross_cutting_findings", "Cross-Cutting Findings"),
+            ("synth_findings", "SYNTH Findings"),
+        ]:
+            items = outputs.get(section_key, [])
+            if not items:
+                continue
+            lines.append(f"## {label} ({len(items)})\n")
+            for i, item in enumerate(items, 1):
+                if isinstance(item, dict):
+                    title = item.get("title", item.get("finding", {}).get("title", f"Finding {i}"))
+                    severity = item.get("severity", "")
+                    desc = item.get("description", item.get("problem", ""))
+                    sev_tag = f" [{severity}]" if severity else ""
+                    lines.append(f"{i}. **{title}**{sev_tag}")
+                    if desc:
+                        lines.append(f"   {desc}\n")
+                elif isinstance(item, str):
+                    lines.append(f"{i}. {item}")
+
+        per_domain = outputs.get("per_domain_synthesis", [])
+        if per_domain:
+            lines.append(f"## Per-Domain Synthesis ({len(per_domain)} domains)\n")
+            for ds in per_domain:
+                if isinstance(ds, dict):
+                    domain = ds.get("domain", "?")
+                    dv = ds.get("verdict", "?")
+                    tf = ds.get("total_findings", 0)
+                    lines.append(f"### {domain} — {dv} ({tf} findings)\n")
+
+        questions = outputs.get("questions", [])
+        if questions:
+            lines.append(f"## Questions ({len(questions)})\n")
+            for i, q in enumerate(questions, 1):
+                lines.append(f"{i}. {q}")
+
+    elif step_type == "agent_review":
+        reviews = outputs.get("reviews", [])
+        for r in reviews:
+            if isinstance(r, dict):
+                domain = r.get("domain", "general")
+                agent = r.get("agent_name", "?")
+                lines.append(f"## Review: {domain} (by {agent})\n")
+                content = r.get("content", r.get("review_text", ""))
+                if content:
+                    lines.append(content)
+                    lines.append("")
+
+    else:
+        lines.append("```json")
+        lines.append(json.dumps(outputs, indent=2))
+        lines.append("```")
+
+    return "\n".join(lines)

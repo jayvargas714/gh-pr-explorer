@@ -125,7 +125,9 @@ class CursorCLIAgent(AgentBackend):
         self.mode = config.get("mode")
 
     def start_review(self, prompt: str, context: dict) -> AgentHandle:
-        reviews_dir = get_reviews_dir()
+        base_reviews_dir = get_reviews_dir()
+        instance_id = context.get("instance_id")
+        reviews_dir = base_reviews_dir / f"run-{instance_id}" if instance_id else base_reviews_dir
         reviews_dir.mkdir(parents=True, exist_ok=True)
 
         owner = context.get("owner", "unknown")
@@ -162,7 +164,7 @@ class CursorCLIAgent(AgentBackend):
             cmd.extend(["--mode", self.mode])
 
         if context.get("phase") == "b":
-            phase_b_dir = reviews_dir / "phase-b"
+            phase_b_dir = base_reviews_dir / "phase-b"
             phase_b_dir.mkdir(parents=True, exist_ok=True)
             cmd.extend(["--workspace", str(phase_b_dir)])
 

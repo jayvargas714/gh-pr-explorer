@@ -258,6 +258,60 @@ class WorkflowRuntime:
 
         return {"status": "completed", "outputs": all_outputs}
 
+    def retry_from_step(self, retry_step_id: str, all_outputs: dict,
+                        instance_config: dict) -> dict:
+        """Re-execute from a given step (and all downstream steps).
+
+        Resets the target step and all its successors to pending, then
+        runs them using _parallel_levels, skipping levels before the
+        target step.
+        """
+        downstream = self._get_downstream_inclusive(retry_step_id)
+        if self.db:
+            self.db.reset_steps(self.instance_id, downstream)
+
+        levels = self._parallel_levels()
+        step_outputs: dict[str, dict] = {}
+        reached = False
+
+        for level in levels:
+            if retry_step_id in level:
+                reached = True
+            if not reached:
+                continue
+
+            if len(level) == 1:
+                result = self._execute_single_step(
+                    level[0], step_outputs, all_outputs, instance_config
+                )
+                if result is not None:
+                    return result
+            else:
+                result = self._execute_parallel_steps(
+                    level, step_outputs, all_outputs, instance_config
+                )
+                if result is not None:
+                    return result
+
+        return {"status": "completed", "outputs": all_outputs}
+
+    def _get_downstream_inclusive(self, start_id: str) -> list[str]:
+        """Return start_id plus all steps reachable from it (BFS)."""
+        adjacency: dict[str, list[str]] = {}
+        for edge in self.edges:
+            adjacency.setdefault(edge["from"], []).append(edge["to"])
+
+        visited = set()
+        queue = [start_id]
+        while queue:
+            node = queue.pop(0)
+            if node in visited:
+                continue
+            visited.add(node)
+            for neighbor in adjacency.get(node, []):
+                queue.append(neighbor)
+        return sorted(visited)
+
     def _overlay_db_step_configs(self):
         """Merge per-step configs from DB rows (which include run-time overrides)
         on top of the template defaults."""

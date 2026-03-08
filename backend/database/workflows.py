@@ -215,6 +215,21 @@ class WorkflowDB:
     def save_gate_payload(self, instance_id: int, step_id: str, payload: dict):
         self.save_step_outputs(instance_id, step_id, payload)
 
+    def reset_steps(self, instance_id: int, step_ids: list[str]):
+        """Reset steps to pending, clearing outputs and errors."""
+        with self.db.connection() as conn:
+            for sid in step_ids:
+                conn.execute(
+                    "UPDATE instance_steps SET status='pending', outputs_json=NULL, "
+                    "error_message=NULL, started_at=NULL, completed_at=NULL "
+                    "WHERE instance_id=? AND step_id=?",
+                    (instance_id, sid),
+                )
+                conn.execute(
+                    "DELETE FROM instance_artifacts WHERE instance_id=? AND step_id=?",
+                    (instance_id, sid),
+                )
+
     # --- Agents ---
 
     def list_agents(self) -> list[dict]:

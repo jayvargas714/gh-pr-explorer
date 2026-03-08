@@ -4,11 +4,16 @@ from __future__ import annotations
 Supports single-tier (team-review) and two-tier (self/deep-review) synthesis
 with source attribution, synthesis log, NEEDS_DISCUSSION verdict, and
 enhanced finding matching per the legacy adversarial review specification.
+
+AI verification runs per-domain in parallel (up to 4 concurrent agents),
+matching the Phase 3 Tier 1 architecture.
 """
 
 import logging
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from backend.agents import get_agent, AgentStatus
 from backend.workflows.executor import StepExecutor, StepResult
@@ -16,6 +21,8 @@ from backend.workflows.executors.agent_review import _set_live_output, _clear_li
 from backend.workflows.step_types import register_step
 
 logger = logging.getLogger(__name__)
+
+MAX_PARALLEL_VERIFY = 4
 
 
 @register_step("synthesis")
@@ -196,6 +203,11 @@ class SynthesisExecutor(StepExecutor):
         else:
             overall_verdict = "APPROVE"
 
+        agreement_rate = (
+            f"{len(all_agreed)} of {total} findings agreed"
+            if total > 0 else "No findings to compare"
+        )
+
         summary_synthesis = {
             "agreed": all_agreed,
             "a_only": all_a_only,
@@ -203,6 +215,7 @@ class SynthesisExecutor(StepExecutor):
             "total_findings": total,
             "agreed_count": len(all_agreed),
             "disputed_count": len(all_a_only) + len(all_b_only),
+            "agreement_rate": agreement_rate,
             "verdict": overall_verdict,
             "per_domain_synthesis": per_domain_synthesis,
             "synthesis_log": synthesis_log,
@@ -218,18 +231,16 @@ class SynthesisExecutor(StepExecutor):
             artifacts=artifacts,
         )
 
-    # --- AI verification pass ---
+    # --- AI verification pass (per-domain parallel) ---
 
     def _ai_verify(self, mechanical_result: StepResult, reviews: list, inputs: dict) -> StepResult:
-        """Dispatch an AI agent to verify the mechanical synthesis results."""
+        """Dispatch per-domain AI agents in parallel to verify mechanical synthesis."""
         synthesis = mechanical_result.outputs.get("synthesis", {})
         owner = inputs.get("owner", "")
         repo = inputs.get("repo", "")
         prs = inputs.get("prs", [])
         inst_id = self.instance_config.get("_instance_id", 0)
         step_id = self.step_config.get("_step_id", "")
-
-        prompt = self._build_verification_prompt(synthesis, reviews, owner, repo, prs)
 
         agent_name = self.step_config.get("agent", "cursor-opus")
         try:
@@ -238,12 +249,114 @@ class SynthesisExecutor(StepExecutor):
             logger.warning(f"AI verify failed to get agent: {e}, returning mechanical result")
             return mechanical_result
 
+        per_domain = synthesis.get("per_domain_synthesis", [])
+        if not per_domain:
+            return self._ai_verify_single(agent, synthesis, reviews, owner, repo, prs, inst_id, step_id)
+
+        # Group reviews by domain
+        reviews_by_domain: dict[str, dict] = {}
+        for r in reviews:
+            domain = r.get("domain", "general")
+            phase = r.get("phase", "")
+            reviews_by_domain.setdefault(domain, {})
+            if phase == "a":
+                reviews_by_domain[domain]["a"] = r
+            elif phase == "b":
+                reviews_by_domain[domain]["b"] = r
+            elif "a" not in reviews_by_domain[domain]:
+                reviews_by_domain[domain]["a"] = r
+            else:
+                reviews_by_domain[domain]["b"] = r
+
+        domain_live: dict[str, str] = {}
+        domain_lock = threading.Lock()
+
+        def verify_single_domain(domain_synth: dict) -> dict:
+            domain = domain_synth.get("domain", "general")
+            domain_reviews = reviews_by_domain.get(domain, {})
+            review_a = domain_reviews.get("a")
+            review_b = domain_reviews.get("b")
+
+            if not review_a or not review_b:
+                logger.warning(f"Missing A or B review for domain {domain}, skipping AI verify")
+                domain_synth["ai_verified"] = False
+                return domain_synth
+
+            prompt = self._build_domain_verification_prompt(
+                domain_synth, review_a, review_b, owner, repo, prs
+            )
+            context = {
+                "pr_number": prs[0].get("number") if prs else 0,
+                "owner": owner, "repo": repo,
+                "phase": "synthesis", "task": "synthesis",
+                "domain": domain,
+                "instance_id": inst_id,
+            }
+
+            try:
+                handle = agent.start_review(prompt, context)
+                while True:
+                    status = agent.check_status(handle)
+                    if status in (AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED):
+                        break
+                    live = agent.get_live_output(handle)
+                    if live and inst_id and step_id:
+                        with domain_lock:
+                            domain_live[domain] = live
+                            composite = "\n\n".join(
+                                f"--- [{d}] ---\n{text}" for d, text in domain_live.items()
+                            )
+                        _set_live_output(inst_id, step_id, composite)
+                    time.sleep(5)
+
+                if status == AgentStatus.COMPLETED:
+                    artifact = agent.get_output(handle)
+                    return self._parse_domain_verification(artifact.content_md, domain_synth)
+                else:
+                    logger.warning(f"AI verification failed for domain {domain}")
+                    domain_synth["ai_verified"] = False
+                    return domain_synth
+            except Exception as e:
+                logger.error(f"AI verify error for domain {domain}: {e}")
+                domain_synth["ai_verified"] = False
+                return domain_synth
+
+        verified_domains: list[dict] = []
+        num_workers = min(len(per_domain), MAX_PARALLEL_VERIFY)
+        with ThreadPoolExecutor(max_workers=max(num_workers, 1)) as pool:
+            futures = {pool.submit(verify_single_domain, d): d for d in per_domain}
+            for future in as_completed(futures):
+                try:
+                    verified_domains.append(future.result())
+                except Exception as e:
+                    original = futures[future]
+                    original["ai_verified"] = False
+                    verified_domains.append(original)
+
+        if inst_id and step_id:
+            _clear_live_output(inst_id, step_id)
+
+        return self._merge_verified_domains(synthesis, verified_domains, mechanical_result)
+
+    def _ai_verify_single(self, agent, synthesis: dict, reviews: list,
+                          owner: str, repo: str, prs: list,
+                          inst_id: int, step_id: str) -> StepResult:
+        """Fallback: single AI verification for team-review (no per-domain)."""
+        review_a = next((r for r in reviews if r.get("phase") == "a"), reviews[0] if reviews else None)
+        review_b = next((r for r in reviews if r.get("phase") == "b"), reviews[1] if len(reviews) > 1 else None)
+
+        if not review_a or not review_b:
+            synthesis["ai_verified"] = False
+            return StepResult(success=True, outputs={"synthesis": synthesis})
+
+        prompt = self._build_domain_verification_prompt(
+            synthesis, review_a, review_b, owner, repo, prs
+        )
         context = {
             "pr_number": prs[0].get("number") if prs else 0,
-            "owner": owner,
-            "repo": repo,
-            "phase": "synthesis",
-            "task": "synthesis",
+            "owner": owner, "repo": repo,
+            "phase": "synthesis", "task": "synthesis",
+            "instance_id": inst_id,
         }
 
         try:
@@ -262,130 +375,217 @@ class SynthesisExecutor(StepExecutor):
 
             if status == AgentStatus.COMPLETED:
                 artifact = agent.get_output(handle)
-                verified = self._parse_ai_verification(artifact.content_md, synthesis)
-                return StepResult(
-                    success=True,
-                    outputs={"synthesis": verified},
-                )
-            else:
-                logger.warning("AI verification failed, returning mechanical result")
-                return mechanical_result
+                verified = self._parse_domain_verification(artifact.content_md, synthesis)
+                return StepResult(success=True, outputs={"synthesis": verified})
         except Exception as e:
-            logger.error(f"AI verify error: {e}")
+            logger.error(f"AI verify single error: {e}")
             if inst_id and step_id:
                 _clear_live_output(inst_id, step_id)
-            return mechanical_result
 
-    def _build_verification_prompt(self, synthesis: dict, reviews: list,
-                                   owner: str, repo: str, prs: list) -> str:
-        """Build the AI synthesis verification prompt."""
+        synthesis["ai_verified"] = False
+        return StepResult(success=True, outputs={"synthesis": synthesis})
+
+    def _build_domain_verification_prompt(self, domain_synth: dict,
+                                          review_a: dict, review_b: dict,
+                                          owner: str, repo: str, prs: list) -> str:
+        """Build a per-domain AI synthesis verification prompt."""
+        domain = domain_synth.get("domain", "general")
+        agent_a_name = review_a.get("agent_name", "Agent A")
+        agent_b_name = review_b.get("agent_name", "Agent B")
         sections = []
 
         sections.append(
-            "You are a senior engineering lead performing SYNTHESIS of two independent code reviews.\n"
-            "Your job is to verify every finding against the actual diff, resolve disputes with evidence, "
-            "and generate SYNTH findings for issues both reviewers missed.\n"
+            f"You are a senior engineering lead performing SYNTHESIS of two independent code reviews "
+            f"for the **{domain}** domain.\n"
+            f"Agent A: {agent_a_name}\nAgent B: {agent_b_name}\n"
+            f"Your job: verify every finding against the actual diff, resolve disputes with evidence, "
+            f"generate SYNTH findings for issues both reviewers missed, and flag cross-cutting concerns.\n"
         )
 
         pr_numbers = [p.get("number") for p in prs if p.get("number")]
         for pr_num in pr_numbers:
             sections.append(
-                f"## Context Commands\n"
-                f"Run these to verify findings against the actual code:\n"
-                f"- `gh pr diff {pr_num}` — full diff\n"
-                f"- `gh api repos/{owner}/{repo}/pulls/{pr_num}/reviews --paginate` — existing reviews\n"
-                f"- `gh api repos/{owner}/{repo}/pulls/{pr_num}/comments --paginate` — existing comments\n"
+                f"## Context Commands (run these to verify findings)\n"
+                f"```bash\n"
+                f"gh pr diff {pr_num} --repo {owner}/{repo}\n"
+                f"gh api repos/{owner}/{repo}/pulls/{pr_num}/reviews --paginate\n"
+                f"gh api repos/{owner}/{repo}/pulls/{pr_num}/comments --paginate\n"
+                f"```\n"
             )
 
-        sections.append("## Pre-Classified Findings\n")
+        sections.append("## Pre-Classified Findings (mechanical)\n")
         for category in ("agreed", "a_only", "b_only"):
-            findings = synthesis.get(category, [])
+            findings = domain_synth.get(category, [])
             if findings:
-                sections.append(f"### {category.upper()} ({len(findings)} findings)")
+                sections.append(f"### {category.upper()} ({len(findings)})")
                 for i, f in enumerate(findings):
                     inner = f.get("finding_a", f.get("finding_b", f.get("finding", {})))
                     title = inner.get("title", f"Finding {i+1}")
                     severity = inner.get("severity", "unknown")
-                    desc = inner.get("description", "")[:500]
-                    sections.append(f"- [{severity}] {title}: {desc}")
+                    loc = inner.get("location", {})
+                    loc_str = loc.get("raw", loc.get("file", ""))
+                    problem = inner.get("problem", "")[:300]
+                    sections.append(f"  {i+1}. [{severity}] **{title}** at `{loc_str}`\n     {problem}")
                 sections.append("")
 
-        sections.append("## Review A Content")
-        review_a = [r for r in reviews if r.get("agent_name", "").endswith("a") or "review_a" in r.get("agent_name", "")]
-        if not review_a:
-            review_a = reviews[:1]
-        for r in review_a:
-            sections.append(r.get("content_md", "")[:5000])
-
-        sections.append("\n## Review B Content")
-        review_b = [r for r in reviews if r.get("agent_name", "").endswith("b") or "review_b" in r.get("agent_name", "")]
-        if not review_b:
-            review_b = reviews[1:2]
-        for r in review_b:
-            sections.append(r.get("content_md", "")[:5000])
+        md_a = review_a.get("content_md", "")
+        md_b = review_b.get("content_md", "")
+        sections.append(f"## Review A ({agent_a_name}) — Full Content\n\n{md_a[:8000]}")
+        sections.append(f"## Review B ({agent_b_name}) — Full Content\n\n{md_b[:8000]}")
 
         sections.append(
             "\n## Your Task\n\n"
             "For EVERY pre-classified finding:\n"
-            "1. **Verify** against the actual diff. Read the relevant code.\n"
-            "2. **Classify**: CONFIRMED (verified in code), FALSE_POSITIVE (not actually an issue), RECLASSIFIED (different severity)\n"
-            "3. **For disputed findings** (A_ONLY, B_ONLY): determine if the finding is valid with code evidence\n"
+            "1. **Verify** against the actual diff — read the code at the cited location\n"
+            "2. **Classify**: CONFIRMED | FALSE_POSITIVE | RECLASSIFIED (with new severity)\n"
+            "3. **For disputed findings** (A_ONLY, B_ONLY): determine validity with code evidence\n"
             "4. **Drop false positives** with explicit reasoning\n\n"
             "Additionally:\n"
-            "- **Generate SYNTH findings**: Issues BOTH reviewers missed. Source these as 'SYNTH'.\n"
-            "- **Extract cross-cutting flags**: Parse any [CROSS-CUTTING] tags from reviews. Output as `cross_cutting_flags` list for Tier 2 holistic review.\n"
-            "- If Jira tickets are mentioned (SIM-XXXX), consider the ticket's intent when resolving disputes.\n\n"
-            "## Output Format\n\n"
-            "Output valid JSON only:\n"
+            "- **Generate SYNTH findings**: issues BOTH reviewers missed (source: 'SYNTH')\n"
+            "- **Extract cross-cutting flags**: any issues outside this domain's scope → list them\n"
+            "- If Jira tickets (SIM-XXXX) are mentioned, consider the ticket intent\n\n"
+            "## Output Format — valid JSON only:\n"
+            "```json\n"
             "{\n"
+            '  "domain": "' + domain + '",\n'
             '  "verified_findings": [\n'
-            '    {"title": "...", "severity": "...", "classification": "CONFIRMED|FALSE_POSITIVE|RECLASSIFIED",\n'
-            '     "original_category": "AGREED|A_ONLY|B_ONLY", "evidence": "...", "source": "review_a|review_b|SYNTH"}\n'
+            '    {"title": "...", "severity": "critical|major|minor", '
+            '"classification": "CONFIRMED|FALSE_POSITIVE|RECLASSIFIED",\n'
+            '     "original_category": "AGREED|A_ONLY|B_ONLY", "evidence": "...", '
+            '"source": "review_a|review_b|BOTH"}\n'
             "  ],\n"
             '  "synth_findings": [\n'
-            '    {"title": "...", "severity": "...", "description": "...", "evidence": "...", "source": "SYNTH"}\n'
+            '    {"title": "...", "severity": "...", "description": "...", '
+            '"evidence": "...", "source": "SYNTH"}\n'
             "  ],\n"
-            '  "cross_cutting_flags": ["flag description 1", "flag description 2"],\n'
-            '  "false_positives_dropped": [\n'
-            '    {"title": "...", "reason": "..."}\n'
-            "  ],\n"
-            '  "synthesis_log": [\n'
-            '    {"finding": "...", "action": "CONFIRMED|DROPPED|RECLASSIFIED", "reasoning": "..."}\n'
-            "  ]\n"
+            '  "cross_cutting_flags": ["description 1", ...],\n'
+            '  "false_positives_dropped": [{"title": "...", "reason": "..."}],\n'
+            '  "synthesis_log": [{"finding": "...", "action": "CONFIRMED|DROPPED|RECLASSIFIED", "reasoning": "..."}],\n'
+            '  "domain_verdict": "APPROVE|CHANGES_REQUESTED|NEEDS_DISCUSSION|COMMENT",\n'
+            '  "domain_summary": "2-3 sentence summary for this domain"\n'
             "}\n"
+            "```\n"
         )
 
         return "\n\n".join(sections)
 
-    def _parse_ai_verification(self, content: str, original_synthesis: dict) -> dict:
-        """Parse AI verification output and merge into synthesis."""
+    def _parse_domain_verification(self, content: str | None, original: dict) -> dict:
+        """Parse AI domain verification output and merge into domain synthesis."""
         import json as json_mod
 
-        json_match = re.search(r'\{[\s\S]*\}', content)
-        if not json_match:
-            logger.warning("Could not parse AI verification JSON, using original")
-            original_synthesis["ai_verified"] = False
-            return original_synthesis
+        if not content:
+            original["ai_verified"] = False
+            return original
 
+        # Extract JSON from possible markdown wrapping
+        text = content.strip()
+        fenced = re.findall(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
+        if fenced:
+            text = fenced[0].strip()
+
+        # Brace-depth extraction
+        data = None
         try:
-            verified = json_mod.loads(json_match.group())
+            data = json_mod.loads(text)
         except json_mod.JSONDecodeError:
-            logger.warning("Invalid JSON from AI verification, using original")
-            original_synthesis["ai_verified"] = False
-            return original_synthesis
+            depth = 0
+            start_idx = -1
+            for i, ch in enumerate(text):
+                if ch == '{':
+                    if depth == 0:
+                        start_idx = i
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0 and start_idx >= 0:
+                        try:
+                            data = json_mod.loads(text[start_idx:i + 1])
+                            break
+                        except json_mod.JSONDecodeError:
+                            start_idx = -1
 
-        result = dict(original_synthesis)
+        if data is None:
+            logger.warning("Could not parse AI domain verification JSON")
+            original["ai_verified"] = False
+            return original
+
+        result = dict(original)
         result["ai_verified"] = True
-        result["verified_findings"] = verified.get("verified_findings", [])
-        result["synth_findings"] = verified.get("synth_findings", [])
-        result["cross_cutting_flags"] = verified.get("cross_cutting_flags", [])
-        result["false_positives_dropped"] = verified.get("false_positives_dropped", [])
-        result["synthesis_log"] = verified.get("synthesis_log", [])
+        result["verified_findings"] = data.get("verified_findings", [])
+        result["synth_findings"] = data.get("synth_findings", [])
+        result["cross_cutting_flags"] = data.get("cross_cutting_flags", [])
+        result["false_positives_dropped"] = data.get("false_positives_dropped", [])
+        result["ai_synthesis_log"] = data.get("synthesis_log", [])
 
-        confirmed = [f for f in result["verified_findings"] if f.get("classification") != "FALSE_POSITIVE"]
-        result["total_findings"] = len(confirmed) + len(result.get("synth_findings", []))
+        if data.get("domain_verdict"):
+            result["verdict"] = data["domain_verdict"]
+        if data.get("domain_summary"):
+            result["summary"] = data["domain_summary"]
+
+        confirmed = [f for f in result["verified_findings"]
+                     if f.get("classification") != "FALSE_POSITIVE"]
+        synth_count = len(result.get("synth_findings", []))
+        fp_count = len(result.get("false_positives_dropped", []))
+        result["total_findings"] = len(confirmed) + synth_count
+        result["synth_findings_count"] = synth_count
+        result["false_positives_dropped_count"] = fp_count
+        result["cross_cutting_count"] = len(result.get("cross_cutting_flags", []))
 
         return result
+
+    def _merge_verified_domains(self, original_synthesis: dict,
+                                verified_domains: list[dict],
+                                mechanical_result: StepResult) -> StepResult:
+        """Merge per-domain AI verification results into the overall synthesis."""
+        all_synth_findings = []
+        all_cross_cutting = []
+        all_fp_dropped = []
+        total_confirmed = 0
+
+        for d in verified_domains:
+            all_synth_findings.extend(d.get("synth_findings", []))
+            all_cross_cutting.extend(d.get("cross_cutting_flags", []))
+            all_fp_dropped.extend(d.get("false_positives_dropped", []))
+            total_confirmed += d.get("total_findings", 0)
+
+        any_verified = any(d.get("ai_verified") for d in verified_domains)
+
+        verdicts = [d.get("verdict", "COMMENT") for d in verified_domains]
+        if "CHANGES_REQUESTED" in verdicts:
+            overall_verdict = "CHANGES_REQUESTED"
+        elif "NEEDS_DISCUSSION" in verdicts:
+            overall_verdict = "NEEDS_DISCUSSION"
+        elif any(v == "COMMENT" for v in verdicts):
+            overall_verdict = "COMMENT"
+        else:
+            overall_verdict = "APPROVE"
+
+        result = dict(original_synthesis)
+        result["ai_verified"] = any_verified
+        result["per_domain_synthesis"] = verified_domains
+        result["synth_findings"] = all_synth_findings
+        result["cross_cutting_flags"] = all_cross_cutting
+        result["false_positives_dropped"] = all_fp_dropped
+        result["total_findings"] = total_confirmed
+        result["synth_findings_count"] = len(all_synth_findings)
+        result["false_positives_dropped_count"] = len(all_fp_dropped)
+        result["cross_cutting_count"] = len(all_cross_cutting)
+        result["verdict"] = overall_verdict
+
+        # Aggregate all AI synthesis logs
+        all_logs = []
+        for d in verified_domains:
+            for entry in d.get("ai_synthesis_log", []):
+                entry["domain"] = d.get("domain", "general")
+                all_logs.append(entry)
+        if all_logs:
+            result["synthesis_log"] = all_logs
+
+        return StepResult(
+            success=True,
+            outputs={"synthesis": result, "per_domain_synthesis": verified_domains},
+            artifacts=mechanical_result.artifacts,
+        )
 
     # --- Finding extraction ---
 
