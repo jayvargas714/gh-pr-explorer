@@ -64,27 +64,28 @@ class HolisticReviewExecutor(StepExecutor):
             if inst_id:
                 register_agent(inst_id, agent, handle)
             elapsed = 0
-            while True:
-                if inst_id and is_cancelled(inst_id):
-                    agent.cancel(handle)
-                    return self._heuristic_holistic(synthesis, reviews, experts)
-                status = agent.check_status(handle)
-                if status in (AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED):
-                    break
-                if elapsed >= AGENT_POLL_TIMEOUT:
-                    logger.error(f"Holistic review timed out after {elapsed}s")
-                    agent.cancel(handle)
-                    break
-                live = agent.get_live_output(handle)
-                if live and inst_id and step_id:
-                    _set_live_output(inst_id, step_id, live)
-                time.sleep(5)
-                elapsed += 5
-
-            if inst_id:
-                unregister_agent(inst_id, handle)
-            if inst_id and step_id:
-                _clear_live_output(inst_id, step_id)
+            try:
+                while True:
+                    if inst_id and is_cancelled(inst_id):
+                        agent.cancel(handle)
+                        return self._heuristic_holistic(synthesis, reviews, experts)
+                    status = agent.check_status(handle)
+                    if status in (AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED):
+                        break
+                    if elapsed >= AGENT_POLL_TIMEOUT:
+                        logger.error(f"Holistic review timed out after {elapsed}s")
+                        agent.cancel(handle)
+                        break
+                    live = agent.get_live_output(handle)
+                    if live and inst_id and step_id:
+                        _set_live_output(inst_id, step_id, live)
+                    time.sleep(5)
+                    elapsed += 5
+            finally:
+                if inst_id:
+                    unregister_agent(inst_id, handle)
+                if inst_id and step_id:
+                    _clear_live_output(inst_id, step_id)
 
             if status == AgentStatus.COMPLETED:
                 artifact = agent.get_output(handle)
@@ -100,8 +101,6 @@ class HolisticReviewExecutor(StepExecutor):
                 return self._heuristic_holistic(synthesis, reviews, experts)
         except Exception as e:
             logger.error(f"AI holistic review error: {e}")
-            if inst_id and step_id:
-                _clear_live_output(inst_id, step_id)
             return self._heuristic_holistic(synthesis, reviews, experts)
 
     # ------------------------------------------------------------------

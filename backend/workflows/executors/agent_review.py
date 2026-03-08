@@ -171,84 +171,85 @@ class AgentReviewExecutor(StepExecutor):
 
         results: dict[str, dict] = {}
         elapsed = 0
-        while True:
-            if inst_id and is_cancelled(inst_id):
-                with _agent_domain_lock:
-                    snapshot = dict(_agent_domain_store.get(key, {}))
-                for domain, info in snapshot.items():
-                    if domain in results:
-                        continue
-                    agent_ref = info.get("agent_ref")
-                    handle_ref = info.get("handle_ref")
-                    if agent_ref and handle_ref and info.get("status") == "running":
-                        agent_ref.cancel(handle_ref)
-                break
-
-            self._process_reruns(key, agent, phase, inst_id, agent_name, results)
-
-            all_done = True
-            with _agent_domain_lock:
-                snapshot = dict(_agent_domain_store.get(key, {}))
-
-            for domain, info in snapshot.items():
-                if domain in results:
-                    continue
-                st = info.get("status", "")
-                if st in ("completed", "failed", "cancelled"):
-                    if domain not in results:
-                        results[domain] = info.get("result", {
-                            "status": st,
-                            "pr_number": info.get("prompt_data", {}).get("pr_number"),
-                            "agent_name": agent_name,
-                        })
-                    continue
-                if st != "running":
-                    all_done = False
-                    continue
-
-                all_done = False
-                agent_ref = info.get("agent_ref")
-                handle_ref = info.get("handle_ref")
-                if not agent_ref or not handle_ref:
-                    continue
-
-                status = agent_ref.check_status(handle_ref)
-                if status == AgentStatus.RUNNING:
-                    live = agent_ref.get_live_output(handle_ref)
+        try:
+            while True:
+                if inst_id and is_cancelled(inst_id):
                     with _agent_domain_lock:
-                        if key in _agent_domain_store and domain in _agent_domain_store[key]:
-                            _agent_domain_store[key][domain]["live_output"] = live
-                elif status == AgentStatus.COMPLETED:
-                    self._collect_completed(key, domain, info, agent_ref, handle_ref,
-                                            agent_name, phase, results)
-                else:
-                    self._collect_failed(key, domain, info, agent_ref, handle_ref,
-                                         agent_name, results)
+                        snapshot = dict(_agent_domain_store.get(key, {}))
+                    for domain, info in snapshot.items():
+                        if domain in results:
+                            continue
+                        agent_ref = info.get("agent_ref")
+                        handle_ref = info.get("handle_ref")
+                        if agent_ref and handle_ref and info.get("status") == "running":
+                            agent_ref.cancel(handle_ref)
+                    break
 
-            if all_done:
-                break
+                self._process_reruns(key, agent, phase, inst_id, agent_name, results)
 
-            if elapsed >= AGENT_POLL_TIMEOUT:
-                logger.error(f"Agent review timed out after {elapsed}s, cancelling remaining")
+                all_done = True
                 with _agent_domain_lock:
                     snapshot = dict(_agent_domain_store.get(key, {}))
+
                 for domain, info in snapshot.items():
                     if domain in results:
                         continue
+                    st = info.get("status", "")
+                    if st in ("completed", "failed", "cancelled"):
+                        if domain not in results:
+                            results[domain] = info.get("result", {
+                                "status": st,
+                                "pr_number": info.get("prompt_data", {}).get("pr_number"),
+                                "agent_name": agent_name,
+                            })
+                        continue
+                    if st != "running":
+                        all_done = False
+                        continue
+
+                    all_done = False
                     agent_ref = info.get("agent_ref")
                     handle_ref = info.get("handle_ref")
-                    if agent_ref and handle_ref and info.get("status") == "running":
-                        agent_ref.cancel(handle_ref)
-                break
+                    if not agent_ref or not handle_ref:
+                        continue
 
-            self._update_composite(inst_id, step_id, key)
-            time.sleep(_POLL_INTERVAL)
-            elapsed += _POLL_INTERVAL
+                    status = agent_ref.check_status(handle_ref)
+                    if status == AgentStatus.RUNNING:
+                        live = agent_ref.get_live_output(handle_ref)
+                        with _agent_domain_lock:
+                            if key in _agent_domain_store and domain in _agent_domain_store[key]:
+                                _agent_domain_store[key][domain]["live_output"] = live
+                    elif status == AgentStatus.COMPLETED:
+                        self._collect_completed(key, domain, info, agent_ref, handle_ref,
+                                                agent_name, phase, results)
+                    else:
+                        self._collect_failed(key, domain, info, agent_ref, handle_ref,
+                                             agent_name, results)
 
-        _clear_live_output(inst_id, step_id)
-        with _agent_domain_lock:
-            _agent_domain_store.pop(key, None)
-            _rerun_queue.pop(key, None)
+                if all_done:
+                    break
+
+                if elapsed >= AGENT_POLL_TIMEOUT:
+                    logger.error(f"Agent review timed out after {elapsed}s, cancelling remaining")
+                    with _agent_domain_lock:
+                        snapshot = dict(_agent_domain_store.get(key, {}))
+                    for domain, info in snapshot.items():
+                        if domain in results:
+                            continue
+                        agent_ref = info.get("agent_ref")
+                        handle_ref = info.get("handle_ref")
+                        if agent_ref and handle_ref and info.get("status") == "running":
+                            agent_ref.cancel(handle_ref)
+                    break
+
+                self._update_composite(inst_id, step_id, key)
+                time.sleep(_POLL_INTERVAL)
+                elapsed += _POLL_INTERVAL
+        finally:
+            _clear_live_output(inst_id, step_id)
+            with _agent_domain_lock:
+                _agent_domain_store.pop(key, None)
+                _rerun_queue.pop(key, None)
 
         reviews = list(results.values())
         completed_reviews = [r for r in reviews if r.get("status") == "completed"]

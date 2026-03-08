@@ -308,35 +308,36 @@ class SynthesisExecutor(StepExecutor):
                 if inst_id:
                     register_agent(inst_id, agent, handle)
                 elapsed = 0
-                while True:
-                    if inst_id and is_cancelled(inst_id):
-                        agent.cancel(handle)
-                        self._update_domain_status(synth_key, domain, "cancelled")
-                        domain_synth["ai_verified"] = False
-                        return domain_synth
-                    status = agent.check_status(handle)
-                    if status in (AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED):
-                        break
-                    if elapsed >= AGENT_POLL_TIMEOUT:
-                        logger.error(f"AI verify timed out for domain {domain} after {elapsed}s")
-                        agent.cancel(handle)
-                        break
-                    live = agent.get_live_output(handle)
-                    if live and inst_id and step_id:
-                        with _agent_domain_lock:
-                            if synth_key in _agent_domain_store and domain in _agent_domain_store[synth_key]:
-                                _agent_domain_store[synth_key][domain]["live_output"] = live
-                        with domain_lock:
-                            domain_live[domain] = live
-                            composite = "\n\n".join(
-                                f"--- [{d}] ---\n{text}" for d, text in domain_live.items()
-                            )
-                        _set_live_output(inst_id, step_id, composite)
-                    time.sleep(5)
-                    elapsed += 5
-
-                if inst_id:
-                    unregister_agent(inst_id, handle)
+                try:
+                    while True:
+                        if inst_id and is_cancelled(inst_id):
+                            agent.cancel(handle)
+                            self._update_domain_status(synth_key, domain, "cancelled")
+                            domain_synth["ai_verified"] = False
+                            return domain_synth
+                        status = agent.check_status(handle)
+                        if status in (AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED):
+                            break
+                        if elapsed >= AGENT_POLL_TIMEOUT:
+                            logger.error(f"AI verify timed out for domain {domain} after {elapsed}s")
+                            agent.cancel(handle)
+                            break
+                        live = agent.get_live_output(handle)
+                        if live and inst_id and step_id:
+                            with _agent_domain_lock:
+                                if synth_key in _agent_domain_store and domain in _agent_domain_store[synth_key]:
+                                    _agent_domain_store[synth_key][domain]["live_output"] = live
+                            with domain_lock:
+                                domain_live[domain] = live
+                                composite = "\n\n".join(
+                                    f"--- [{d}] ---\n{text}" for d, text in domain_live.items()
+                                )
+                            _set_live_output(inst_id, step_id, composite)
+                        time.sleep(5)
+                        elapsed += 5
+                finally:
+                    if inst_id:
+                        unregister_agent(inst_id, handle)
                 if status == AgentStatus.COMPLETED:
                     artifact = agent.get_output(handle)
                     agent.cleanup(handle)
@@ -358,20 +359,21 @@ class SynthesisExecutor(StepExecutor):
                 return domain_synth
 
         verified_domains: list[dict] = []
-        with ThreadPoolExecutor(max_workers=max(len(per_domain), 1)) as pool:
-            futures = {pool.submit(verify_single_domain, d): d for d in per_domain}
-            for future in as_completed(futures):
-                try:
-                    verified_domains.append(future.result())
-                except Exception as e:
-                    original = futures[future]
-                    original["ai_verified"] = False
-                    verified_domains.append(original)
-
-        if inst_id and step_id:
-            _clear_live_output(inst_id, step_id)
-        with _agent_domain_lock:
-            _agent_domain_store.pop(synth_key, None)
+        try:
+            with ThreadPoolExecutor(max_workers=max(len(per_domain), 1)) as pool:
+                futures = {pool.submit(verify_single_domain, d): d for d in per_domain}
+                for future in as_completed(futures):
+                    try:
+                        verified_domains.append(future.result())
+                    except Exception as e:
+                        original = futures[future]
+                        original["ai_verified"] = False
+                        verified_domains.append(original)
+        finally:
+            if inst_id and step_id:
+                _clear_live_output(inst_id, step_id)
+            with _agent_domain_lock:
+                _agent_domain_store.pop(synth_key, None)
 
         return self._merge_verified_domains(synthesis, verified_domains, mechanical_result)
 
