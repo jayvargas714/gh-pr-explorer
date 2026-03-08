@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
@@ -26,7 +28,7 @@ function parseContent(artifact: WorkflowArtifact): ParsedContent | null {
 
 function PRSelectView({ content }: { content: ParsedContent }) {
   const prs = (content.prs ?? content.selected ?? []) as Array<{
-    number: number; title?: string; url?: string; author?: string
+    number: number; title?: string; url?: string; author?: string | { login?: string; name?: string }
   }>
   if (!prs.length) return <p className="mx-step-content__empty">No PRs selected.</p>
 
@@ -163,6 +165,17 @@ function parsePromptSections(text: string): Array<{ title: string; body: string 
 }
 
 function ReviewView({ content }: { content: ParsedContent }) {
+  const reviews = (content.reviews ?? []) as Array<Record<string, unknown>>
+
+  if (reviews.length > 0) {
+    return <DomainReviewList reviews={reviews} />
+  }
+
+  const md = content.content_md as string | undefined
+  if (md) {
+    return <SingleReviewMarkdown md={md} content={content} />
+  }
+
   const findings = (content.findings ?? []) as Array<Record<string, unknown>>
   const verdict = content.verdict as string | undefined
   const summary = content.summary as string | undefined
@@ -186,6 +199,87 @@ function ReviewView({ content }: { content: ParsedContent }) {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+function DomainReviewList({ reviews }: { reviews: Array<Record<string, unknown>> }) {
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(reviews.length === 1 ? 0 : null)
+
+  const completed = reviews.filter(r => r.status === 'completed')
+  const failed = reviews.filter(r => r.status !== 'completed')
+
+  return (
+    <div className="mx-step-content__review">
+      <div className="mx-step-content__verdict">
+        <strong>Agent Reviews:</strong>
+        <Badge variant="success" size="sm">{completed.length} completed</Badge>
+        {failed.length > 0 && <Badge variant="error" size="sm">{failed.length} failed</Badge>}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+        {reviews.map((r, i) => {
+          const domain = (r.domain ?? `PR #${r.pr_number ?? i + 1}`) as string
+          const md = r.content_md as string | undefined
+          const score = r.score as number | undefined
+          const isOpen = expandedIdx === i
+          const status = (r.status ?? 'unknown') as string
+
+          return (
+            <div key={i} style={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, overflow: 'hidden' }}>
+              <div
+                onClick={() => setExpandedIdx(isOpen ? null : i)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+                  cursor: 'pointer', background: 'rgba(255,255,255,0.03)',
+                }}
+              >
+                <span>{isOpen ? '\u25BC' : '\u25B6'}</span>
+                <Badge variant={status === 'completed' ? 'success' : 'error'} size="sm">{status}</Badge>
+                <Badge variant="info" size="sm">{domain}</Badge>
+                {score != null && (
+                  <Badge variant={score >= 7 ? 'success' : score >= 4 ? 'warning' : 'error'} size="sm">
+                    {String(score)}/10
+                  </Badge>
+                )}
+                {r.agent_name ? (
+                  <span style={{ fontSize: 12, opacity: 0.5, marginLeft: 'auto' }}>{String(r.agent_name)}</span>
+                ) : null}
+              </div>
+              {isOpen && status === 'completed' && md && (
+                <div className="mx-step-content__review-markdown">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
+                </div>
+              )}
+              {isOpen && status !== 'completed' && r.error ? (
+                <div className="mx-step-content__error" style={{ margin: '8px 12px', fontSize: 13 }}>{String(r.error)}</div>
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function SingleReviewMarkdown({ md, content }: { md: string; content: ParsedContent }) {
+  const domain = content.domain as string | undefined
+  const score = content.score as number | undefined
+
+  return (
+    <div className="mx-step-content__review">
+      {(domain || score != null) && (
+        <div className="mx-step-content__verdict">
+          {domain && <Badge variant="info" size="sm">{domain}</Badge>}
+          {score != null && (
+            <Badge variant={score >= 7 ? 'success' : score >= 4 ? 'warning' : 'error'} size="sm">
+              Score: {score}/10
+            </Badge>
+          )}
+        </div>
+      )}
+      <div className="mx-step-content__review-markdown">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
+      </div>
     </div>
   )
 }
@@ -886,6 +980,7 @@ function AgentDomainCard({ domain, info, liveContent, instanceId, stepId }: {
   domain: string; info: AgentDomainInfo; liveContent?: string
   instanceId: number; stepId: string
 }) {
+  const isCompleted = info.status === 'completed'
   const [open, setOpen] = useState(info.status === 'running')
   const [acting, setActing] = useState(false)
   const ref = useRef<HTMLPreElement>(null)
@@ -916,6 +1011,8 @@ function AgentDomainCard({ domain, info, liveContent, instanceId, stepId }: {
     setActing(false)
   }
 
+  const reviewMd = info.review_md
+
   return (
     <div style={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, overflow: 'hidden' }}>
       <div
@@ -940,7 +1037,12 @@ function AgentDomainCard({ domain, info, liveContent, instanceId, stepId }: {
           )}
         </div>
       </div>
-      {open && liveContent && (
+      {open && isCompleted && reviewMd && (
+        <div className="mx-step-content__review-markdown">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{reviewMd}</ReactMarkdown>
+        </div>
+      )}
+      {open && !isCompleted && liveContent && (
         <pre ref={ref} className="mx-step-content__live-terminal" style={{ maxHeight: 300 }}>{liveContent}</pre>
       )}
       {open && info.error && (

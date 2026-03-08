@@ -158,6 +158,7 @@ export interface AgentDomainInfo {
   completed_at?: number | null
   pid?: number | null
   error?: string | null
+  review_md?: string | null
 }
 
 export async function getAgentDomains(instanceId: number, stepId: string): Promise<Record<string, AgentDomainInfo>> {

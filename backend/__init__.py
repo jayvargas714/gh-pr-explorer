@@ -28,6 +28,28 @@ def _seed_workflow_data():
         seed_builtin_data()
     except Exception as e:
         logger.error(f"Failed to seed workflow data: {e}")
+    _recover_orphaned_steps()
+
+
+def _recover_orphaned_steps():
+    """Mark any steps/instances left 'running' by a prior server as failed."""
+    try:
+        from backend.database import get_workflow_db
+        db = get_workflow_db()
+        with db.db.connection() as conn:
+            orphaned = conn.execute(
+                "UPDATE instance_steps SET status='failed', "
+                "error_message='Orphaned by server restart — use Retry to re-run' "
+                "WHERE status='running'"
+            ).rowcount
+            if orphaned:
+                conn.execute(
+                    "UPDATE workflow_instances SET status='failed' "
+                    "WHERE status='running'"
+                )
+                logger.info(f"Recovered {orphaned} orphaned running step(s) from prior server")
+    except Exception as e:
+        logger.error(f"Failed to recover orphaned steps: {e}")
 
 
 def startup_refresh_workflow_caches():

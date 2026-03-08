@@ -80,7 +80,7 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
   const hasGate = steps.some((s) => s.step_type === 'human_gate' && s.status === 'awaiting_gate')
   const selectedStep = steps.find((s) => s.step_id === selectedStepId) ?? null
 
-  const prevSelectedStatus = useRef<string | null>(null)
+  const prevSelectedRef = useRef<{ stepId: string | null; status: string | null }>({ stepId: null, status: null })
 
   useEffect(() => {
     if (!selectedStepId && steps.length > 0) {
@@ -90,8 +90,10 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
     }
     const sel = steps.find((s) => s.step_id === selectedStepId)
     if (!sel) return
-    const wasRunning = prevSelectedStatus.current === 'running'
-    prevSelectedStatus.current = sel.status
+    const prev = prevSelectedRef.current
+    const sameStep = prev.stepId === selectedStepId
+    const wasRunning = sameStep && prev.status === 'running'
+    prevSelectedRef.current = { stepId: selectedStepId, status: sel.status }
     if (wasRunning && (sel.status === 'completed' || sel.status === 'failed')) {
       const next = steps.find((s) => s.status === 'running' || s.status === 'awaiting_gate')
       if (next) setSelectedStepId(next.step_id)

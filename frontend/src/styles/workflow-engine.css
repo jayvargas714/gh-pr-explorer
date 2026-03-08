@@ -1302,6 +1302,92 @@
   padding: var(--mx-space-2) 0;
 }
 
+.mx-step-content__review-markdown {
+  padding: 12px 16px;
+  max-height: 600px;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--mx-color-text-primary, #e0e0e0);
+}
+
+.mx-step-content__review-markdown h1,
+.mx-step-content__review-markdown h2,
+.mx-step-content__review-markdown h3,
+.mx-step-content__review-markdown h4 {
+  margin: 1em 0 0.5em;
+  color: var(--mx-color-text-primary, #fff);
+}
+
+.mx-step-content__review-markdown h1 { font-size: 1.4em; }
+.mx-step-content__review-markdown h2 { font-size: 1.2em; }
+.mx-step-content__review-markdown h3 { font-size: 1.05em; }
+
+.mx-step-content__review-markdown p {
+  margin: 0.5em 0;
+}
+
+.mx-step-content__review-markdown ul,
+.mx-step-content__review-markdown ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+
+.mx-step-content__review-markdown code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.15em 0.4em;
+  border-radius: 3px;
+  font-size: 0.9em;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.mx-step-content__review-markdown pre {
+  background: var(--mx-color-bg-tertiary, #1a1a2e);
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+
+.mx-step-content__review-markdown pre code {
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mx-step-content__review-markdown blockquote {
+  border-left: 3px solid rgba(255, 255, 255, 0.2);
+  margin: 0.5em 0;
+  padding: 0.25em 1em;
+  color: var(--mx-color-text-secondary, #a0a0a0);
+}
+
+.mx-step-content__review-markdown table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5em 0;
+}
+
+.mx-step-content__review-markdown th,
+.mx-step-content__review-markdown td {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 6px 10px;
+  text-align: left;
+  font-size: 13px;
+}
+
+.mx-step-content__review-markdown th {
+  background: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+}
+
+.mx-step-content__review-markdown hr {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 1em 0;
+}
+
 .mx-step-content__live-terminal {
   flex: 1;
   min-height: 300px;

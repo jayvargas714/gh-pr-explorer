@@ -37,8 +37,9 @@ def get_agent_domains(instance_id: int, step_id: str) -> dict[str, dict]:
     key = f"{instance_id}:{step_id}"
     with _agent_domain_lock:
         raw = _agent_domain_store.get(key, {})
-        return {
-            d: {
+        out: dict[str, dict] = {}
+        for d, info in raw.items():
+            entry: dict = {
                 "status": info.get("status", "unknown"),
                 "agent_name": info.get("agent_name", ""),
                 "started_at": info.get("started_at"),
@@ -46,8 +47,11 @@ def get_agent_domains(instance_id: int, step_id: str) -> dict[str, dict]:
                 "pid": info.get("pid"),
                 "error": info.get("error"),
             }
-            for d, info in raw.items()
-        }
+            result = info.get("result")
+            if result and info.get("status") == "completed":
+                entry["review_md"] = result.get("content_md")
+            out[d] = entry
+        return out
 
 
 def cancel_agent_domain(instance_id: int, step_id: str, domain: str) -> bool:
