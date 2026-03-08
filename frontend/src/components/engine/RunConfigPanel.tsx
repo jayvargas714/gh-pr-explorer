@@ -18,6 +18,20 @@ const STEP_TYPE_LABELS: Record<string, string> = {
   publish: 'Publish',
   expert_select: 'Expert Select',
   holistic_review: 'Holistic Review',
+  followup_check: 'Follow-Up Check',
+  followup_action: 'Follow-Up Action',
+}
+
+const MODE_NOTES: Record<string, string> = {
+  'self-review': 'Local only — will not publish to GitHub',
+  'deep-review': 'Will publish to GitHub after human approval',
+  'team-review': 'Batch review — publishes all approved PRs',
+  'quick': 'Single-agent quick review',
+}
+
+function getTemplateMode(steps: TemplateStepDef[]): string {
+  const prSelect = steps.find(s => s.type === 'pr_select')
+  return (prSelect?.config?.mode as string) ?? 'team-review'
 }
 
 interface TemplateStepDef {
@@ -138,6 +152,10 @@ export function RunConfigPanel({ repo, onClose, onStarted }: RunConfigPanelProps
           {templates.map((t) => {
             const missing = getMissingTypes(t.id)
             const isDisabled = missing.length > 0
+            const tplSteps = (templateStepTypes[t.id] ?? [])
+            const tplMode = getTemplateMode(
+              tplSteps.map(type => ({ id: '', type, config: {} }))
+            )
             return (
               <Card
                 key={t.id}
@@ -155,6 +173,9 @@ export function RunConfigPanel({ repo, onClose, onStarted }: RunConfigPanelProps
                   {isDisabled && <Badge variant="warning" size="sm">Not Available</Badge>}
                 </div>
                 <p className="mx-run-config__tpl-desc">{t.description}</p>
+                {MODE_NOTES[tplMode] && (
+                  <span className="mx-run-config__mode-note">{MODE_NOTES[tplMode]}</span>
+                )}
                 {isDisabled && (
                   <p className="mx-run-config__tpl-missing">
                     Requires: {missing.map((m) => STEP_TYPE_LABELS[m] ?? m).join(', ')}

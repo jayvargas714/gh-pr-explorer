@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Agent Review step — dispatches prompts to a configured AI agent and collects results."""
 
 import logging
@@ -40,12 +41,25 @@ class AgentReviewExecutor(StepExecutor):
 
     def execute(self, inputs: dict) -> StepResult:
         agent_name = self.step_config.get("agent", "claude")
+        phase = self.step_config.get("phase", "a")
         prompts = inputs.get("prompts", [])
         inst_id = self.instance_config.get("_instance_id", 0)
         step_id = self.step_config.get("_step_id", "")
 
         if not prompts:
             return StepResult(success=False, error="No prompts provided to agent_review step")
+
+        if phase == "b":
+            isolation = (
+                "IMPORTANT: You are producing a completely independent review (Review B). "
+                "Do NOT reference or consider any prior AI-generated reviews of this PR. "
+                "Your value is finding things the other reviewer missed, so be thorough "
+                "and approach the code from a fresh perspective.\n\n"
+            )
+            prompts = [
+                {**p, "prompt": isolation + p.get("prompt", "")}
+                for p in prompts
+            ]
 
         try:
             agent = get_agent(agent_name)
@@ -88,7 +102,7 @@ class AgentReviewExecutor(StepExecutor):
 
             if status == AgentStatus.COMPLETED:
                 artifact = agent.get_output(handle)
-                reviews.append({
+                review_entry = {
                     "pr_number": pr_number,
                     "status": "completed",
                     "agent_name": agent_name,
@@ -97,7 +111,10 @@ class AgentReviewExecutor(StepExecutor):
                     "file_path": artifact.file_path,
                     "score": artifact.score,
                     "head_sha": prompt_data.get("head_sha", ""),
-                })
+                }
+                if prompt_data.get("domain"):
+                    review_entry["domain"] = prompt_data["domain"]
+                reviews.append(review_entry)
             else:
                 artifact = agent.get_output(handle)
                 reviews.append({

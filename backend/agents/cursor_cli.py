@@ -37,7 +37,7 @@ _SCHEMA_INSTRUCTIONS = (
 
 
 class _ProcessState:
-    """Tracks a running Cursor CLI subprocess."""
+    """Tracks a running Cursor CLI subprocess using stream-json for live output."""
     def __init__(self, process: subprocess.Popen, review_file: str, json_file: str):
         self.process = process
         self.review_file = review_file
@@ -46,18 +46,55 @@ class _ProcessState:
         self.stderr: Optional[str] = None
         self.exit_code: Optional[int] = None
         self._live_lines: list[str] = []
+        self._stderr_lines: list[str] = []
+        self._result_text: Optional[str] = None
         self._lock = threading.Lock()
-        self._reader_thread = threading.Thread(target=self._read_stdout, daemon=True)
-        self._reader_thread.start()
+        self._stdout_thread = threading.Thread(target=self._read_stream_json, daemon=True)
+        self._stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
+        self._stdout_thread.start()
+        self._stderr_thread.start()
 
-    def _read_stdout(self):
-        """Background thread: reads stdout line-by-line into _live_lines."""
+    def _read_stream_json(self):
+        """Parse stream-json stdout, extracting text deltas for live display."""
         try:
-            for line in self.process.stdout:
+            for raw_line in self.process.stdout:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    msg = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    with self._lock:
+                        self._live_lines.append(raw_line + "\n")
+                    continue
+                msg_type = msg.get("type", "")
+                if msg_type == "assistant":
+                    content = msg.get("message", {}).get("content", [])
+                    for block in content:
+                        if block.get("type") == "text":
+                            text = block.get("text", "")
+                            if text:
+                                with self._lock:
+                                    self._live_lines.append(text)
+                                    if len(self._live_lines) > 1000:
+                                        self._live_lines = self._live_lines[-500:]
+                        elif block.get("type") == "tool_use":
+                            tool_name = block.get("name", "tool")
+                            with self._lock:
+                                self._live_lines.append(f"\n[Using tool: {tool_name}]\n")
+                elif msg_type == "result":
+                    self._result_text = msg.get("result", "")
+        except (ValueError, OSError):
+            pass
+
+    def _read_stderr(self):
+        """Capture stderr for error reporting."""
+        try:
+            for line in self.process.stderr:
                 with self._lock:
-                    self._live_lines.append(line)
-                    if len(self._live_lines) > 500:
-                        self._live_lines = self._live_lines[-300:]
+                    self._stderr_lines.append(line)
+                    if len(self._stderr_lines) > 200:
+                        self._stderr_lines = self._stderr_lines[-100:]
         except (ValueError, OSError):
             pass
 
@@ -65,6 +102,10 @@ class _ProcessState:
         with self._lock:
             lines = self._live_lines[-tail:]
         return "".join(lines)
+
+    def get_stderr_text(self) -> str:
+        with self._lock:
+            return "".join(self._stderr_lines[-50:])
 
 
 class CursorCLIAgent(AgentBackend):
@@ -104,7 +145,11 @@ class CursorCLIAgent(AgentBackend):
         full_prompt = self._build_prompt(prompt, context, str(review_file), json_file)
 
         agent_bin = self.config.get("agent_path") or self._find_agent_binary()
-        cmd = [agent_bin, "--print", "--trust"]
+        cmd = [
+            agent_bin, "--print", "--trust", "--force",
+            "--output-format", "stream-json",
+            "--stream-partial-output",
+        ]
 
         if self.model:
             cmd.extend(["--model", self.model])
@@ -149,14 +194,10 @@ class CursorCLIAgent(AgentBackend):
         if exit_code is None:
             return AgentStatus.RUNNING
 
-        state._reader_thread.join(timeout=2)
-        state.stdout = state.get_live_text()
-
-        try:
-            stderr = state.process.stderr.read() if state.process.stderr else None
-            state.stderr = stderr.strip()[-2000:] if stderr else None
-        except Exception:
-            pass
+        state._stdout_thread.join(timeout=3)
+        state._stderr_thread.join(timeout=2)
+        state.stdout = state._result_text or state.get_live_text()
+        state.stderr = state.get_stderr_text() or None
 
         state.exit_code = exit_code
         return AgentStatus.COMPLETED if exit_code == 0 else AgentStatus.FAILED

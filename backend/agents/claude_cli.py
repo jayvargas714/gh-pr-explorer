@@ -50,12 +50,17 @@ class _ProcessState:
         self.exit_code: Optional[int] = None
         self._live_lines: list[str] = []
         self._lock = threading.Lock()
-        self._reader_thread = threading.Thread(target=self._read_stdout, daemon=True)
-        self._reader_thread.start()
+        self._stdout_thread = threading.Thread(target=self._read_stream,
+                                                args=(self.process.stdout,), daemon=True)
+        self._stderr_thread = threading.Thread(target=self._read_stream,
+                                                args=(self.process.stderr,), daemon=True)
+        self._stdout_thread.start()
+        self._stderr_thread.start()
 
-    def _read_stdout(self):
+    def _read_stream(self, stream):
+        """Read from a process stream (stdout or stderr) into _live_lines."""
         try:
-            for line in self.process.stdout:
+            for line in stream:
                 with self._lock:
                     self._live_lines.append(line)
                     if len(self._live_lines) > 500:
@@ -134,14 +139,10 @@ class ClaudeCLIAgent(AgentBackend):
         if exit_code is None:
             return AgentStatus.RUNNING
 
-        state._reader_thread.join(timeout=2)
+        state._stdout_thread.join(timeout=3)
+        state._stderr_thread.join(timeout=2)
         state.stdout = state.get_live_text()
-
-        try:
-            stderr = state.process.stderr.read() if state.process.stderr else None
-            state.stderr = stderr.strip()[-2000:] if stderr else None
-        except Exception:
-            pass
+        state.stderr = None
 
         state.exit_code = exit_code
         return AgentStatus.COMPLETED if exit_code == 0 else AgentStatus.FAILED

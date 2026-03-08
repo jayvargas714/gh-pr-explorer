@@ -49,9 +49,11 @@ function matchesFilter(status: string, filter: StatusFilter): boolean {
 interface WorkflowRunListProps {
   onSelectInstance: (instance: WorkflowInstance) => void
   onNewRun: () => void
+  onOpenDomains?: () => void
+  onOpenFollowups?: () => void
 }
 
-export function WorkflowRunList({ onSelectInstance, onNewRun }: WorkflowRunListProps) {
+export function WorkflowRunList({ onSelectInstance, onNewRun, onOpenDomains, onOpenFollowups }: WorkflowRunListProps) {
   const { selectedRepo } = useAccountStore()
   const { instances, loading, error, fetchInstances, cancelRun, clearError } = useWorkflowEngineStore()
   const [filter, setFilter] = useState<StatusFilter>('all')
@@ -79,9 +81,17 @@ export function WorkflowRunList({ onSelectInstance, onNewRun }: WorkflowRunListP
     <div className="mx-engine-list">
       <div className="mx-engine-list__header">
         <h3>Workflow Runs</h3>
-        <Button variant="primary" size="sm" onClick={onNewRun}>
-          + New Run
-        </Button>
+        <div className="mx-engine-list__actions">
+          {onOpenFollowups && (
+            <Button variant="ghost" size="sm" onClick={onOpenFollowups}>Follow-Ups</Button>
+          )}
+          {onOpenDomains && (
+            <Button variant="ghost" size="sm" onClick={onOpenDomains}>Expert Domains</Button>
+          )}
+          <Button variant="primary" size="sm" onClick={onNewRun}>
+            + New Run
+          </Button>
+        </div>
       </div>
 
       <div className="mx-engine-list__filters">

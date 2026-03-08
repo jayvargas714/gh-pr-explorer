@@ -256,6 +256,86 @@ def list_step_types():
     return jsonify({"available": list(STEP_REGISTRY.keys())})
 
 
+# --- Expert Domains ---
+
+@workflow_engine_bp.route("/api/expert-domains", methods=["GET"])
+def list_expert_domains():
+    db = get_workflow_db()
+    active_only = request.args.get("active_only", "true").lower() != "false"
+    domains = db.list_expert_domains(active_only=active_only)
+    return jsonify(domains)
+
+
+@workflow_engine_bp.route("/api/expert-domains", methods=["POST"])
+def create_expert_domain():
+    data = request.get_json()
+    if not data or "domain_id" not in data:
+        return jsonify({"error": "domain_id is required"}), 400
+    db = get_workflow_db()
+    try:
+        domain_id = db.create_expert_domain(
+            domain_id=data["domain_id"],
+            display_name=data.get("display_name", data["domain_id"]),
+            persona=data.get("persona", ""),
+            scope=data.get("scope", ""),
+            triggers=data.get("triggers", {"file_patterns": [], "keywords": []}),
+            checklist=data.get("checklist", []),
+            anti_patterns=data.get("anti_patterns", []),
+            is_builtin=False,
+        )
+        return jsonify({"id": domain_id}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@workflow_engine_bp.route("/api/expert-domains/<domain_id>", methods=["PUT"])
+def update_expert_domain(domain_id):
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Request body required"}), 400
+    db = get_workflow_db()
+    existing = db.get_expert_domain(domain_id)
+    if not existing:
+        return jsonify({"error": "Domain not found"}), 404
+    db.update_expert_domain(domain_id, **data)
+    return jsonify({"ok": True})
+
+
+@workflow_engine_bp.route("/api/expert-domains/<domain_id>", methods=["DELETE"])
+def delete_expert_domain(domain_id):
+    db = get_workflow_db()
+    existing = db.get_expert_domain(domain_id)
+    if not existing:
+        return jsonify({"error": "Domain not found"}), 404
+    if existing.get("is_builtin"):
+        return jsonify({"error": "Cannot delete built-in domains"}), 403
+    db.delete_expert_domain(domain_id)
+    return jsonify({"ok": True})
+
+
+# --- Follow-ups ---
+
+@workflow_engine_bp.route("/api/followups", methods=["GET"])
+def list_followups():
+    db = get_workflow_db()
+    repo = request.args.get("repo")
+    status = request.args.get("status")
+    followups = db.list_followups(repo=repo, status=status)
+    for fu in followups:
+        fu["findings"] = db.get_followup_findings(fu["id"])
+    return jsonify(followups)
+
+
+@workflow_engine_bp.route("/api/followups/<int:followup_id>", methods=["GET"])
+def get_followup(followup_id):
+    db = get_workflow_db()
+    fu = db.get_followup(followup_id)
+    if not fu:
+        return jsonify({"error": "Follow-up not found"}), 404
+    fu["findings"] = db.get_followup_findings(followup_id)
+    return jsonify(fu)
+
+
 # --- Background execution ---
 
 def _run_workflow(instance_id: int, template: dict, repo: str, config: dict):

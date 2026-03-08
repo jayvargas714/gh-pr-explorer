@@ -127,3 +127,69 @@ export async function getStepLiveOutput(instanceId: number, stepId: string): Pro
   const res = await api.get<{ output: string }>(`/workflows/instances/${instanceId}/steps/${stepId}/live`)
   return res.output
 }
+
+// --- Expert Domains ---
+
+export interface ExpertDomain {
+  id: number
+  domain_id: string
+  display_name: string
+  persona: string
+  scope: string
+  triggers: { file_patterns: string[]; keywords: string[] }
+  checklist: string[]
+  anti_patterns: string[]
+  is_builtin: boolean
+  is_active: boolean
+}
+
+export async function listExpertDomains(): Promise<ExpertDomain[]> {
+  return api.get<ExpertDomain[]>('/expert-domains')
+}
+
+export async function createExpertDomain(data: Partial<ExpertDomain>): Promise<{ id: number }> {
+  return api.post('/expert-domains', data)
+}
+
+export async function updateExpertDomain(domainId: string, data: Partial<ExpertDomain>): Promise<{ ok: boolean }> {
+  return api.put(`/expert-domains/${domainId}`, data)
+}
+
+export async function deleteExpertDomain(domainId: string): Promise<{ ok: boolean }> {
+  return api.delete(`/expert-domains/${domainId}`)
+}
+
+// --- Follow-ups ---
+
+export interface FollowupFinding {
+  id: number
+  finding_id: string
+  original_text: string
+  severity: string
+  status: string
+  author_response?: string
+}
+
+export interface ReviewFollowup {
+  id: number
+  instance_id: number
+  pr_number: number
+  repo: string
+  source_run_id: number
+  verdict: string
+  published_at: string
+  review_sha: string
+  status: string
+  last_checked: string
+  notes?: string
+  findings?: FollowupFinding[]
+}
+
+export async function listFollowups(repo?: string): Promise<ReviewFollowup[]> {
+  const params = repo ? `?repo=${encodeURIComponent(repo)}` : ''
+  return api.get<ReviewFollowup[]>(`/followups${params}`)
+}
+
+export async function getFollowup(id: number): Promise<ReviewFollowup> {
+  return api.get<ReviewFollowup>(`/followups/${id}`)
+}

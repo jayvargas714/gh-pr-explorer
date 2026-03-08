@@ -8,7 +8,7 @@ import { FindingCard } from './FindingCard'
 import { useWorkflowEngineStore } from '../../stores/useWorkflowEngineStore'
 import type { WorkflowInstance, WorkflowArtifact } from '../../api/workflow-engine'
 
-type GateTab = 'overview' | 'comparison' | 'publish' | 'freshness'
+type GateTab = 'overview' | 'comparison' | 'publish' | 'freshness' | 'synthesis_log' | 'questions' | 'domains'
 
 interface GateViewProps {
   instance: WorkflowInstance
@@ -17,6 +17,13 @@ interface GateViewProps {
 
 interface ParsedContent {
   [key: string]: unknown
+}
+
+const VERDICT_VARIANT: Record<string, 'success' | 'warning' | 'error' | 'info' | 'neutral'> = {
+  APPROVE: 'success',
+  CHANGES_REQUESTED: 'error',
+  NEEDS_DISCUSSION: 'warning',
+  COMMENT: 'info',
 }
 
 function parseContent(artifact: WorkflowArtifact): ParsedContent | null {
@@ -52,7 +59,8 @@ export function GateView({ instance, onBack }: GateViewProps) {
   )
   const freshnessContent = freshnessArtifact ? parseContent(freshnessArtifact) : null
   const freshnessChecks = (freshnessContent?.checks ?? freshnessContent?.results ?? []) as Array<{
-    pr_number?: number; status?: string; head_sha?: string; reviewed_sha?: string
+    pr_number?: number; classification?: string; review_sha?: string; current_sha?: string
+    affected_findings?: string[]; recommendation?: string
   }>
 
   const reviewArtifacts = artifacts.filter(
@@ -62,12 +70,30 @@ export function GateView({ instance, onBack }: GateViewProps) {
   const gateStep = steps.find((s) => s.step_type === 'human_gate')
   const isResolved = gateStep?.status === 'completed'
 
+  const gateOutputs = (() => {
+    if (!gateStep?.outputs_json) return null
+    try {
+      const raw = gateStep.outputs_json
+      return typeof raw === 'string' ? JSON.parse(raw) : raw
+    } catch { return null }
+  })()
+
   const verdict = synthContent?.verdict as string | undefined
   const agreed = (synthContent?.agreed ?? []) as Array<Record<string, unknown>>
   const aOnly = ((synthContent?.a_only ?? synthContent?.['A-ONLY'] ?? []) as Array<Record<string, unknown>>)
   const bOnly = ((synthContent?.b_only ?? synthContent?.['B-ONLY'] ?? []) as Array<Record<string, unknown>>)
   const totalFindings = agreed.length + aOnly.length + bOnly.length
   const agreementRate = totalFindings > 0 ? Math.round((agreed.length / totalFindings) * 100) : 0
+
+  const synthesisLog = (gateOutputs?.synthesis_log ?? synthContent?.synthesis_log ?? []) as Array<{
+    type?: string; finding_source?: string; agent?: string; finding?: Record<string, unknown>
+    resolution?: string; evidence?: string
+  }>
+  const questions = (gateOutputs?.questions ?? synthContent?.questions ?? []) as string[]
+  const perDomainSynthesis = (gateOutputs?.per_domain_synthesis ?? synthContent?.per_domain_synthesis ?? []) as Array<{
+    domain?: string; verdict?: string; total_findings?: number; agent_a?: string; agent_b?: string
+    agreed?: Array<Record<string, unknown>>; a_only?: Array<Record<string, unknown>>; b_only?: Array<Record<string, unknown>>
+  }>
 
   const handleApprove = async () => {
     setSubmitting(true)
@@ -84,11 +110,14 @@ export function GateView({ instance, onBack }: GateViewProps) {
     onBack()
   }
 
-  const tabs: { id: GateTab; label: string }[] = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'comparison', label: 'Comparison' },
-    { id: 'publish', label: 'Publish Preview' },
-    { id: 'freshness', label: 'Freshness' },
+  const tabs: { id: GateTab; label: string; show: boolean }[] = [
+    { id: 'overview', label: 'Overview', show: true },
+    { id: 'comparison', label: 'Comparison', show: true },
+    { id: 'synthesis_log', label: `Synthesis Log (${synthesisLog.length})`, show: synthesisLog.length > 0 },
+    { id: 'questions', label: `Questions (${questions.length})`, show: questions.length > 0 },
+    { id: 'domains', label: `Domains (${perDomainSynthesis.length})`, show: perDomainSynthesis.length > 0 },
+    { id: 'publish', label: 'Publish Preview', show: true },
+    { id: 'freshness', label: 'Freshness', show: true },
   ]
 
   return (
@@ -103,7 +132,9 @@ export function GateView({ instance, onBack }: GateViewProps) {
 
       <div className="mx-gate-view__stats">
         <div className="mx-gate-view__stat">
-          <span className="mx-gate-view__stat-value">{verdict ?? '—'}</span>
+          <span className="mx-gate-view__stat-value">
+            <Badge variant={VERDICT_VARIANT[verdict ?? ''] ?? 'neutral'}>{verdict ?? '—'}</Badge>
+          </span>
           <span className="mx-gate-view__stat-label">Verdict</span>
         </div>
         <div className="mx-gate-view__stat">
@@ -125,7 +156,7 @@ export function GateView({ instance, onBack }: GateViewProps) {
       </div>
 
       <div className="mx-gate-view__tabs">
-        {tabs.map((t) => (
+        {tabs.filter(t => t.show).map((t) => (
           <button
             key={t.id}
             className={`mx-gate-view__tab ${tab === t.id ? 'mx-gate-view__tab--active' : ''}`}
@@ -153,7 +184,7 @@ export function GateView({ instance, onBack }: GateViewProps) {
                   <span>{agreed.length} findings</span>
                 </h4>
                 {agreed.map((f, i) => (
-                  <FindingCard key={i} finding={f as Record<string, unknown> & { title?: string; severity?: string; location?: { file?: string; start_line?: number; end_line?: number; raw?: string }; problem?: string; fix?: string }} classification="AGREED" />
+                  <FindingCard key={i} finding={f as Record<string, unknown> & { title?: string; severity?: string; location?: { file?: string; start_line?: number; end_line?: number; raw?: string }; problem?: string; fix?: string }} source="BOTH" classification="AGREED" />
                 ))}
               </div>
             )}
@@ -165,7 +196,7 @@ export function GateView({ instance, onBack }: GateViewProps) {
                   <span>{aOnly.length} findings</span>
                 </h4>
                 {aOnly.map((f, i) => (
-                  <FindingCard key={i} finding={f as Record<string, unknown> & { title?: string; severity?: string; location?: { file?: string; start_line?: number; end_line?: number; raw?: string }; problem?: string; fix?: string }} classification="A-ONLY" />
+                  <FindingCard key={i} finding={f as Record<string, unknown> & { title?: string; severity?: string; location?: { file?: string; start_line?: number; end_line?: number; raw?: string }; problem?: string; fix?: string }} source="A" classification="A-ONLY" />
                 ))}
               </div>
             )}
@@ -177,7 +208,7 @@ export function GateView({ instance, onBack }: GateViewProps) {
                   <span>{bOnly.length} findings</span>
                 </h4>
                 {bOnly.map((f, i) => (
-                  <FindingCard key={i} finding={f as Record<string, unknown> & { title?: string; severity?: string; location?: { file?: string; start_line?: number; end_line?: number; raw?: string }; problem?: string; fix?: string }} classification="B-ONLY" />
+                  <FindingCard key={i} finding={f as Record<string, unknown> & { title?: string; severity?: string; location?: { file?: string; start_line?: number; end_line?: number; raw?: string }; problem?: string; fix?: string }} source="B" classification="B-ONLY" />
                 ))}
               </div>
             )}
@@ -192,6 +223,70 @@ export function GateView({ instance, onBack }: GateViewProps) {
           <ReviewComparison artifacts={reviewArtifacts} synthesisArtifact={synthArtifact} />
         )}
 
+        {tab === 'synthesis_log' && (
+          <div className="mx-gate-view__synthesis-log">
+            {synthesisLog.length === 0 ? (
+              <p className="mx-gate-view__empty">No synthesis log entries.</p>
+            ) : (
+              synthesisLog.map((entry, i) => (
+                <div key={i} className="mx-gate-view__log-entry">
+                  <div className="mx-gate-view__log-header">
+                    <Badge variant={entry.type === 'disagreement' ? 'warning' : 'info'} size="sm">
+                      {entry.finding_source ?? entry.type}
+                    </Badge>
+                    {entry.agent && <Badge variant="neutral" size="sm">{entry.agent}</Badge>}
+                  </div>
+                  <div className="mx-gate-view__log-body">
+                    <strong>{(entry.finding as Record<string, unknown>)?.title as string ?? 'Finding'}</strong>
+                    <p>{entry.resolution}</p>
+                    {entry.evidence && <code className="mx-gate-view__log-evidence">{entry.evidence}</code>}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {tab === 'questions' && (
+          <div className="mx-gate-view__questions">
+            {questions.length === 0 ? (
+              <p className="mx-gate-view__empty">No questions from reviewers.</p>
+            ) : (
+              <ol className="mx-gate-view__question-list">
+                {questions.map((q, i) => (
+                  <li key={i}>{q}</li>
+                ))}
+              </ol>
+            )}
+          </div>
+        )}
+
+        {tab === 'domains' && (
+          <div className="mx-gate-view__domains">
+            {perDomainSynthesis.length === 0 ? (
+              <p className="mx-gate-view__empty">No per-domain synthesis data.</p>
+            ) : (
+              <div className="mx-gate-view__domain-grid">
+                {perDomainSynthesis.map((ds, i) => (
+                  <div key={i} className="mx-gate-view__domain-card">
+                    <div className="mx-gate-view__domain-header">
+                      <Badge variant="info" size="sm">{ds.domain ?? 'general'}</Badge>
+                      <Badge variant={VERDICT_VARIANT[ds.verdict ?? ''] ?? 'neutral'} size="sm">
+                        {ds.verdict ?? 'COMMENT'}
+                      </Badge>
+                      <span>{ds.total_findings ?? 0} findings</span>
+                    </div>
+                    <div className="mx-gate-view__domain-agents">
+                      {ds.agent_a && <span>A: {ds.agent_a}</span>}
+                      {ds.agent_b && <span>B: {ds.agent_b}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {tab === 'publish' && <PublishPreview artifacts={artifacts} />}
 
         {tab === 'freshness' && (
@@ -200,26 +295,40 @@ export function GateView({ instance, onBack }: GateViewProps) {
               <p className="mx-gate-view__empty">No freshness data available.</p>
             ) : (
               <div className="mx-gate-view__freshness-grid">
-                {freshnessChecks.map((c, i) => (
-                  <div key={i} className="mx-gate-view__freshness-card">
-                    <div className="mx-gate-view__freshness-pr">PR #{c.pr_number}</div>
-                    <Badge
-                      variant={c.status === 'CURRENT' ? 'success' : c.status === 'STALE-MINOR' ? 'warning' : 'error'}
-                    >
-                      {c.status ?? 'UNKNOWN'}
-                    </Badge>
-                    {c.head_sha && (
-                      <div className="mx-gate-view__freshness-sha">
-                        <span>HEAD:</span> <code>{c.head_sha.slice(0, 8)}</code>
-                      </div>
-                    )}
-                    {c.reviewed_sha && (
-                      <div className="mx-gate-view__freshness-sha">
-                        <span>Reviewed:</span> <code>{c.reviewed_sha.slice(0, 8)}</code>
-                      </div>
-                    )}
-                  </div>
-                ))}
+                {freshnessChecks.map((c, i) => {
+                  const cls = c.classification ?? 'UNKNOWN'
+                  const variant = cls === 'CURRENT' ? 'success'
+                    : cls === 'STALE-MINOR' ? 'warning'
+                    : cls === 'SUPERSEDED' ? 'error'
+                    : cls === 'STALE-MAJOR' ? 'error' : 'neutral'
+                  return (
+                    <div key={i} className="mx-gate-view__freshness-card">
+                      <div className="mx-gate-view__freshness-pr">PR #{c.pr_number}</div>
+                      <Badge variant={variant}>{cls}</Badge>
+                      {c.review_sha && (
+                        <div className="mx-gate-view__freshness-sha">
+                          <span>Reviewed:</span> <code>{c.review_sha.slice(0, 8)}</code>
+                        </div>
+                      )}
+                      {c.current_sha && (
+                        <div className="mx-gate-view__freshness-sha">
+                          <span>Current:</span> <code>{c.current_sha.slice(0, 8)}</code>
+                        </div>
+                      )}
+                      {c.recommendation && (
+                        <p className="mx-gate-view__freshness-rec">{c.recommendation}</p>
+                      )}
+                      {c.affected_findings && c.affected_findings.length > 0 && (
+                        <div className="mx-gate-view__freshness-affected">
+                          <strong>Potentially affected:</strong>
+                          {c.affected_findings.map((f, j) => (
+                            <Badge key={j} variant="warning" size="sm">{f}</Badge>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>

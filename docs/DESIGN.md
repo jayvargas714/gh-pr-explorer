@@ -453,7 +453,7 @@ The application uses a 4-tab layout as the primary navigation:
 
 ### Workflow Engine (Review Workflows Tab)
 
-The Review Workflows tab provides a UI for composable code review pipelines. Built on a generic workflow engine with typed step executors, fan-out/fan-in parallelism, and human gates.
+The Review Workflows tab provides a UI for composable code review pipelines implementing the legacy adversarial review system. Built on a generic workflow engine with typed step executors, fan-out/fan-in parallelism, human gates, and expert domain selection.
 
 #### Backend Packages
 
@@ -461,9 +461,10 @@ The Review Workflows tab provides a UI for composable code review pipelines. Bui
 
 | Module | Description |
 |--------|-------------|
-| `base.py` | `AgentBackend` ABC, `AgentHandle`, `AgentStatus`, `ReviewArtifact` |
-| `claude_cli.py` | `ClaudeCLIAgent` — wraps subprocess calls to `claude` CLI |
+| `base.py` | `AgentBackend` ABC, `AgentHandle`, `AgentStatus`, `ReviewArtifact`, `get_live_output()` |
+| `claude_cli.py` | `ClaudeCLIAgent` — wraps subprocess calls to `claude` CLI with live output streaming |
 | `openai_api.py` | `OpenAIAgent` — OpenAI chat completions via `httpx` |
+| `cursor_cli.py` | `CursorCLIAgent` — wraps `agent` CLI with live output streaming |
 | `registry.py` | `get_agent(name)`, `list_agents()`, agent type registry |
 
 **Workflows** (`backend/workflows/`):
@@ -472,30 +473,34 @@ The Review Workflows tab provides a UI for composable code review pipelines. Bui
 |--------|-------------|
 | `step_types.py` | `StepType` enum, `@register_step` decorator, `STEP_REGISTRY` |
 | `executor.py` | `StepExecutor` ABC, `StepResult` dataclass |
-| `runtime.py` | `WorkflowRuntime` — topo-sort execution, fan-out, gate pausing |
-| `seed.py` | Built-in templates (Quick/Team/Self/Deep Review) + agents |
+| `runtime.py` | `WorkflowRuntime` — level-based parallel execution, fan-out, gate pausing |
+| `seed.py` | Built-in templates (Quick/Team/Self/Deep/Follow-Up Review), agents, 10 expert domains, code owners |
 
 **Step Executors** (`backend/workflows/executors/`):
 
 | Module | Step Type | Description |
 |--------|-----------|-------------|
 | `pr_select.py` | `pr_select` | Fetches PRs via `gh` CLI |
-| `prioritize.py` | `prioritize` | P0-P3 scoring, code owner boost, skip list |
-| `prompt_generate.py` | `prompt_generate` | Prompt building with dedup + Jira context + chunked diff |
-| `agent_review.py` | `agent_review` | Dispatches prompt to `AgentBackend`, polls, collects artifact |
-| `synthesis.py` | `synthesis` | Diffs Review A vs B, classifies AGREED/A-ONLY/B-ONLY |
-| `freshness_check.py` | `freshness_check` | Compares HEAD SHA at review time vs current |
-| `human_gate.py` | `human_gate` | Pauses workflow, presents gate payload to human |
-| `publish.py` | `publish` | Posts to GitHub (`gh pr review/comment`), comment sanitization |
+| `prioritize.py` | `prioritize` | P0-P3 scoring, code owner boost, repo-scoped skip list |
+| `expert_select.py` | `expert_select` | DB-backed domain matching with file/keyword triggers, relevance thresholds, expert count caps |
+| `prompt_generate.py` | `prompt_generate` | Structured prompt builder: header, context commands, GitHub API dedup, persona, checklist, anti-patterns, cross-cutting concerns, output format. Per-expert fan-out for self/deep review |
+| `agent_review.py` | `agent_review` | Dispatches prompt to `AgentBackend`, Review B isolation, live output streaming, domain propagation |
+| `synthesis.py` | `synthesis` | Source attribution (A/B/BOTH), synthesis log, NEEDS_DISCUSSION verdict, two-tier synthesis for self/deep review |
+| `freshness_check.py` | `freshness_check` | SUPERSEDED detection (force-push/rebase), per-finding staleness tagging, justification summaries |
+| `human_gate.py` | `human_gate` | Enriched gate payload: synthesis log, questions, checklists, per-domain synthesis, holistic review, staleness |
+| `publish.py` | `publish` | Rich GitHub comments with blocking findings (file:line, evidence, fix), questions, staleness notes, auto-creates follow-up entries |
+| `holistic_review.py` | `holistic_review` | Tier 2 analysis: cross-domain interactions, promotion/demotion logic, domain verdict summary |
+| `followup_check.py` | `followup_check` | Checks PR state, new commits, author responses; classifies follow-up status |
+| `followup_action.py` | `followup_action` | Posts follow-up comments using templates (RESOLVED, PARTIALLY_RESOLVED, AUTHOR_DISAGREES, NO_RESPONSE) |
 
-**Database** (`backend/database/workflows.py`): CRUD for templates, instances, steps, artifacts, agents.
+**Database** (`backend/database/workflows.py`): CRUD for templates, instances, steps, artifacts, agents, expert domains, follow-ups.
 
-**Routes** (`backend/routes/workflow_engine_routes.py`): Template CRUD, instance lifecycle, gate actions, agent list.
+**Routes** (`backend/routes/workflow_engine_routes.py`): Template CRUD, instance lifecycle, gate actions, agent list, expert domain CRUD, follow-up listing.
 
 #### Database Tables
 
 ```sql
--- Workflow templates (Quick Review, Team Review, Self-Review, Deep Review)
+-- Workflow templates (Quick Review, Team Review, Self-Review, Deep Review, Follow-Up Review)
 CREATE TABLE workflow_templates (id, name UNIQUE, description, template_json, is_builtin, created_at, updated_at);
 
 -- Workflow run instances
@@ -513,23 +518,53 @@ CREATE TABLE agents (id, name UNIQUE, type, model, config_json, is_active, creat
 -- Code owner registry for priority scoring
 CREATE TABLE code_owner_registry (id, github_handle UNIQUE, display_name, priority_boost, is_reviewer, created_at, updated_at);
 
--- PR skip list
+-- PR skip list (repo-scoped)
 CREATE TABLE skip_list (id, pr_number, repo, reason, skipped_at, instance_id, UNIQUE(pr_number, repo));
+
+-- Expert domain catalog (10 built-in domains from legacy adversarial spec)
+CREATE TABLE expert_domains (id, domain_id UNIQUE, display_name, persona, scope, triggers_json, checklist_json, anti_patterns_json, is_builtin, is_active, created_at);
+
+-- Follow-up tracking for published reviews
+CREATE TABLE review_followups (id, instance_id, pr_number, repo, source_run_id FK, verdict, published_at, review_sha, status DEFAULT 'NO_RESPONSE', last_checked, notes, created_at);
+
+-- Per-finding status within a follow-up
+CREATE TABLE followup_findings (id, followup_id FK, finding_id, original_text, severity, status DEFAULT 'OPEN', author_response, resolution_notes, updated_at);
 ```
+
+#### Expert Domain Catalog
+
+10 built-in expert domains seeded from the legacy adversarial review specification:
+
+| Domain | Trigger Patterns | Trigger Keywords |
+|--------|-----------------|-----------------|
+| rust-api | `routes/*.rs`, `server/*.rs` | `axum::`, `StatusCode`, `handler`, `into_response` |
+| database | `models/*.rs`, `migrations/` | `sqlx::`, `BEGIN`, `COMMIT`, `transaction` |
+| s3-cloud | — | `s3_client`, `multipart`, `presign`, `upload_id` |
+| concurrency | — | `claim_`, `Mutex`, `RwLock`, `atomic`, `OCC` |
+| security | — | `validate_`, `sanitize`, `traversal`, `auth`, `RBAC` |
+| testing | `tests/` | `assert`, `mock`, `fixture` |
+| infra-ci | `Dockerfile`, `.github/`, `Makefile`, `terraform/` | — |
+| go-backend | `*.go`, `go.mod` | `goroutine`, `chan`, `sync.`, `http.Handler` |
+| cpp-simulator | `*.cc`, `*.cpp`, `*.h` | `ns3::`, `Simulator::`, `congestion`, `cwnd` |
+| python-tooling | `*.py`, `requirements.txt`, `pyproject.toml` | `pip` |
+
+Each domain includes: full persona text, review scope, 5-7 checklist items, 3-4 anti-patterns.
 
 #### Frontend Components
 
 | Component | File | Description |
 |-----------|------|-------------|
-| `WorkflowEngineView` | `components/engine/WorkflowEngineView.tsx` | Container routing between list, config, detail, and gate views |
-| `WorkflowRunList` | `components/engine/WorkflowRunList.tsx` | Table of instances with status filter bar, "+ New Run" action |
-| `RunConfigPanel` | `components/engine/RunConfigPanel.tsx` | Template card picker, agent assignment per review step, pipeline preview, start button |
+| `WorkflowEngineView` | `components/engine/WorkflowEngineView.tsx` | Container routing between list, config, detail, gate, domains, and follow-ups views |
+| `WorkflowRunList` | `components/engine/WorkflowRunList.tsx` | Table of instances with status filter bar, "+ New Run", "Expert Domains", "Follow-Ups" actions |
+| `RunConfigPanel` | `components/engine/RunConfigPanel.tsx` | Template card picker with mode badges, agent assignment, PR selection, pipeline preview |
 | `WorkflowRunDetail` | `components/engine/WorkflowRunDetail.tsx` | Two-panel layout: vertical step timeline (left) + content viewer (right) |
-| `StepContentViewer` | `components/engine/StepContentViewer.tsx` | Renders step output by type (PR list, prompt, review markdown, synthesis, freshness) |
-| `GateView` | `components/engine/GateView.tsx` | Full-page gate: synthesis overview, review comparison, publish preview, freshness, reject-with-reason |
+| `StepContentViewer` | `components/engine/StepContentViewer.tsx` | Renders step output by type with collapsible prompt sections, expert domain detail, follow-up views, live agent output |
+| `GateView` | `components/engine/GateView.tsx` | Full-page gate: overview, comparison, synthesis log, questions, domains (per-domain synthesis), publish preview, freshness with staleness indicators |
 | `ReviewComparison` | `components/engine/ReviewComparison.tsx` | Side-by-side Agent A vs Agent B review columns with synthesis classification |
 | `PublishPreview` | `components/engine/PublishPreview.tsx` | Rendered markdown preview of the GitHub comment to be posted |
-| `FindingCard` | `components/engine/FindingCard.tsx` | Individual finding: severity badge, file location, problem, fix, classification |
+| `FindingCard` | `components/engine/FindingCard.tsx` | Individual finding: severity badge, file location, problem, fix, source (A/B/BOTH), classification |
+| `ExpertDomainManager` | `components/engine/ExpertDomainManager.tsx` | Expandable domain list with persona, checklist, anti-patterns, triggers; create/disable/delete custom domains |
+| `FollowUpTracker` | `components/engine/FollowUpTracker.tsx` | Follow-up list with status badges, per-finding resolution table, expandable detail view |
 
 State management via `useWorkflowEngineStore` (Zustand). API client at `api/workflow-engine.ts`.
 

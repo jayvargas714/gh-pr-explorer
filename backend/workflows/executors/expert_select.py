@@ -1,23 +1,19 @@
-"""Expert Select step — infers domain areas from PR changed files and assigns review perspectives."""
+from __future__ import annotations
+"""Expert Select step — selects relevant expert domains from DB for each PR.
+
+Fetches changed files/diff via gh CLI, matches against domain trigger patterns
+and keywords, applies relevance thresholds and expert count caps per the legacy
+adversarial review specification.
+"""
 
 import logging
 import re
+import subprocess
 
 from backend.workflows.executor import StepExecutor, StepResult
 from backend.workflows.step_types import register_step
 
 logger = logging.getLogger(__name__)
-
-DOMAIN_PATTERNS: list[tuple[str, list[str]]] = [
-    ("backend", [r"backend/", r"server/", r"api/", r"\.py$", r"\.go$", r"\.rs$", r"\.java$"]),
-    ("frontend", [r"frontend/", r"src/components/", r"\.tsx?$", r"\.jsx?$", r"\.css$", r"\.scss$"]),
-    ("infra", [r"infra/", r"terraform/", r"k8s/", r"docker", r"Dockerfile", r"\.ya?ml$", r"helm/"]),
-    ("security", [r"auth", r"security", r"crypt", r"\.pem$", r"\.key$", r"token", r"secret"]),
-    ("database", [r"migration", r"schema", r"\.sql$", r"models/", r"database/"]),
-    ("testing", [r"test", r"spec/", r"__tests__/", r"\.test\.", r"\.spec\.", r"e2e/", r"cypress/"]),
-    ("ci-cd", [r"\.github/", r"ci/", r"pipeline", r"\.circleci/", r"jenkinsfile"]),
-    ("docs", [r"docs/", r"README", r"CHANGELOG", r"\.md$"]),
-]
 
 
 @register_step("expert_select")
@@ -25,28 +21,66 @@ class ExpertSelectExecutor(StepExecutor):
 
     def execute(self, inputs: dict) -> StepResult:
         prs = inputs.get("prs", [])
+        owner = inputs.get("owner", "")
+        repo = inputs.get("repo", "")
         if not prs:
             return StepResult(success=False, error="No PRs to analyze for expert selection")
 
-        all_domains: set[str] = set()
+        domains = self._load_domains()
+        if not domains:
+            return StepResult(success=False, error="No active expert domains configured")
+
+        all_matched: dict[str, dict] = {}
         pr_domains: list[dict] = []
+        total_lines = 0
 
         for pr in prs:
-            files = self._get_changed_files(pr)
-            domains = self._classify_files(files)
-            if not domains:
-                domains = {"backend"}
-            all_domains.update(domains)
+            pr_number = pr.get("number", 0)
+            additions = pr.get("additions", 0)
+            deletions = pr.get("deletions", 0)
+            total_lines += additions + deletions
+
+            files = self._fetch_changed_files(owner, repo, pr_number)
+            diff_content = self._fetch_diff_content(owner, repo, pr_number)
+
+            pr_matched = self._match_domains(domains, files, diff_content)
+            for domain_id, info in pr_matched.items():
+                if domain_id not in all_matched:
+                    all_matched[domain_id] = info
+                else:
+                    all_matched[domain_id]["matched_files"] = list(
+                        set(all_matched[domain_id]["matched_files"]) | set(info["matched_files"])
+                    )
+                    all_matched[domain_id]["relevance_pct"] = max(
+                        all_matched[domain_id]["relevance_pct"], info["relevance_pct"]
+                    )
+
             pr_domains.append({
-                "pr_number": pr.get("number", 0),
-                "domains": sorted(domains),
+                "pr_number": pr_number,
+                "domains": sorted(pr_matched.keys()),
                 "file_count": len(files),
             })
 
-        experts = [
-            {"domain": d, "perspective": self._domain_perspective(d)}
-            for d in sorted(all_domains)
-        ]
+        max_experts = self._expert_count_cap(total_lines)
+        sorted_domains = sorted(
+            all_matched.values(), key=lambda d: d["relevance_pct"], reverse=True
+        )[:max_experts]
+
+        experts = []
+        for d in sorted_domains:
+            experts.append({
+                "domain_id": d["domain_id"],
+                "display_name": d["display_name"],
+                "persona": d["persona"],
+                "scope": d["scope"],
+                "checklist": d["checklist"],
+                "anti_patterns": d["anti_patterns"],
+                "matched_files": d["matched_files"],
+                "relevance_pct": d["relevance_pct"],
+            })
+
+        if not experts:
+            experts = [self._generic_expert()]
 
         return StepResult(
             success=True,
@@ -61,41 +95,121 @@ class ExpertSelectExecutor(StepExecutor):
                     "experts": experts,
                     "pr_domains": pr_domains,
                     "total_domains": len(experts),
+                    "total_lines_analyzed": total_lines,
+                    "max_experts_cap": max_experts,
                 },
             }],
         )
 
-    def _get_changed_files(self, pr: dict) -> list[str]:
-        files = pr.get("files", [])
-        if files:
-            return [f.get("path", f.get("filename", "")) if isinstance(f, dict) else str(f) for f in files]
-        head_ref = pr.get("headRefName", "")
-        if head_ref:
-            parts = head_ref.replace("-", "/").split("/")
-            return ["/".join(parts)]
-        title = pr.get("title", "")
-        return [title] if title else []
+    def _load_domains(self) -> list[dict]:
+        try:
+            from backend.database import get_workflow_db
+            db = get_workflow_db()
+            return db.list_expert_domains(active_only=True)
+        except Exception as e:
+            logger.error(f"Failed to load expert domains: {e}")
+            return []
 
-    def _classify_files(self, files: list[str]) -> set[str]:
-        matched = set()
-        for filepath in files:
-            for domain, patterns in DOMAIN_PATTERNS:
-                for pat in patterns:
-                    if re.search(pat, filepath, re.IGNORECASE):
-                        matched.add(domain)
-                        break
+    def _fetch_changed_files(self, owner: str, repo: str, pr_number: int) -> list[str]:
+        if not owner or not repo or not pr_number:
+            return []
+        try:
+            result = subprocess.run(
+                ["gh", "pr", "diff", str(pr_number), "--name-only",
+                 "--repo", f"{owner}/{repo}"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
+        except Exception as e:
+            logger.warning(f"Failed to fetch changed files for PR #{pr_number}: {e}")
+        return []
+
+    def _fetch_diff_content(self, owner: str, repo: str, pr_number: int) -> str:
+        if not owner or not repo or not pr_number:
+            return ""
+        try:
+            result = subprocess.run(
+                ["gh", "pr", "diff", str(pr_number), "--repo", f"{owner}/{repo}"],
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode == 0:
+                return result.stdout[:500_000]
+        except Exception as e:
+            logger.warning(f"Failed to fetch diff for PR #{pr_number}: {e}")
+        return ""
+
+    def _match_domains(self, domains: list[dict], files: list[str],
+                       diff_content: str) -> dict[str, dict]:
+        total_files = max(len(files), 1)
+        matched: dict[str, dict] = {}
+
+        for domain in domains:
+            triggers = domain.get("triggers", {})
+            file_patterns = triggers.get("file_patterns", [])
+            keywords = triggers.get("keywords", [])
+
+            matched_files = set()
+            for filepath in files:
+                for pattern in file_patterns:
+                    try:
+                        if re.search(pattern, filepath, re.IGNORECASE):
+                            matched_files.add(filepath)
+                            break
+                    except re.error:
+                        pass
+
+            keyword_match = False
+            for kw in keywords:
+                if kw.lower() in diff_content.lower():
+                    keyword_match = True
+                    break
+
+            if not matched_files and not keyword_match:
+                continue
+
+            relevance = len(matched_files) / total_files * 100
+            if keyword_match and relevance < 5:
+                relevance = max(relevance, 10.0)
+
+            if relevance < 5 and not keyword_match:
+                continue
+
+            matched[domain["domain_id"]] = {
+                "domain_id": domain["domain_id"],
+                "display_name": domain["display_name"],
+                "persona": domain["persona"],
+                "scope": domain["scope"],
+                "checklist": domain.get("checklist", []),
+                "anti_patterns": domain.get("anti_patterns", []),
+                "matched_files": sorted(matched_files),
+                "relevance_pct": round(relevance, 1),
+            }
+
         return matched
 
     @staticmethod
-    def _domain_perspective(domain: str) -> str:
-        perspectives = {
-            "backend": "Focus on API design, error handling, data validation, performance, and service architecture.",
-            "frontend": "Focus on component structure, state management, accessibility, UX patterns, and rendering performance.",
-            "infra": "Focus on infrastructure security, resource sizing, networking, IAM policies, and deployment reliability.",
-            "security": "Focus on authentication flows, authorization checks, secret management, input sanitization, and vulnerability patterns.",
-            "database": "Focus on schema design, migration safety, query performance, indexing, and data integrity constraints.",
-            "testing": "Focus on test coverage, test reliability, mocking patterns, edge cases, and CI integration.",
-            "ci-cd": "Focus on pipeline efficiency, caching, parallelization, failure handling, and deployment gates.",
-            "docs": "Focus on accuracy, completeness, clarity, and consistency with the actual implementation.",
+    def _expert_count_cap(total_lines: int) -> int:
+        if total_lines <= 300:
+            return 2
+        if total_lines <= 1500:
+            return 3
+        return 4
+
+    @staticmethod
+    def _generic_expert() -> dict:
+        return {
+            "domain_id": "general",
+            "display_name": "General",
+            "persona": "Senior software engineer with broad expertise across the stack.",
+            "scope": "General code quality, architecture, correctness, and maintainability",
+            "checklist": [
+                "Is the code correct and free of obvious bugs?",
+                "Are edge cases handled?",
+                "Is error handling adequate?",
+                "Is the code readable and maintainable?",
+            ],
+            "anti_patterns": [],
+            "matched_files": [],
+            "relevance_pct": 100.0,
         }
-        return perspectives.get(domain, "Perform a general code quality review.")

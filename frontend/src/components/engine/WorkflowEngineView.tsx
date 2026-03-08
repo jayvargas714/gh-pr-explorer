@@ -3,11 +3,13 @@ import { WorkflowRunList } from './WorkflowRunList'
 import { WorkflowRunDetail } from './WorkflowRunDetail'
 import { RunConfigPanel } from './RunConfigPanel'
 import { GateView } from './GateView'
+import { ExpertDomainManager } from './ExpertDomainManager'
+import { FollowUpTracker } from './FollowUpTracker'
 import { useAccountStore } from '../../stores/useAccountStore'
 import { useWorkflowEngineStore } from '../../stores/useWorkflowEngineStore'
 import type { WorkflowInstance } from '../../api/workflow-engine'
 
-type View = 'list' | 'config' | 'detail' | 'gate'
+type View = 'list' | 'config' | 'detail' | 'gate' | 'domains' | 'followups'
 
 export function WorkflowEngineView() {
   const { selectedRepo } = useAccountStore()
@@ -70,11 +72,17 @@ export function WorkflowEngineView() {
           onBack={() => setView('detail')}
         />
       )
+    case 'domains':
+      return <ExpertDomainManager onClose={() => setView('list')} />
+    case 'followups':
+      return <FollowUpTracker repo={repoFullName} onClose={() => setView('list')} />
     default:
       return (
         <WorkflowRunList
           onSelectInstance={goToDetail}
           onNewRun={() => setView('config')}
+          onOpenDomains={() => setView('domains')}
+          onOpenFollowups={() => setView('followups')}
         />
       )
   }

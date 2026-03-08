@@ -149,12 +149,14 @@ class PrioritizeExecutor(StepExecutor):
         return 3
 
     def _get_skip_list(self) -> dict[int, str]:
+        repo = self.instance_config.get("repo", "")
         try:
             from backend.database import get_workflow_db
             db = get_workflow_db()
             with db.db.connection() as conn:
                 rows = conn.execute(
-                    "SELECT pr_number, reason FROM skip_list"
+                    "SELECT pr_number, reason FROM skip_list WHERE repo = ?",
+                    (repo,),
                 ).fetchall()
                 return {r["pr_number"]: r["reason"] for r in rows}
         except Exception:

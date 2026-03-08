@@ -1,3 +1,4 @@
+from __future__ import annotations
 """DB access layer for workflow engine tables."""
 
 import json
@@ -255,3 +256,187 @@ class WorkflowDB:
                 (name, agent_type, model, json.dumps(config_json or {})),
             )
             return cursor.lastrowid
+
+    # --- Expert Domains ---
+
+    def list_expert_domains(self, active_only: bool = True) -> list[dict]:
+        with self.db.connection() as conn:
+            if active_only:
+                rows = conn.execute(
+                    "SELECT * FROM expert_domains WHERE is_active=1 ORDER BY domain_id"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM expert_domains ORDER BY domain_id"
+                ).fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                d["triggers"] = json.loads(d.get("triggers_json") or "{}")
+                d["checklist"] = json.loads(d.get("checklist_json") or "[]")
+                d["anti_patterns"] = json.loads(d.get("anti_patterns_json") or "[]")
+                results.append(d)
+            return results
+
+    def get_expert_domain(self, domain_id: str) -> Optional[dict]:
+        with self.db.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM expert_domains WHERE domain_id=?", (domain_id,)
+            ).fetchone()
+            if row:
+                d = dict(row)
+                d["triggers"] = json.loads(d.get("triggers_json") or "{}")
+                d["checklist"] = json.loads(d.get("checklist_json") or "[]")
+                d["anti_patterns"] = json.loads(d.get("anti_patterns_json") or "[]")
+                return d
+            return None
+
+    def create_expert_domain(self, domain_id: str, display_name: str, persona: str,
+                             scope: str, triggers: dict, checklist: list,
+                             anti_patterns: Optional[list] = None,
+                             is_builtin: bool = True) -> int:
+        with self.db.connection() as conn:
+            cursor = conn.execute(
+                "INSERT INTO expert_domains "
+                "(domain_id, display_name, persona, scope, triggers_json, "
+                "checklist_json, anti_patterns_json, is_builtin) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (domain_id, display_name, persona, scope,
+                 json.dumps(triggers), json.dumps(checklist),
+                 json.dumps(anti_patterns or []), is_builtin),
+            )
+            return cursor.lastrowid
+
+    def upsert_expert_domain(self, domain_id: str, display_name: str, persona: str,
+                             scope: str, triggers: dict, checklist: list,
+                             anti_patterns: Optional[list] = None,
+                             is_builtin: bool = True) -> int:
+        with self.db.connection() as conn:
+            existing = conn.execute(
+                "SELECT id FROM expert_domains WHERE domain_id=?", (domain_id,)
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE expert_domains SET display_name=?, persona=?, scope=?, "
+                    "triggers_json=?, checklist_json=?, anti_patterns_json=? "
+                    "WHERE domain_id=?",
+                    (display_name, persona, scope, json.dumps(triggers),
+                     json.dumps(checklist), json.dumps(anti_patterns or []),
+                     domain_id),
+                )
+                return existing["id"]
+            return self.create_expert_domain(
+                domain_id, display_name, persona, scope,
+                triggers, checklist, anti_patterns, is_builtin)
+
+    def update_expert_domain(self, domain_id: str, **kwargs):
+        sets = []
+        params = []
+        for key in ("display_name", "persona", "scope", "is_active"):
+            if key in kwargs:
+                sets.append(f"{key}=?")
+                params.append(kwargs[key])
+        for key in ("triggers", "checklist", "anti_patterns"):
+            if key in kwargs:
+                sets.append(f"{key}_json=?")
+                params.append(json.dumps(kwargs[key]))
+        if not sets:
+            return
+        params.append(domain_id)
+        with self.db.connection() as conn:
+            conn.execute(
+                f"UPDATE expert_domains SET {', '.join(sets)} WHERE domain_id=?",
+                params,
+            )
+
+    def delete_expert_domain(self, domain_id: str):
+        with self.db.connection() as conn:
+            conn.execute(
+                "DELETE FROM expert_domains WHERE domain_id=? AND is_builtin=0",
+                (domain_id,),
+            )
+
+    # --- Follow-ups ---
+
+    def create_followup(self, instance_id: int, pr_number: int, repo: str,
+                        source_run_id: int, verdict: str,
+                        review_sha: Optional[str] = None) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connection() as conn:
+            cursor = conn.execute(
+                "INSERT INTO review_followups "
+                "(instance_id, pr_number, repo, source_run_id, verdict, "
+                "review_sha, published_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (instance_id, pr_number, repo, source_run_id, verdict,
+                 review_sha, now),
+            )
+            return cursor.lastrowid
+
+    def get_followup(self, followup_id: int) -> Optional[dict]:
+        with self.db.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM review_followups WHERE id=?", (followup_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_followups(self, repo: Optional[str] = None,
+                       status: Optional[str] = None) -> list[dict]:
+        conditions = []
+        params: list = []
+        if repo:
+            conditions.append("repo=?")
+            params.append(repo)
+        if status == "active":
+            conditions.append(
+                "status NOT IN ('RESOLVED','CONCEDED','MERGED','CLOSED','WONTFIX')"
+            )
+        elif status:
+            conditions.append("status=?")
+            params.append(status)
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        with self.db.connection() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM review_followups{where} ORDER BY created_at DESC",
+                params,
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def update_followup_status(self, followup_id: int, status: str,
+                               notes: Optional[str] = None):
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connection() as conn:
+            conn.execute(
+                "UPDATE review_followups SET status=?, last_checked=?, notes=? "
+                "WHERE id=?",
+                (status, now, notes, followup_id),
+            )
+
+    def create_followup_finding(self, followup_id: int, finding_id: str,
+                                original_text: str, severity: str) -> int:
+        with self.db.connection() as conn:
+            cursor = conn.execute(
+                "INSERT INTO followup_findings "
+                "(followup_id, finding_id, original_text, severity) "
+                "VALUES (?, ?, ?, ?)",
+                (followup_id, finding_id, original_text, severity),
+            )
+            return cursor.lastrowid
+
+    def update_followup_finding(self, finding_id: int, status: str,
+                                author_response: Optional[str] = None,
+                                resolution_notes: Optional[str] = None):
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connection() as conn:
+            conn.execute(
+                "UPDATE followup_findings SET status=?, author_response=?, "
+                "resolution_notes=?, updated_at=? WHERE id=?",
+                (status, author_response, resolution_notes, now, finding_id),
+            )
+
+    def get_followup_findings(self, followup_id: int) -> list[dict]:
+        with self.db.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM followup_findings WHERE followup_id=? ORDER BY id",
+                (followup_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]

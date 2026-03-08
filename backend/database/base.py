@@ -378,6 +378,55 @@ class Database:
                 )
             """)
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS expert_domains (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    domain_id TEXT NOT NULL UNIQUE,
+                    display_name TEXT NOT NULL,
+                    persona TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    triggers_json TEXT NOT NULL,
+                    checklist_json TEXT NOT NULL,
+                    anti_patterns_json TEXT,
+                    is_builtin BOOLEAN DEFAULT TRUE,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS review_followups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    instance_id INTEGER NOT NULL,
+                    pr_number INTEGER NOT NULL,
+                    repo TEXT NOT NULL,
+                    source_run_id INTEGER NOT NULL,
+                    verdict TEXT NOT NULL,
+                    published_at DATETIME,
+                    review_sha TEXT,
+                    status TEXT NOT NULL DEFAULT 'NO_RESPONSE',
+                    last_checked DATETIME,
+                    notes TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (source_run_id) REFERENCES workflow_instances(id)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS followup_findings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    followup_id INTEGER NOT NULL,
+                    finding_id TEXT NOT NULL,
+                    original_text TEXT,
+                    severity TEXT,
+                    status TEXT NOT NULL DEFAULT 'OPEN',
+                    author_response TEXT,
+                    resolution_notes TEXT,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (followup_id) REFERENCES review_followups(id)
+                )
+            """)
+
             logger.info(f"Database initialized at {self.db_path}")
 
     def is_migration_done(self, name: str) -> bool:

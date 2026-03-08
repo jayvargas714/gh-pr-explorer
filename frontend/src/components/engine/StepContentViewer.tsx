@@ -83,25 +83,82 @@ function PrioritizeView({ content }: { content: ParsedContent }) {
 }
 
 function PromptView({ content }: { content: ParsedContent }) {
-  const prompts = content.prompts as Array<{ pr_number?: number; pr_title?: string; prompt?: string }> | undefined
+  const prompts = content.prompts as Array<{ pr_number?: number; pr_title?: string; domain?: string; prompt?: string }> | undefined
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({})
+
   if (prompts && prompts.length > 0) {
     return (
       <div className="mx-step-content__prompt-list">
-        {prompts.map((p, i) => (
-          <div key={i} className="mx-step-content__prompt-item">
-            {p.pr_number && (
-              <div className="mx-step-content__prompt-header">
-                <strong>#{p.pr_number}</strong> {p.pr_title ?? ''}
+        {prompts.map((p, i) => {
+          const isOpen = expanded[i] ?? false
+          const sections = parsePromptSections(p.prompt ?? '')
+          return (
+            <div key={i} className="mx-step-content__prompt-item">
+              <div
+                className="mx-step-content__prompt-header mx-step-content__prompt-header--clickable"
+                onClick={() => setExpanded(prev => ({ ...prev, [i]: !isOpen }))}
+              >
+                <span className="mx-step-content__prompt-toggle">{isOpen ? '▼' : '▶'}</span>
+                {p.pr_number && <strong>#{p.pr_number}</strong>}
+                {p.pr_title && <span>{p.pr_title}</span>}
+                {p.domain && <Badge variant="info" size="sm">{p.domain}</Badge>}
               </div>
-            )}
-            <pre className="mx-step-content__prompt">{p.prompt ?? ''}</pre>
-          </div>
-        ))}
+              {isOpen && (
+                sections.length > 1 ? (
+                  <div className="mx-step-content__prompt-sections">
+                    {sections.map((sec, j) => (
+                      <PromptSection key={j} title={sec.title} body={sec.body} />
+                    ))}
+                  </div>
+                ) : (
+                  <pre className="mx-step-content__prompt">{p.prompt ?? ''}</pre>
+                )
+              )}
+            </div>
+          )
+        })}
       </div>
     )
   }
   const prompt = (content.prompt ?? content.text ?? JSON.stringify(content, null, 2)) as string
   return <pre className="mx-step-content__prompt">{prompt}</pre>
+}
+
+function PromptSection({ title, body }: { title: string; body: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="mx-step-content__prompt-section">
+      <div
+        className="mx-step-content__prompt-section-title"
+        onClick={() => setOpen(!open)}
+      >
+        <span>{open ? '▼' : '▶'}</span> {title}
+      </div>
+      {open && <pre className="mx-step-content__prompt-section-body">{body}</pre>}
+    </div>
+  )
+}
+
+function parsePromptSections(text: string): Array<{ title: string; body: string }> {
+  const lines = text.split('\n')
+  const sections: Array<{ title: string; body: string }> = []
+  let current: { title: string; lines: string[] } | null = null
+
+  for (const line of lines) {
+    if (line.startsWith('## ')) {
+      if (current) sections.push({ title: current.title, body: current.lines.join('\n').trim() })
+      current = { title: line.slice(3).trim(), lines: [] }
+    } else if (current) {
+      current.lines.push(line)
+    } else {
+      if (!sections.length && line.trim()) {
+        if (!current) current = { title: 'Header', lines: [] }
+        current.lines.push(line)
+      }
+    }
+  }
+  if (current) sections.push({ title: current.title, body: current.lines.join('\n').trim() })
+  return sections
 }
 
 function ReviewView({ content }: { content: ParsedContent }) {
@@ -219,20 +276,53 @@ function DefaultView({ content }: { content: ParsedContent }) {
 }
 
 function ExpertSelectView({ content }: { content: ParsedContent }) {
-  const experts = (content.experts ?? []) as Array<{ domain?: string; perspective?: string }>
+  const experts = (content.experts ?? []) as Array<{
+    domain_id?: string; domain?: string; display_name?: string; persona?: string
+    scope?: string; checklist?: string[]; anti_patterns?: string[]
+    matched_files?: string[]; relevance_pct?: number; perspective?: string
+  }>
   const prDomains = (content.pr_domains ?? []) as Array<{ pr_number?: number; domains?: string[]; file_count?: number }>
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
+
   return (
     <div className="mx-step-content__expert-select">
       {experts.length > 0 && (
         <>
-          <h5>Review Perspectives ({experts.length})</h5>
-          <div className="mx-step-content__pr-list">
-            {experts.map((e, i) => (
-              <div key={i} className="mx-step-content__pr-item">
-                <Badge variant="info" size="sm">{e.domain}</Badge>
-                <span className="mx-step-content__pr-title">{e.perspective ?? ''}</span>
-              </div>
-            ))}
+          <h5>Expert Domains ({experts.length})</h5>
+          <div className="mx-step-content__expert-list">
+            {experts.map((e, i) => {
+              const isOpen = expandedIdx === i
+              return (
+                <div key={i} className="mx-step-content__expert-card">
+                  <div
+                    className="mx-step-content__expert-header"
+                    onClick={() => setExpandedIdx(isOpen ? null : i)}
+                  >
+                    <Badge variant="info" size="sm">{e.display_name ?? e.domain_id ?? e.domain}</Badge>
+                    {e.relevance_pct != null && (
+                      <Badge variant="neutral" size="sm">{e.relevance_pct.toFixed(0)}% relevance</Badge>
+                    )}
+                    {e.checklist && <span className="mx-step-content__expert-meta">{e.checklist.length} checks</span>}
+                    {e.anti_patterns && e.anti_patterns.length > 0 && (
+                      <span className="mx-step-content__expert-meta">{e.anti_patterns.length} anti-patterns</span>
+                    )}
+                    <span className="mx-step-content__prompt-toggle">{isOpen ? '▼' : '▶'}</span>
+                  </div>
+                  {isOpen && (
+                    <div className="mx-step-content__expert-detail">
+                      {e.persona && <p className="mx-step-content__expert-persona">{e.persona}</p>}
+                      {e.scope && <p><strong>Scope:</strong> {e.scope}</p>}
+                      {e.matched_files && e.matched_files.length > 0 && (
+                        <div>
+                          <strong>Matched files:</strong>
+                          <ul>{e.matched_files.slice(0, 10).map((f, j) => <li key={j}><code>{f}</code></li>)}</ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </>
       )}
@@ -307,6 +397,55 @@ function HolisticView({ content }: { content: ParsedContent }) {
   )
 }
 
+function FollowupCheckView({ content }: { content: ParsedContent }) {
+  const results = (content.results ?? content.followup_results ?? []) as Array<{
+    followup_id?: number; pr_number?: number; classification?: string
+    has_new_commits?: boolean; new_comment_count?: number
+  }>
+  if (!results.length) return <p className="mx-step-content__empty">No follow-up results.</p>
+
+  const CLS_VARIANT: Record<string, 'success' | 'warning' | 'error' | 'info' | 'neutral'> = {
+    RESOLVED: 'success', PARTIALLY_RESOLVED: 'warning', AUTHOR_DISAGREES: 'error',
+    NO_RESPONSE: 'neutral', DISCUSSING: 'info', MERGED: 'success', CLOSED: 'neutral',
+  }
+
+  return (
+    <div className="mx-step-content__followup-check">
+      {results.map((r, i) => (
+        <div key={i} className="mx-step-content__pr-item">
+          <span className="mx-step-content__pr-link">#{r.pr_number}</span>
+          <Badge variant={CLS_VARIANT[r.classification ?? ''] ?? 'neutral'} size="sm">
+            {r.classification ?? 'UNKNOWN'}
+          </Badge>
+          {r.has_new_commits && <Badge variant="info" size="sm">New commits</Badge>}
+          {(r.new_comment_count ?? 0) > 0 && <span>{r.new_comment_count} new comments</span>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function FollowupActionView({ content }: { content: ParsedContent }) {
+  const actions = (content.actions ?? content.actions_taken ?? []) as Array<{
+    pr_number?: number; action?: string; classification?: string; reason?: string
+  }>
+  if (!actions.length) return <p className="mx-step-content__empty">No actions taken.</p>
+
+  return (
+    <div className="mx-step-content__followup-action">
+      {actions.map((a, i) => (
+        <div key={i} className="mx-step-content__pr-item">
+          <span className="mx-step-content__pr-link">#{a.pr_number}</span>
+          <Badge variant={a.action === 'comment_posted' ? 'success' : a.action === 'skip' ? 'neutral' : 'error'} size="sm">
+            {a.action}
+          </Badge>
+          {a.reason && <span className="mx-step-content__pr-title">{a.reason}</span>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 const VIEWERS: Record<string, React.FC<{ content: ParsedContent; step: WorkflowStep }>> = {
   pr_select: ({ content }) => <PRSelectView content={content} />,
   prioritize: ({ content }) => <PrioritizeView content={content} />,
@@ -318,6 +457,8 @@ const VIEWERS: Record<string, React.FC<{ content: ParsedContent; step: WorkflowS
   publish: ({ content }) => <DefaultView content={content} />,
   expert_select: ({ content }) => <ExpertSelectView content={content} />,
   holistic_review: ({ content }) => <HolisticView content={content} />,
+  followup_check: ({ content }) => <FollowupCheckView content={content} />,
+  followup_action: ({ content }) => <FollowupActionView content={content} />,
 }
 
 function LiveAgentOutput({ instanceId, stepId }: { instanceId: number; stepId: string }) {

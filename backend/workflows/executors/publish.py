@@ -1,4 +1,10 @@
-"""Publish step — posts review to GitHub as PR comment/review."""
+from __future__ import annotations
+"""Publish step — posts review to GitHub as PR comment/review.
+
+Produces rich GitHub comment format with blocking findings (file locations,
+evidence, suggested fixes), non-blocking suggestions, questions, staleness
+notes, and auto-creates follow-up entries for CHANGES_REQUESTED/NEEDS_DISCUSSION.
+"""
 
 import json
 import logging
@@ -12,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def sanitize_comment(text: str) -> str:
-    """Enforce comment safety rules: strip issue refs, AI branding."""
+    """Enforce comment safety: strip issue auto-links, AI branding."""
     text = re.sub(r'(?<!\w)#(\d+)', r'\1', text)
 
     ai_patterns = [
@@ -26,56 +32,131 @@ def sanitize_comment(text: str) -> str:
     return text.strip()
 
 
-def build_gh_comment(synthesis: dict, mode: str = "team-review") -> str:
-    """Build the GitHub comment body from a synthesis result."""
+def build_gh_comment(synthesis: dict, mode: str = "team-review",
+                     freshness=None) -> str:
+    """Build a rich GitHub comment body from synthesis results."""
     verdict = synthesis.get("verdict", "COMMENT")
-    pr_number = synthesis.get("pr_number", "")
     agreed = synthesis.get("agreed", [])
     a_only = synthesis.get("a_only", [])
     b_only = synthesis.get("b_only", [])
 
-    lines = [
-        "## Adversarial Review",
-        "",
-        f"**Verdict:** {verdict}",
-        f"**Findings:** {synthesis.get('total_findings', 0)} total "
-        f"({synthesis.get('agreed_count', 0)} agreed, "
-        f"{synthesis.get('disputed_count', 0)} disputed)",
-        "",
-    ]
+    lines = ["## Adversarial Review", ""]
 
-    blocking = [f for f in agreed if f["finding_a"].get("severity") == "critical"]
-    blocking += [f for f in a_only if f["finding"].get("severity") == "critical"]
-    blocking += [f for f in b_only if f["finding"].get("severity") == "critical"]
+    summary = synthesis.get("summary", "")
+    if summary:
+        lines.extend([summary, ""])
+    else:
+        lines.extend([
+            f"**Verdict:** {verdict}",
+            f"**Findings:** {synthesis.get('total_findings', 0)} total "
+            f"({synthesis.get('agreed_count', 0)} agreed, "
+            f"{synthesis.get('disputed_count', 0)} disputed)",
+            "",
+        ])
 
+    blocking = _collect_blocking(agreed, a_only, b_only)
     if blocking:
-        lines.append("### Blocking")
+        lines.append("### Blocking Findings")
         lines.append("")
-        for i, finding in enumerate(blocking, 1):
-            f = finding.get("finding_a", finding.get("finding", {}))
-            title = f.get("title", "Untitled")
-            problem = f.get("problem", "")
-            classification = finding.get("classification", "")
-            lines.append(f"{i}. **{title}** [{classification}]")
-            if problem:
-                lines.append(f"   {problem}")
+        for i, f in enumerate(blocking, 1):
+            inner = f.get("finding_a", f.get("finding", {}))
+            loc = inner.get("location", {})
+            file_ref = _format_file_ref(loc)
+            source = f.get("source", "")
+            lines.append(f'{i}. **{inner.get("title", "Untitled")}** [{source}] — `{file_ref}`')
+            if inner.get("problem"):
+                lines.append(f'   {inner["problem"]}')
+            if inner.get("evidence"):
+                lines.append(f'   Evidence: {inner["evidence"]}')
+            if inner.get("fix"):
+                lines.append(f'   **Suggested fix:** {inner["fix"]}')
+            lines.append("")
+    else:
+        lines.extend(["### Blocking Findings", "", "None — approving.", ""])
+
+    non_blocking = _collect_non_blocking(agreed, a_only, b_only)
+    if non_blocking:
+        lines.append("### Non-Blocking Suggestions")
+        lines.append("")
+        for i, f in enumerate(non_blocking, 1):
+            inner = f.get("finding_a", f.get("finding", {}))
+            loc = inner.get("location", {})
+            file_ref = _format_file_ref(loc)
+            source = f.get("source", "")
+            lines.append(f'{i}. **{inner.get("title", "Untitled")}** [{source}] — `{file_ref}`')
+            if inner.get("problem"):
+                lines.append(f'   {inner["problem"]}')
             lines.append("")
 
-    non_blocking = [f for f in agreed if f["finding_a"].get("severity") != "critical"]
-    non_blocking += [f for f in a_only if f["finding"].get("severity") != "critical"]
-    non_blocking += [f for f in b_only if f["finding"].get("severity") != "critical"]
+    questions = synthesis.get("questions", [])
+    if questions:
+        lines.append("### Questions")
+        lines.append("")
+        for i, q in enumerate(questions, 1):
+            lines.append(f"{i}. {q}")
+        lines.append("")
 
-    if non_blocking:
-        lines.append("### Non-Blocking")
-        lines.append("")
-        for i, finding in enumerate(non_blocking, 1):
-            f = finding.get("finding_a", finding.get("finding", {}))
-            title = f.get("title", "Untitled")
-            classification = finding.get("classification", "")
-            lines.append(f"{i}. **{title}** [{classification}]")
-        lines.append("")
+    if freshness:
+        stale_prs = [f for f in freshness
+                     if f.get("classification", "").startswith("STALE")
+                     or f.get("classification") == "SUPERSEDED"]
+        for pf in stale_prs:
+            affected = pf.get("affected_findings", [])
+            sha = pf.get("review_sha", "?")[:8]
+            cls = pf.get("classification", "STALE")
+            if cls == "SUPERSEDED":
+                lines.extend([
+                    f"> **Staleness Warning ({cls}):** This review was generated against "
+                    f"commit `{sha}`. The branch has been force-pushed/rebased since.",
+                    "",
+                ])
+            elif affected:
+                affected_str = ", ".join(affected[:5])
+                lines.extend([
+                    f"> **Staleness Note:** Review generated against `{sha}`. "
+                    f"Findings that may be affected by recent changes: {affected_str}.",
+                    "",
+                ])
+            else:
+                lines.extend([
+                    f"> **Note:** PR has new commits since review (generated against `{sha}`). "
+                    "Findings are likely still valid.",
+                    "",
+                ])
 
     return sanitize_comment("\n".join(lines))
+
+
+def _collect_blocking(agreed: list, a_only: list, b_only: list) -> list:
+    blocking = []
+    for f in agreed:
+        if f.get("finding_a", {}).get("severity") in ("critical", "major"):
+            blocking.append(f)
+    for f in a_only + b_only:
+        if f.get("finding", {}).get("severity") == "critical":
+            blocking.append(f)
+    return blocking
+
+
+def _collect_non_blocking(agreed: list, a_only: list, b_only: list) -> list:
+    non_blocking = []
+    for f in agreed:
+        if f.get("finding_a", {}).get("severity") not in ("critical", "major"):
+            non_blocking.append(f)
+    for f in a_only + b_only:
+        if f.get("finding", {}).get("severity") != "critical":
+            non_blocking.append(f)
+    return non_blocking
+
+
+def _format_file_ref(loc: dict) -> str:
+    if not loc:
+        return "unknown"
+    f = loc.get("file", loc.get("raw", ""))
+    line = loc.get("start_line")
+    if f and line:
+        return f"{f}:{line}"
+    return f or "unknown"
 
 
 @register_step("publish")
@@ -99,23 +180,23 @@ class PublishExecutor(StepExecutor):
             return StepResult(success=False, error="No PR number in synthesis")
 
         verdict = synthesis.get("verdict", "COMMENT")
-        comment_body = build_gh_comment(synthesis, mode)
-
-        stale_prs = [f for f in freshness if f.get("classification", "").startswith("STALE")]
-        if stale_prs:
-            comment_body += (
-                "\n\n> **Note:** PR has new commits since review began. "
-                "Some findings may be outdated.\n"
-            )
+        comment_body = build_gh_comment(synthesis, mode, freshness)
 
         event_map = {
             "APPROVE": "APPROVE",
             "CHANGES_REQUESTED": "REQUEST_CHANGES",
+            "NEEDS_DISCUSSION": "COMMENT",
             "COMMENT": "COMMENT",
         }
         gh_event = event_map.get(verdict, "COMMENT")
 
         success = self._post_to_github(owner, repo, pr_number, comment_body, gh_event)
+
+        instance_id = self.instance_config.get("_instance_id", 0)
+        if success and verdict in ("CHANGES_REQUESTED", "NEEDS_DISCUSSION"):
+            self._create_followup_entries(
+                owner, repo, pr_number, synthesis, instance_id
+            )
 
         return StepResult(
             success=True,
@@ -152,7 +233,7 @@ class PublishExecutor(StepExecutor):
             ]
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
                 logger.info(f"Published {event} review to {owner}/{repo} PR {pr_number}")
                 return True
@@ -162,3 +243,46 @@ class PublishExecutor(StepExecutor):
         except Exception as e:
             logger.error(f"Failed to publish to GitHub: {e}")
             return False
+
+    @staticmethod
+    def _create_followup_entries(owner: str, repo: str, pr_number: int,
+                                  synthesis: dict, instance_id: int):
+        try:
+            from backend.database import get_workflow_db
+            db = get_workflow_db()
+            review_sha = ""
+            for cat in ("agreed", "a_only", "b_only"):
+                for f in synthesis.get(cat, []):
+                    inner = f.get("finding_a", f.get("finding", {}))
+                    if inner:
+                        break
+
+            followup_id = db.create_followup(
+                instance_id=instance_id,
+                pr_number=pr_number,
+                repo=f"{owner}/{repo}",
+                source_run_id=instance_id,
+                verdict=synthesis.get("verdict", "COMMENT"),
+                review_sha=review_sha or None,
+            )
+
+            agreed = synthesis.get("agreed", [])
+            a_only = synthesis.get("a_only", [])
+            b_only = synthesis.get("b_only", [])
+            blocking = _collect_blocking(agreed, a_only, b_only)
+
+            for i, f in enumerate(blocking):
+                inner = f.get("finding_a", f.get("finding", {}))
+                db.create_followup_finding(
+                    followup_id=followup_id,
+                    finding_id=f"B{i+1}",
+                    original_text=inner.get("title", ""),
+                    severity=inner.get("severity", "major"),
+                )
+
+            logger.info(
+                f"Created follow-up entry {followup_id} for PR {pr_number} "
+                f"with {len(blocking)} blocking findings"
+            )
+        except Exception as e:
+            logger.error(f"Failed to create follow-up entries: {e}")
