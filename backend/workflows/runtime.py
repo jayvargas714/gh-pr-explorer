@@ -29,11 +29,15 @@ class WorkflowRuntime:
         self.fan_out_groups = template.get("fan_out_groups", [])
         self._overlay_db_step_configs()
 
+    def _is_cancelled(self) -> bool:
+        from backend.workflows.cancellation import is_cancelled
+        return is_cancelled(self.instance_id)
+
     def execute(self, initial_inputs: dict, instance_config: dict) -> dict:
         """Run the workflow from start to finish (or until a gate pause).
 
         Returns a dict with:
-          - status: 'completed' | 'awaiting_gate' | 'failed'
+          - status: 'completed' | 'awaiting_gate' | 'failed' | 'cancelled'
           - outputs: merged outputs from all completed steps
           - gate_step_id: if paused at a gate, the step that requires human input
           - error: if failed
@@ -55,6 +59,9 @@ class WorkflowRuntime:
         all_outputs = dict(initial_inputs)
 
         for level in levels:
+            if self._is_cancelled():
+                return {"status": "cancelled", "outputs": all_outputs}
+
             if len(level) == 1:
                 result = self._execute_single_step(
                     level[0], step_outputs, all_outputs, instance_config
@@ -168,8 +175,6 @@ class WorkflowRuntime:
                     for f, sid in futures.items():
                         if f is not future and not f.done():
                             f.cancel()
-                        elif f is not future and f.done():
-                            self._update_step_status(sid, "failed", error="Cancelled: sibling step failed")
                     early_exit = {"status": "failed", "outputs": all_outputs, "error": str(e)}
                     continue
 
@@ -178,8 +183,6 @@ class WorkflowRuntime:
                     for f, sid in futures.items():
                         if f is not future and not f.done():
                             f.cancel()
-                        elif f is not future and f.done():
-                            self._update_step_status(sid, "failed", error="Cancelled: sibling step failed")
                     early_exit = {"status": "failed", "outputs": all_outputs, "error": result.error}
                     continue
 
@@ -202,7 +205,7 @@ class WorkflowRuntime:
 
         if early_exit is not None and early_exit["status"] == "failed":
             for f, sid in futures.items():
-                if sid not in step_outputs:
+                if sid not in step_outputs and not f.done():
                     self._update_step_status(sid, "cancelled",
                                              error="Cancelled: sibling step failed")
 
@@ -256,8 +259,16 @@ class WorkflowRuntime:
 
         self._update_step_status(gate_step_id, "completed")
 
-        levels = self._parallel_levels()
         step_outputs: dict[str, dict] = {}
+        if self.db:
+            for row in self.db.get_steps(self.instance_id):
+                if row["status"] == "completed" and row.get("outputs_json"):
+                    try:
+                        step_outputs[row["step_id"]] = json.loads(row["outputs_json"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+        levels = self._parallel_levels()
         past_gate = False
 
         for level in levels:
@@ -266,6 +277,8 @@ class WorkflowRuntime:
                 continue
             if not past_gate:
                 continue
+            if self._is_cancelled():
+                return {"status": "cancelled", "outputs": all_outputs}
 
             if len(level) == 1:
                 result = self._execute_single_step(
@@ -294,8 +307,17 @@ class WorkflowRuntime:
         if self.db:
             self.db.reset_steps(self.instance_id, downstream)
 
-        levels = self._parallel_levels()
         step_outputs: dict[str, dict] = {}
+        if self.db:
+            for row in self.db.get_steps(self.instance_id):
+                sid = row["step_id"]
+                if sid not in downstream and row["status"] == "completed" and row.get("outputs_json"):
+                    try:
+                        step_outputs[sid] = json.loads(row["outputs_json"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+        levels = self._parallel_levels()
         reached = False
 
         for level in levels:
@@ -303,6 +325,8 @@ class WorkflowRuntime:
                 reached = True
             if not reached:
                 continue
+            if self._is_cancelled():
+                return {"status": "cancelled", "outputs": all_outputs}
 
             if len(level) == 1:
                 result = self._execute_single_step(
