@@ -4,6 +4,7 @@ Every agent subprocess registers its PID on start and unregisters on
 cleanup/cancel.  On server startup, `kill_all_tracked` terminates any
 leftover processes before the DB rows are cleared.
 """
+from __future__ import annotations
 
 import logging
 import os
