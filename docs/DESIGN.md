@@ -474,8 +474,8 @@ The Review Workflows tab provides a UI for composable code review pipelines impl
 |--------|-------------|
 | `step_types.py` | `StepType` enum, `@register_step` decorator, `STEP_REGISTRY` |
 | `executor.py` | `StepExecutor` ABC, `StepResult` dataclass |
-| `runtime.py` | `WorkflowRuntime` — level-based parallel execution, fan-out, gate pausing. `_merge_outputs()` concatenates list-valued keys in `_MERGEABLE_LIST_KEYS` (reviews, findings, followup_results). Module-level `merge_outputs()` alias used by route handlers for consistent output reconstruction |
-| `cancellation.py` | Cooperative cancellation registry: `cancel()` signals instance cancellation and terminates registered agents; `is_cancelled()` checked by all polling loops; `register_agent()`/`unregister_agent()` for tracking live agents. `AGENT_POLL_TIMEOUT` (30min) prevents infinite hangs |
+| `runtime.py` | `WorkflowRuntime` — level-based parallel execution, fan-out, gate pausing. `_is_cancelled()` checks between levels for cooperative cancellation. `resume_after_gate()` and `retry_from_step()` pre-populate `step_outputs` from DB for correct upstream data routing. `_merge_outputs()` concatenates list-valued keys in `_MERGEABLE_LIST_KEYS` (reviews, findings, followup_results). Module-level `merge_outputs()` alias used by route handlers for consistent output reconstruction |
+| `cancellation.py` | Cooperative cancellation registry: `cancel()` signals instance cancellation and terminates registered agents; `is_cancelled()` checked by all polling loops and between runtime levels; `clear()` called by all lifecycle endpoints (run/resume/retry) in `finally` blocks; `register_agent()`/`unregister_agent()` for tracking live agents. `AGENT_POLL_TIMEOUT` (30min) prevents infinite hangs |
 | `seed.py` | Built-in templates (Quick/Team/Self/Deep/Follow-Up Review), agents, 10 expert domains, code owners. Uses `WorkflowDB.upsert_code_owner()` abstraction |
 
 **Step Executors** (`backend/workflows/executors/`):
@@ -497,7 +497,7 @@ The Review Workflows tab provides a UI for composable code review pipelines impl
 
 **Database** (`backend/database/workflows.py`): CRUD for templates, instances, steps, artifacts, agents, expert domains, follow-ups, code owners. `base.py` configures SQLite with WAL journal mode and 5s busy_timeout for safe concurrent access from parallel step execution.
 
-**Routes** (`backend/routes/workflow_engine_routes.py`): Template CRUD, instance lifecycle, gate actions (with per-instance mutex for idempotency), instance cancellation (signals running agents via cancellation registry), agent list, expert domain CRUD, follow-up listing. Resume/retry paths use `merge_outputs()` for correct list-valued key concatenation.
+**Routes** (`backend/routes/workflow_engine_routes.py`): Template CRUD, instance lifecycle, gate actions (with per-instance mutex for idempotency), instance cancellation (signals running agents via cancellation registry), agent list, expert domain CRUD, follow-up listing. Resume/retry paths use `merge_outputs()` for correct list-valued key concatenation. Per-instance locks (`_get_instance_lock`) prevent duplicate concurrent retry/resume threads. `_set_terminal_status()` prevents background threads from overwriting `cancelled` DB status.
 
 #### Database Tables
 
