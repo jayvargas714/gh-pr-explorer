@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { Badge } from '../common/Badge'
+import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
 import { FindingCard } from './FindingCard'
-import { getStepLiveOutput } from '../../api/workflow-engine'
-import type { WorkflowStep, WorkflowArtifact } from '../../api/workflow-engine'
+import { getStepLiveOutput, getAgentDomains, cancelAgentDomain, rerunAgentDomain } from '../../api/workflow-engine'
+import type { WorkflowStep, WorkflowArtifact, AgentDomainInfo } from '../../api/workflow-engine'
 
 interface StepContentViewerProps {
   step: WorkflowStep
@@ -810,6 +811,150 @@ const VIEWERS: Record<string, React.FC<{ content: ParsedContent; step: WorkflowS
   followup_action: ({ content }) => <FollowupActionView content={content} />,
 }
 
+function AgentDomainTracker({ instanceId, stepId }: { instanceId: number; stepId: string }) {
+  const [domains, setDomains] = useState<Record<string, AgentDomainInfo>>({})
+  const [output, setOutput] = useState('')
+
+  useEffect(() => {
+    let active = true
+    const poll = async () => {
+      try {
+        const [d, o] = await Promise.all([
+          getAgentDomains(instanceId, stepId),
+          getStepLiveOutput(instanceId, stepId),
+        ])
+        if (active) { setDomains(d); setOutput(o) }
+      } catch { /* ignore */ }
+    }
+    poll()
+    const iv = setInterval(poll, 3000)
+    return () => { active = false; clearInterval(iv) }
+  }, [instanceId, stepId])
+
+  const entries = Object.entries(domains)
+  const runningCount = entries.filter(([, d]) => d.status === 'running').length
+  const completedCount = entries.filter(([, d]) => d.status === 'completed').length
+  const failedCount = entries.filter(([, d]) => d.status === 'failed' || d.status === 'cancelled').length
+  const totalCount = entries.length
+
+  const domainSections = parseDomainSections(output)
+  const sectionMap = new Map(domainSections.map(s => [s.domain, s.content]))
+
+  if (!entries.length && !output) {
+    return (
+      <div className="mx-step-content__running">
+        <Spinner size="sm" />
+        <span>Starting agents...</span>
+      </div>
+    )
+  }
+
+  if (entries.length > 0) {
+    return (
+      <div className="mx-step-content__live">
+        <div className="mx-step-content__live-header">
+          {runningCount > 0 && <Spinner size="sm" />}
+          <span>
+            Agents: {completedCount}/{totalCount} complete
+            {failedCount > 0 && ` (${failedCount} failed)`}
+            {runningCount > 0 && ` \u2014 ${runningCount} running`}
+          </span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+          {entries.map(([domain, info]) => (
+            <AgentDomainCard
+              key={domain}
+              domain={domain}
+              info={info}
+              liveContent={sectionMap.get(domain)}
+              instanceId={instanceId}
+              stepId={stepId}
+            />
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mx-step-content__live">
+      <div className="mx-step-content__live-header">
+        <Spinner size="sm" />
+        <span>Agent output (live)</span>
+      </div>
+      <pre className="mx-step-content__live-terminal">{output}</pre>
+    </div>
+  )
+}
+
+function AgentDomainCard({ domain, info, liveContent, instanceId, stepId }: {
+  domain: string; info: AgentDomainInfo; liveContent?: string
+  instanceId: number; stepId: string
+}) {
+  const [open, setOpen] = useState(info.status === 'running')
+  const [acting, setActing] = useState(false)
+  const ref = useRef<HTMLPreElement>(null)
+
+  useEffect(() => {
+    if (ref.current && open) ref.current.scrollTop = ref.current.scrollHeight
+  }, [liveContent, open])
+
+  const now = Date.now() / 1000
+  const elapsed = info.started_at
+    ? Math.round((info.completed_at || now) - info.started_at)
+    : 0
+  const elapsedStr = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
+
+  const statusVariant: Record<string, 'success' | 'warning' | 'error' | 'info' | 'neutral'> = {
+    running: 'info', completed: 'success', failed: 'error',
+    cancelled: 'neutral', rerunning: 'warning',
+  }
+
+  const handleCancel = async () => {
+    setActing(true)
+    try { await cancelAgentDomain(instanceId, stepId, domain) } catch { /* */ }
+    setActing(false)
+  }
+  const handleRerun = async () => {
+    setActing(true)
+    try { await rerunAgentDomain(instanceId, stepId, domain) } catch { /* */ }
+    setActing(false)
+  }
+
+  return (
+    <div style={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, overflow: 'hidden' }}>
+      <div
+        onClick={() => setOpen(!open)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+          cursor: 'pointer', background: 'rgba(255,255,255,0.03)',
+        }}
+      >
+        <span>{open ? '\u25BC' : '\u25B6'}</span>
+        <Badge variant={statusVariant[info.status] ?? 'neutral'} size="sm">{info.status}</Badge>
+        <Badge variant="info" size="sm">{domain}</Badge>
+        {info.status === 'running' && <Spinner size="sm" />}
+        <span style={{ fontSize: 12, opacity: 0.6, marginLeft: 'auto' }}>{elapsedStr}</span>
+        {info.pid && <span style={{ fontSize: 11, opacity: 0.4, fontFamily: 'var(--font-mono)' }}>PID {info.pid}</span>}
+        <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 4 }}>
+          {info.status === 'running' && (
+            <Button variant="ghost" size="sm" onClick={handleCancel} disabled={acting}>Cancel</Button>
+          )}
+          {(info.status === 'failed' || info.status === 'cancelled') && (
+            <Button variant="ghost" size="sm" onClick={handleRerun} disabled={acting}>Rerun</Button>
+          )}
+        </div>
+      </div>
+      {open && liveContent && (
+        <pre ref={ref} className="mx-step-content__live-terminal" style={{ maxHeight: 300 }}>{liveContent}</pre>
+      )}
+      {open && info.error && (
+        <div className="mx-step-content__error" style={{ margin: '8px 12px', fontSize: 13 }}>{info.error}</div>
+      )}
+    </div>
+  )
+}
+
 function LiveAgentOutput({ instanceId, stepId }: { instanceId: number; stepId: string }) {
   const [output, setOutput] = useState('')
   const termRef = useRef<HTMLPreElement>(null)
@@ -941,7 +1086,10 @@ export function StepContentViewer({ step, artifacts, instanceId }: StepContentVi
   }
 
   if (step.status === 'running') {
-    const AI_STEP_TYPES = ['agent_review', 'expert_select', 'synthesis', 'holistic_review']
+    if (step.step_type === 'agent_review' && instanceId) {
+      return <AgentDomainTracker instanceId={instanceId} stepId={step.step_id} />
+    }
+    const AI_STEP_TYPES = ['expert_select', 'synthesis', 'holistic_review']
     if (AI_STEP_TYPES.includes(step.step_type) && instanceId) {
       return <LiveAgentOutput instanceId={instanceId} stepId={step.step_id} />
     }

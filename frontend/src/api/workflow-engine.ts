@@ -136,6 +136,29 @@ export function getStepDownloadUrl(instanceId: number, stepId: string, format: '
   return `/api/workflows/instances/${instanceId}/steps/${stepId}/download?format=${format}`
 }
 
+// --- Per-Domain Agent Tracking ---
+
+export interface AgentDomainInfo {
+  status: string
+  agent_name: string
+  started_at: number | null
+  completed_at?: number | null
+  pid?: number | null
+  error?: string | null
+}
+
+export async function getAgentDomains(instanceId: number, stepId: string): Promise<Record<string, AgentDomainInfo>> {
+  return api.get<Record<string, AgentDomainInfo>>(`/workflows/instances/${instanceId}/steps/${stepId}/agents`)
+}
+
+export async function cancelAgentDomain(instanceId: number, stepId: string, domain: string): Promise<{ ok: boolean }> {
+  return api.post(`/workflows/instances/${instanceId}/steps/${stepId}/agents/${encodeURIComponent(domain)}/cancel`, {})
+}
+
+export async function rerunAgentDomain(instanceId: number, stepId: string, domain: string): Promise<{ ok: boolean }> {
+  return api.post(`/workflows/instances/${instanceId}/steps/${stepId}/agents/${encodeURIComponent(domain)}/rerun`, {})
+}
+
 // --- Expert Domains ---
 
 export interface ExpertDomain {

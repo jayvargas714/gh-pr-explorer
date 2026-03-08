@@ -329,6 +329,39 @@ def retry_step(instance_id, step_id):
     return jsonify({"ok": True, "status": "running", "retrying_from": step_id})
 
 
+@workflow_engine_bp.route(
+    "/api/workflows/instances/<int:instance_id>/steps/<step_id>/agents", methods=["GET"]
+)
+def get_step_agents(instance_id, step_id):
+    from backend.workflows.executors.agent_review import get_agent_domains
+    domains = get_agent_domains(instance_id, step_id)
+    return jsonify(domains)
+
+
+@workflow_engine_bp.route(
+    "/api/workflows/instances/<int:instance_id>/steps/<step_id>/agents/<domain>/cancel",
+    methods=["POST"],
+)
+def cancel_step_agent(instance_id, step_id, domain):
+    from backend.workflows.executors.agent_review import cancel_agent_domain
+    ok = cancel_agent_domain(instance_id, step_id, domain)
+    if not ok:
+        return jsonify({"error": "Agent not running or not found"}), 400
+    return jsonify({"ok": True})
+
+
+@workflow_engine_bp.route(
+    "/api/workflows/instances/<int:instance_id>/steps/<step_id>/agents/<domain>/rerun",
+    methods=["POST"],
+)
+def rerun_step_agent(instance_id, step_id, domain):
+    from backend.workflows.executors.agent_review import rerun_agent_domain
+    ok = rerun_agent_domain(instance_id, step_id, domain)
+    if not ok:
+        return jsonify({"error": "Cannot rerun: agent is still running or domain not found"}), 400
+    return jsonify({"ok": True})
+
+
 # --- Agents ---
 
 @workflow_engine_bp.route("/api/agents", methods=["GET"])
