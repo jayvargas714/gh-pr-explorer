@@ -1141,18 +1141,36 @@ function AgentDomainTracker({ instanceId, stepId }: { instanceId: number; stepId
   )
 }
 
+function extractLatestThought(text: string): string {
+  if (!text) return 'Thinking...'
+  const cleaned = text
+    .replace(/\[Using tool: [^\]]*\]/g, '')
+    .replace(/\n{2,}/g, '\n')
+  const sentences = cleaned.split(/(?<=\.)\s+|\n/).filter((s) => {
+    const t = s.trim()
+    return t.length > 10 && /[a-zA-Z]/.test(t)
+  })
+  if (!sentences.length) return 'Thinking...'
+  let thought = sentences[sentences.length - 1].trim()
+  if (thought.length > 150) thought = thought.slice(0, 147) + '...'
+  return thought
+}
+
+
 function AgentDomainCard({ domain, info, liveContent, instanceId, stepId }: {
   domain: string; info: AgentDomainInfo; liveContent?: string
   instanceId: number; stepId: string
 }) {
   const isCompleted = info.status === 'completed'
-  const [open, setOpen] = useState(info.status === 'running')
+  const isRunning = info.status === 'running'
+  const [open, setOpen] = useState(isCompleted)
+  const [showTerminal, setShowTerminal] = useState(false)
   const [acting, setActing] = useState(false)
   const ref = useRef<HTMLPreElement>(null)
 
   useEffect(() => {
-    if (ref.current && open) ref.current.scrollTop = ref.current.scrollHeight
-  }, [liveContent, open])
+    if (ref.current && showTerminal) ref.current.scrollTop = ref.current.scrollHeight
+  }, [liveContent, showTerminal])
 
   const now = Date.now() / 1000
   const elapsed = info.started_at
@@ -1177,6 +1195,7 @@ function AgentDomainCard({ domain, info, liveContent, instanceId, stepId }: {
   }
 
   const reviewMd = info.review_md
+  const thought = isRunning && liveContent ? extractLatestThought(liveContent) : null
 
   return (
     <div style={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, overflow: 'hidden' }}>
@@ -1190,11 +1209,11 @@ function AgentDomainCard({ domain, info, liveContent, instanceId, stepId }: {
         <span>{open ? '\u25BC' : '\u25B6'}</span>
         <Badge variant={statusVariant[info.status] ?? 'neutral'} size="sm">{info.status}</Badge>
         <Badge variant="info" size="sm">{domain}</Badge>
-        {info.status === 'running' && <Spinner size="sm" />}
+        {isRunning && <Spinner size="sm" />}
         <span style={{ fontSize: 12, opacity: 0.6, marginLeft: 'auto' }}>{elapsedStr}</span>
         {info.pid && <span style={{ fontSize: 11, opacity: 0.4, fontFamily: 'var(--font-mono)' }}>PID {info.pid}</span>}
         <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 4 }}>
-          {info.status === 'running' && (
+          {isRunning && (
             <Button variant="ghost" size="sm" onClick={handleCancel} disabled={acting}>Cancel</Button>
           )}
           {(info.status === 'failed' || info.status === 'cancelled') && (
@@ -1202,13 +1221,29 @@ function AgentDomainCard({ domain, info, liveContent, instanceId, stepId }: {
           )}
         </div>
       </div>
+      {thought && (
+        <div className="mx-step-content__thought-ticker">{thought}</div>
+      )}
       {open && isCompleted && reviewMd && (
         <div className="mx-step-content__review-markdown">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{reviewMd}</ReactMarkdown>
         </div>
       )}
       {open && !isCompleted && liveContent && (
-        <pre ref={ref} className="mx-step-content__live-terminal" style={{ maxHeight: 300 }}>{liveContent}</pre>
+        <>
+          <div
+            onClick={() => setShowTerminal(!showTerminal)}
+            style={{
+              padding: '4px 12px', fontSize: 12, opacity: 0.5, cursor: 'pointer',
+              userSelect: 'none',
+            }}
+          >
+            {showTerminal ? '\u25BC Hide' : '\u25B6 Show'} full output
+          </div>
+          {showTerminal && (
+            <pre ref={ref} className="mx-step-content__live-terminal" style={{ maxHeight: 300 }}>{liveContent}</pre>
+          )}
+        </>
       )}
       {open && info.error && (
         <div className="mx-step-content__error" style={{ margin: '8px 12px', fontSize: 13 }}>{info.error}</div>
@@ -1219,6 +1254,7 @@ function AgentDomainCard({ domain, info, liveContent, instanceId, stepId }: {
 
 function LiveAgentOutput({ instanceId, stepId }: { instanceId: number; stepId: string }) {
   const [output, setOutput] = useState('')
+  const [showTerminal, setShowTerminal] = useState(false)
   const termRef = useRef<HTMLPreElement>(null)
 
   useEffect(() => {
@@ -1235,10 +1271,10 @@ function LiveAgentOutput({ instanceId, stepId }: { instanceId: number; stepId: s
   }, [instanceId, stepId])
 
   useEffect(() => {
-    if (termRef.current) {
+    if (termRef.current && showTerminal) {
       termRef.current.scrollTop = termRef.current.scrollHeight
     }
-  }, [output])
+  }, [output, showTerminal])
 
   if (!output) {
     return (
@@ -1265,13 +1301,24 @@ function LiveAgentOutput({ instanceId, stepId }: { instanceId: number; stepId: s
     )
   }
 
+  const thought = extractLatestThought(output)
+
   return (
     <div className="mx-step-content__live">
       <div className="mx-step-content__live-header">
         <Spinner size="sm" />
-        <span>Agent output (live)</span>
+        <span>Agent working</span>
       </div>
-      <pre ref={termRef} className="mx-step-content__live-terminal">{output}</pre>
+      <div className="mx-step-content__thought-ticker">{thought}</div>
+      <div
+        onClick={() => setShowTerminal(!showTerminal)}
+        style={{ padding: '4px 12px', fontSize: 12, opacity: 0.5, cursor: 'pointer', userSelect: 'none' }}
+      >
+        {showTerminal ? '\u25BC Hide' : '\u25B6 Show'} full output
+      </div>
+      {showTerminal && (
+        <pre ref={termRef} className="mx-step-content__live-terminal">{output}</pre>
+      )}
     </div>
   )
 }
@@ -1294,26 +1341,33 @@ function parseDomainSections(output: string): Array<{ domain: string; content: s
 }
 
 function DomainLiveSection({ domain, content }: { domain: string; content: string }) {
-  const [open, setOpen] = useState(true)
+  const [showTerminal, setShowTerminal] = useState(false)
   const ref = useRef<HTMLPreElement>(null)
   useEffect(() => {
-    if (ref.current && open) {
+    if (ref.current && showTerminal) {
       ref.current.scrollTop = ref.current.scrollHeight
     }
-  }, [content, open])
+  }, [content, showTerminal])
+
+  const thought = extractLatestThought(content)
 
   return (
     <div className="mx-step-content__live-domain">
       <div
         className="mx-step-content__live-domain-header"
-        onClick={() => setOpen(!open)}
-        style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: 'pointer', padding: '6px 8px', background: 'rgba(255,255,255,0.05)', borderRadius: '4px', marginBottom: '4px' }}
+        style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '6px 8px', background: 'rgba(255,255,255,0.05)', borderRadius: '4px', marginBottom: '4px' }}
       >
-        <span>{open ? '▼' : '▶'}</span>
         <Badge variant="info" size="sm">{domain}</Badge>
         <Spinner size="sm" />
       </div>
-      {open && (
+      <div className="mx-step-content__thought-ticker">{thought}</div>
+      <div
+        onClick={() => setShowTerminal(!showTerminal)}
+        style={{ padding: '4px 8px', fontSize: 12, opacity: 0.5, cursor: 'pointer', userSelect: 'none' }}
+      >
+        {showTerminal ? '\u25BC Hide' : '\u25B6 Show'} full output
+      </div>
+      {showTerminal && (
         <pre ref={ref} className="mx-step-content__live-terminal" style={{ maxHeight: '300px' }}>{content}</pre>
       )}
     </div>
@@ -1321,27 +1375,34 @@ function DomainLiveSection({ domain, content }: { domain: string; content: strin
 }
 
 function DomainLiveFallbackCard({ domain, content }: { domain: string; content: string }) {
-  const [open, setOpen] = useState(true)
+  const [showTerminal, setShowTerminal] = useState(false)
   const ref = useRef<HTMLPreElement>(null)
   useEffect(() => {
-    if (ref.current && open) ref.current.scrollTop = ref.current.scrollHeight
-  }, [content, open])
+    if (ref.current && showTerminal) ref.current.scrollTop = ref.current.scrollHeight
+  }, [content, showTerminal])
+
+  const thought = extractLatestThought(content)
 
   return (
     <div style={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, overflow: 'hidden' }}>
       <div
-        onClick={() => setOpen(!open)}
         style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
-          cursor: 'pointer', background: 'rgba(255,255,255,0.03)',
+          background: 'rgba(255,255,255,0.03)',
         }}
       >
-        <span>{open ? '\u25BC' : '\u25B6'}</span>
         <Badge variant="info" size="sm">running</Badge>
         <Badge variant="info" size="sm">{domain}</Badge>
         <Spinner size="sm" />
       </div>
-      {open && (
+      <div className="mx-step-content__thought-ticker">{thought}</div>
+      <div
+        onClick={() => setShowTerminal(!showTerminal)}
+        style={{ padding: '4px 12px', fontSize: 12, opacity: 0.5, cursor: 'pointer', userSelect: 'none' }}
+      >
+        {showTerminal ? '\u25BC Hide' : '\u25B6 Show'} full output
+      </div>
+      {showTerminal && (
         <pre ref={ref} className="mx-step-content__live-terminal" style={{ maxHeight: 300 }}>{content}</pre>
       )}
     </div>
