@@ -71,8 +71,8 @@ class SynthesisExecutor(StepExecutor):
             if len(pr_reviews) < 2:
                 continue
 
-            review_a = pr_reviews[0]
-            review_b = pr_reviews[1]
+            review_a = next((r for r in pr_reviews if r.get("phase") == "a"), pr_reviews[0])
+            review_b = next((r for r in pr_reviews if r.get("phase") == "b"), pr_reviews[1])
 
             findings_a = self._extract_findings(review_a)
             findings_b = self._extract_findings(review_b)
@@ -154,8 +154,8 @@ class SynthesisExecutor(StepExecutor):
             if len(domain_reviews) < 2:
                 continue
 
-            review_a = domain_reviews[0]
-            review_b = domain_reviews[1]
+            review_a = next((r for r in domain_reviews if r.get("phase") == "a"), domain_reviews[0])
+            review_b = next((r for r in domain_reviews if r.get("phase") == "b"), domain_reviews[1])
 
             findings_a = self._extract_findings(review_a)
             findings_b = self._extract_findings(review_b)
