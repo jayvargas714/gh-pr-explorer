@@ -448,6 +448,7 @@ export function GateView({ instance, onBack }: GateViewProps) {
   const [reviseFeedback, setReviseFeedback] = useState('')
   const [showReviseForm, setShowReviseForm] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [showFeedbackHistory, setShowFeedbackHistory] = useState(false)
 
   const inst = selectedInstance ?? instance
 
@@ -472,8 +473,9 @@ export function GateView({ instance, onBack }: GateViewProps) {
   const gatePayload = (gateOutputs?.gate_payload ?? gateOutputs ?? {}) as Record<string, unknown>
   const gateType = (gatePayload?.type ?? gateOutputs?.type) as string | undefined
 
-  if (gateType === 'prompt_review' && !isResolved) {
-    return <PromptReviewGate instance={inst} gateOutputs={gateOutputs!} onBack={onBack} />
+  if (gateType === 'prompt_review') {
+    if (!isResolved) return <PromptReviewGate instance={inst} gateOutputs={gateOutputs!} onBack={onBack} />
+    return null
   }
 
   const unwrapFinding = (f: Record<string, unknown>): Record<string, unknown> => {
@@ -521,7 +523,6 @@ export function GateView({ instance, onBack }: GateViewProps) {
 
   const feedbackHistory = (gatePayload.feedback_history ?? []) as Array<{ feedback?: string; iteration?: number }>
   const iteration = (gatePayload.iteration ?? 1) as number
-  const [showFeedbackHistory, setShowFeedbackHistory] = useState(false)
 
   const handleApprove = async () => {
     setSubmitting(true)

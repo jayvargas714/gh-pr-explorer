@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
@@ -80,10 +80,21 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
   const hasGate = steps.some((s) => s.step_type === 'human_gate' && s.status === 'awaiting_gate')
   const selectedStep = steps.find((s) => s.step_id === selectedStepId) ?? null
 
+  const prevSelectedStatus = useRef<string | null>(null)
+
   useEffect(() => {
     if (!selectedStepId && steps.length > 0) {
       const active = steps.find((s) => s.status === 'running' || s.status === 'awaiting_gate')
       setSelectedStepId((active ?? steps[steps.length - 1]).step_id)
+      return
+    }
+    const sel = steps.find((s) => s.step_id === selectedStepId)
+    if (!sel) return
+    const wasRunning = prevSelectedStatus.current === 'running'
+    prevSelectedStatus.current = sel.status
+    if (wasRunning && (sel.status === 'completed' || sel.status === 'failed')) {
+      const next = steps.find((s) => s.status === 'running' || s.status === 'awaiting_gate')
+      if (next) setSelectedStepId(next.step_id)
     }
   }, [steps, selectedStepId])
 

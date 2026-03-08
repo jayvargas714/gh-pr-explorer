@@ -5,6 +5,7 @@ import { RunConfigPanel } from './RunConfigPanel'
 import { GateView } from './GateView'
 import { ExpertDomainManager } from './ExpertDomainManager'
 import { FollowUpTracker } from './FollowUpTracker'
+import { ErrorBoundary } from '../common/ErrorBoundary'
 import { useAccountStore } from '../../stores/useAccountStore'
 import { useWorkflowEngineStore } from '../../stores/useWorkflowEngineStore'
 import type { WorkflowInstance } from '../../api/workflow-engine'
@@ -12,6 +13,14 @@ import type { WorkflowInstance } from '../../api/workflow-engine'
 type View = 'list' | 'config' | 'detail' | 'gate' | 'domains' | 'followups'
 
 export function WorkflowEngineView() {
+  return (
+    <ErrorBoundary>
+      <WorkflowEngineViewInner />
+    </ErrorBoundary>
+  )
+}
+
+function WorkflowEngineViewInner() {
   const { selectedRepo } = useAccountStore()
   const { fetchInstance } = useWorkflowEngineStore()
   const [view, setView] = useState<View>('list')
