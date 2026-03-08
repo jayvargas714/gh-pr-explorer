@@ -65,8 +65,13 @@ class FreshnessCheckExecutor(StepExecutor):
                 else:
                     classification = "STALE-MINOR"
 
+            per_pr = synthesis.get("per_pr", [])
+            pr_synthesis = next(
+                (p for p in per_pr if p.get("pr_number") == pr_number),
+                synthesis,
+            )
             affected_findings, unaffected_findings = self._tag_finding_staleness(
-                synthesis, changed_files, classification
+                pr_synthesis, changed_files, classification
             )
 
             recommendation = self._build_recommendation(

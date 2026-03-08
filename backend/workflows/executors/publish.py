@@ -218,7 +218,8 @@ class PublishExecutor(StepExecutor):
             for pr_synth in per_pr:
                 if not pr_synth.get("pr_number") and fallback_pr:
                     pr_synth = {**pr_synth, "pr_number": fallback_pr}
-                result = self._publish_single_pr(pr_synth, owner, repo_name, mode, freshness)
+                pr_freshness = [f for f in freshness if f.get("pr_number") == pr_synth.get("pr_number")]
+                result = self._publish_single_pr(pr_synth, owner, repo_name, mode, pr_freshness)
                 results.append(result)
             all_success = all(r.get("published", False) for r in results)
             any_failed = any(not r.get("published", False) for r in results)

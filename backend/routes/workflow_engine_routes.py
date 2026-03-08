@@ -718,7 +718,7 @@ def _outputs_to_markdown(outputs: dict, step_type: str, step_id: str, instance_i
                 domain = r.get("domain", "general")
                 agent = r.get("agent_name", "?")
                 lines.append(f"## Review: {domain} (by {agent})\n")
-                content = r.get("content", r.get("review_text", ""))
+                content = r.get("content_md", r.get("content", r.get("review_text", "")))
                 if content:
                     lines.append(content)
                     lines.append("")
