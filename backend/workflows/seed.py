@@ -11,7 +11,7 @@ QUICK_REVIEW_TEMPLATE = {
     "steps": [
         {"id": "select", "type": "pr_select", "config": {"mode": "quick"}, "position": {"x": 100, "y": 200}},
         {"id": "prompt", "type": "prompt_generate", "config": {}, "position": {"x": 300, "y": 200}},
-        {"id": "review", "type": "agent_review", "config": {"agent": "claude"}, "position": {"x": 500, "y": 200}},
+        {"id": "review", "type": "agent_review", "config": {"agent": "cursor-opus"}, "position": {"x": 500, "y": 200}},
     ],
     "edges": [
         {"from": "select", "to": "prompt", "condition": None},
@@ -25,18 +25,20 @@ TEAM_REVIEW_TEMPLATE = {
         {"id": "select", "type": "pr_select", "config": {"mode": "team-review"}, "position": {"x": 50, "y": 200}},
         {"id": "prioritize", "type": "prioritize", "config": {}, "position": {"x": 200, "y": 200}},
         {"id": "prompt", "type": "prompt_generate", "config": {}, "position": {"x": 350, "y": 200}},
-        {"id": "review_a", "type": "agent_review", "config": {"agent": "claude", "phase": "a"}, "position": {"x": 500, "y": 100}},
-        {"id": "review_b", "type": "agent_review", "config": {"agent": "openai", "phase": "b"}, "position": {"x": 500, "y": 300}},
-        {"id": "synth", "type": "synthesis", "config": {}, "position": {"x": 650, "y": 200}},
-        {"id": "fresh", "type": "freshness_check", "config": {}, "position": {"x": 800, "y": 200}},
-        {"id": "gate", "type": "human_gate", "config": {}, "position": {"x": 950, "y": 200}},
-        {"id": "pub", "type": "publish", "config": {}, "position": {"x": 1100, "y": 200}},
+        {"id": "prompt_gate", "type": "human_gate", "config": {"gate_type": "prompt_review"}, "position": {"x": 400, "y": 200}},
+        {"id": "review_a", "type": "agent_review", "config": {"agent": "cursor-opus", "phase": "a"}, "position": {"x": 600, "y": 100}},
+        {"id": "review_b", "type": "agent_review", "config": {"agent": "cursor-codex-xh", "phase": "b"}, "position": {"x": 600, "y": 300}},
+        {"id": "synth", "type": "synthesis", "config": {"ai_verify": True}, "position": {"x": 750, "y": 200}},
+        {"id": "fresh", "type": "freshness_check", "config": {}, "position": {"x": 900, "y": 200}},
+        {"id": "gate", "type": "human_gate", "config": {}, "position": {"x": 1050, "y": 200}},
+        {"id": "pub", "type": "publish", "config": {}, "position": {"x": 1200, "y": 200}},
     ],
     "edges": [
         {"from": "select", "to": "prioritize", "condition": None},
         {"from": "prioritize", "to": "prompt", "condition": None},
-        {"from": "prompt", "to": "review_a", "condition": None},
-        {"from": "prompt", "to": "review_b", "condition": None},
+        {"from": "prompt", "to": "prompt_gate", "condition": None},
+        {"from": "prompt_gate", "to": "review_a", "condition": None},
+        {"from": "prompt_gate", "to": "review_b", "condition": None},
         {"from": "review_a", "to": "synth", "condition": None},
         {"from": "review_b", "to": "synth", "condition": None},
         {"from": "synth", "to": "fresh", "condition": None},
@@ -51,17 +53,19 @@ SELF_REVIEW_TEMPLATE = {
         {"id": "select", "type": "pr_select", "config": {"mode": "self-review"}, "position": {"x": 50, "y": 200}},
         {"id": "experts", "type": "expert_select", "config": {}, "position": {"x": 200, "y": 200}},
         {"id": "prompt", "type": "prompt_generate", "config": {"per_expert": True}, "position": {"x": 350, "y": 200}},
-        {"id": "review_a", "type": "agent_review", "config": {"agent": "claude", "phase": "a"}, "position": {"x": 500, "y": 100}},
-        {"id": "review_b", "type": "agent_review", "config": {"agent": "openai", "phase": "b"}, "position": {"x": 500, "y": 300}},
-        {"id": "synth", "type": "synthesis", "config": {}, "position": {"x": 650, "y": 200}},
-        {"id": "holistic", "type": "holistic_review", "config": {}, "position": {"x": 800, "y": 200}},
-        {"id": "gate", "type": "human_gate", "config": {}, "position": {"x": 950, "y": 200}},
+        {"id": "prompt_gate", "type": "human_gate", "config": {"gate_type": "prompt_review"}, "position": {"x": 400, "y": 200}},
+        {"id": "review_a", "type": "agent_review", "config": {"agent": "cursor-opus", "phase": "a"}, "position": {"x": 600, "y": 100}},
+        {"id": "review_b", "type": "agent_review", "config": {"agent": "cursor-codex-xh", "phase": "b"}, "position": {"x": 600, "y": 300}},
+        {"id": "synth", "type": "synthesis", "config": {"ai_verify": True}, "position": {"x": 750, "y": 200}},
+        {"id": "holistic", "type": "holistic_review", "config": {"agent": "cursor-opus"}, "position": {"x": 900, "y": 200}},
+        {"id": "gate", "type": "human_gate", "config": {}, "position": {"x": 1050, "y": 200}},
     ],
     "edges": [
         {"from": "select", "to": "experts", "condition": None},
         {"from": "experts", "to": "prompt", "condition": None},
-        {"from": "prompt", "to": "review_a", "condition": None},
-        {"from": "prompt", "to": "review_b", "condition": None},
+        {"from": "prompt", "to": "prompt_gate", "condition": None},
+        {"from": "prompt_gate", "to": "review_a", "condition": None},
+        {"from": "prompt_gate", "to": "review_b", "condition": None},
         {"from": "review_a", "to": "synth", "condition": None},
         {"from": "review_b", "to": "synth", "condition": None},
         {"from": "synth", "to": "holistic", "condition": None},
@@ -77,18 +81,20 @@ DEEP_REVIEW_TEMPLATE = {
         {"id": "select", "type": "pr_select", "config": {"mode": "deep-review"}, "position": {"x": 50, "y": 200}},
         {"id": "experts", "type": "expert_select", "config": {}, "position": {"x": 200, "y": 200}},
         {"id": "prompt", "type": "prompt_generate", "config": {"per_expert": True}, "position": {"x": 350, "y": 200}},
-        {"id": "review_a", "type": "agent_review", "config": {"agent": "claude", "phase": "a"}, "position": {"x": 500, "y": 100}},
-        {"id": "review_b", "type": "agent_review", "config": {"agent": "openai", "phase": "b"}, "position": {"x": 500, "y": 300}},
-        {"id": "synth", "type": "synthesis", "config": {}, "position": {"x": 650, "y": 200}},
-        {"id": "holistic", "type": "holistic_review", "config": {}, "position": {"x": 800, "y": 200}},
-        {"id": "gate", "type": "human_gate", "config": {}, "position": {"x": 950, "y": 200}},
-        {"id": "pub", "type": "publish", "config": {}, "position": {"x": 1100, "y": 200}},
+        {"id": "prompt_gate", "type": "human_gate", "config": {"gate_type": "prompt_review"}, "position": {"x": 400, "y": 200}},
+        {"id": "review_a", "type": "agent_review", "config": {"agent": "cursor-opus", "phase": "a"}, "position": {"x": 600, "y": 100}},
+        {"id": "review_b", "type": "agent_review", "config": {"agent": "cursor-codex-xh", "phase": "b"}, "position": {"x": 600, "y": 300}},
+        {"id": "synth", "type": "synthesis", "config": {"ai_verify": True}, "position": {"x": 750, "y": 200}},
+        {"id": "holistic", "type": "holistic_review", "config": {"agent": "cursor-opus"}, "position": {"x": 900, "y": 200}},
+        {"id": "gate", "type": "human_gate", "config": {}, "position": {"x": 1050, "y": 200}},
+        {"id": "pub", "type": "publish", "config": {}, "position": {"x": 1200, "y": 200}},
     ],
     "edges": [
         {"from": "select", "to": "experts", "condition": None},
         {"from": "experts", "to": "prompt", "condition": None},
-        {"from": "prompt", "to": "review_a", "condition": None},
-        {"from": "prompt", "to": "review_b", "condition": None},
+        {"from": "prompt", "to": "prompt_gate", "condition": None},
+        {"from": "prompt_gate", "to": "review_a", "condition": None},
+        {"from": "prompt_gate", "to": "review_b", "condition": None},
         {"from": "review_a", "to": "synth", "condition": None},
         {"from": "review_b", "to": "synth", "condition": None},
         {"from": "synth", "to": "holistic", "condition": None},
@@ -122,11 +128,11 @@ BUILTIN_TEMPLATES = [
 ]
 
 BUILTIN_AGENTS = [
-    ("claude", "claude_cli", "opus", {}),
-    ("openai", "openai_api", "gpt-4o", {"api_key_env": "OPENAI_API_KEY"}),
     ("cursor-opus", "cursor_cli", "opus-4.6-thinking", {"sandbox": "disabled"}),
     ("cursor-codex", "cursor_cli", "gpt-5.3-codex-high", {"sandbox": "disabled"}),
     ("cursor-codex-xh", "cursor_cli", "gpt-5.4-xhigh", {"sandbox": "disabled"}),
+    ("openai", "openai_api", "gpt-4o", {"api_key_env": "OPENAI_API_KEY"}),
+    ("claude", "claude_cli", "opus", {}),
 ]
 
 CODE_OWNERS = [
@@ -142,6 +148,7 @@ BUILTIN_EXPERT_DOMAINS = [
     {
         "domain_id": "rust-api",
         "display_name": "Rust API",
+        "repo": "scala-computing/scala",
         "persona": (
             "Principal Rust engineer specializing in async web services. Deep expertise in "
             "Axum/Tower middleware stacks, typed extractors, error handling (IntoResponse, "
@@ -174,6 +181,7 @@ BUILTIN_EXPERT_DOMAINS = [
     {
         "domain_id": "database",
         "display_name": "Database",
+        "repo": "scala-computing/scala",
         "persona": (
             "Principal database engineer specializing in PostgreSQL and SQLx. Deep expertise in "
             "transaction isolation, advisory locks, migration safety (backward-compatible schema "
@@ -205,6 +213,7 @@ BUILTIN_EXPERT_DOMAINS = [
     {
         "domain_id": "s3-cloud",
         "display_name": "S3/Cloud",
+        "repo": "scala-computing/scala",
         "persona": (
             "Principal cloud infrastructure engineer specializing in AWS S3. Deep expertise in "
             "multipart upload lifecycle (create -> upload parts -> complete/abort), presigned URL "
@@ -235,6 +244,7 @@ BUILTIN_EXPERT_DOMAINS = [
     {
         "domain_id": "concurrency",
         "display_name": "Concurrency",
+        "repo": "scala-computing/scala",
         "persona": (
             "Principal systems engineer specializing in concurrent and async Rust. Deep expertise "
             "in state machines, OCC, tokio runtime, cancellation safety, Send/Sync, lock ordering, "
@@ -265,6 +275,7 @@ BUILTIN_EXPERT_DOMAINS = [
     {
         "domain_id": "security",
         "display_name": "Security",
+        "repo": "scala-computing/scala",
         "persona": (
             "Principal application security engineer. Deep expertise in input validation (OWASP "
             "Top 10), path traversal prevention, injection (SQL, command, SSRF), auth/authz "
@@ -297,6 +308,7 @@ BUILTIN_EXPERT_DOMAINS = [
     {
         "domain_id": "testing",
         "display_name": "Testing",
+        "repo": "scala-computing/scala",
         "persona": (
             "Principal QA/test architect. Deep expertise in test pyramid, integration harnesses, "
             "property-based testing, mutation testing, coverage analysis. Reviews for: test "
@@ -327,6 +339,7 @@ BUILTIN_EXPERT_DOMAINS = [
     {
         "domain_id": "infra-ci",
         "display_name": "Infra/CI",
+        "repo": "scala-computing/scala",
         "persona": (
             "Principal DevSecOps engineer. Deep expertise in Docker multi-stage builds, CI/CD "
             "(GitHub Actions), IaC (Terraform), IAM least-privilege, secrets rotation, supply "
@@ -356,6 +369,7 @@ BUILTIN_EXPERT_DOMAINS = [
     {
         "domain_id": "go-backend",
         "display_name": "Go Backend",
+        "repo": "scala-computing/scala",
         "persona": (
             "Principal Go engineer specializing in backend services. Deep expertise in goroutine "
             "lifecycle, context propagation, connection pool tuning, interface design, error "
@@ -385,6 +399,7 @@ BUILTIN_EXPERT_DOMAINS = [
     {
         "domain_id": "cpp-simulator",
         "display_name": "C++ Simulator",
+        "repo": "scala-computing/scala",
         "persona": (
             "Principal C++ engineer specializing in network simulation. Deep expertise in NS3, "
             "memory management (RAII, smart pointers), congestion control algorithms, simulation "
@@ -413,6 +428,7 @@ BUILTIN_EXPERT_DOMAINS = [
     {
         "domain_id": "python-tooling",
         "display_name": "Python Tooling",
+        "repo": "scala-computing/scala",
         "persona": (
             "Principal Python toolchain engineer. Deep expertise in dependency management (pip, "
             "poetry), virtual environments, supply chain security (typosquatting, pinning), "
@@ -467,6 +483,7 @@ def seed_builtin_data():
             checklist=domain_def["checklist"],
             anti_patterns=domain_def.get("anti_patterns", []),
             is_builtin=True,
+            repo=domain_def.get("repo"),
         )
         logger.debug(f"Upserted expert domain: {domain_def['domain_id']}")
 

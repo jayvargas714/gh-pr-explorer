@@ -259,16 +259,21 @@ class WorkflowDB:
 
     # --- Expert Domains ---
 
-    def list_expert_domains(self, active_only: bool = True) -> list[dict]:
+    def list_expert_domains(self, active_only: bool = True,
+                            repo: Optional[str] = None) -> list[dict]:
         with self.db.connection() as conn:
+            conditions = []
+            params: list = []
             if active_only:
-                rows = conn.execute(
-                    "SELECT * FROM expert_domains WHERE is_active=1 ORDER BY domain_id"
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM expert_domains ORDER BY domain_id"
-                ).fetchall()
+                conditions.append("is_active=1")
+            if repo is not None:
+                conditions.append("repo=?")
+                params.append(repo)
+            where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+            rows = conn.execute(
+                f"SELECT * FROM expert_domains{where} ORDER BY domain_id",
+                params,
+            ).fetchall()
             results = []
             for r in rows:
                 d = dict(r)
@@ -277,6 +282,47 @@ class WorkflowDB:
                 d["anti_patterns"] = json.loads(d.get("anti_patterns_json") or "[]")
                 results.append(d)
             return results
+
+    def insert_ai_expert_domains(self, repo: str, experts: list[dict]) -> list[int]:
+        """Insert AI-generated expert domains for a specific repo.
+
+        Each expert dict should have: domain_id, display_name, persona, scope,
+        checklist, anti_patterns. Triggers are left empty for AI-generated domains.
+        Returns a list of inserted row IDs.
+        """
+        ids = []
+        for expert in experts:
+            domain_id = f"{repo.replace('/', '-')}-{expert['domain_id']}"
+            with self.db.connection() as conn:
+                existing = conn.execute(
+                    "SELECT id FROM expert_domains WHERE domain_id=?", (domain_id,)
+                ).fetchone()
+                if existing:
+                    conn.execute(
+                        "UPDATE expert_domains SET display_name=?, persona=?, scope=?, "
+                        "triggers_json=?, checklist_json=?, anti_patterns_json=?, "
+                        "is_active=1 WHERE domain_id=?",
+                        (expert["display_name"], expert["persona"], expert["scope"],
+                         json.dumps(expert.get("triggers", {})),
+                         json.dumps(expert.get("checklist", [])),
+                         json.dumps(expert.get("anti_patterns", [])),
+                         domain_id),
+                    )
+                    ids.append(existing["id"])
+                else:
+                    cursor = conn.execute(
+                        "INSERT INTO expert_domains "
+                        "(domain_id, display_name, persona, scope, triggers_json, "
+                        "checklist_json, anti_patterns_json, is_builtin, is_active, repo) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?)",
+                        (domain_id, expert["display_name"], expert["persona"],
+                         expert["scope"], json.dumps(expert.get("triggers", {})),
+                         json.dumps(expert.get("checklist", [])),
+                         json.dumps(expert.get("anti_patterns", [])),
+                         repo),
+                    )
+                    ids.append(cursor.lastrowid)
+        return ids
 
     def get_expert_domain(self, domain_id: str) -> Optional[dict]:
         with self.db.connection() as conn:
@@ -294,23 +340,25 @@ class WorkflowDB:
     def create_expert_domain(self, domain_id: str, display_name: str, persona: str,
                              scope: str, triggers: dict, checklist: list,
                              anti_patterns: Optional[list] = None,
-                             is_builtin: bool = True) -> int:
+                             is_builtin: bool = True,
+                             repo: Optional[str] = None) -> int:
         with self.db.connection() as conn:
             cursor = conn.execute(
                 "INSERT INTO expert_domains "
                 "(domain_id, display_name, persona, scope, triggers_json, "
-                "checklist_json, anti_patterns_json, is_builtin) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "checklist_json, anti_patterns_json, is_builtin, repo) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (domain_id, display_name, persona, scope,
                  json.dumps(triggers), json.dumps(checklist),
-                 json.dumps(anti_patterns or []), is_builtin),
+                 json.dumps(anti_patterns or []), is_builtin, repo),
             )
             return cursor.lastrowid
 
     def upsert_expert_domain(self, domain_id: str, display_name: str, persona: str,
                              scope: str, triggers: dict, checklist: list,
                              anti_patterns: Optional[list] = None,
-                             is_builtin: bool = True) -> int:
+                             is_builtin: bool = True,
+                             repo: Optional[str] = None) -> int:
         with self.db.connection() as conn:
             existing = conn.execute(
                 "SELECT id FROM expert_domains WHERE domain_id=?", (domain_id,)
@@ -318,16 +366,16 @@ class WorkflowDB:
             if existing:
                 conn.execute(
                     "UPDATE expert_domains SET display_name=?, persona=?, scope=?, "
-                    "triggers_json=?, checklist_json=?, anti_patterns_json=? "
+                    "triggers_json=?, checklist_json=?, anti_patterns_json=?, repo=? "
                     "WHERE domain_id=?",
                     (display_name, persona, scope, json.dumps(triggers),
                      json.dumps(checklist), json.dumps(anti_patterns or []),
-                     domain_id),
+                     repo, domain_id),
                 )
                 return existing["id"]
             return self.create_expert_domain(
                 domain_id, display_name, persona, scope,
-                triggers, checklist, anti_patterns, is_builtin)
+                triggers, checklist, anti_patterns, is_builtin, repo)
 
     def update_expert_domain(self, domain_id: str, **kwargs):
         sets = []

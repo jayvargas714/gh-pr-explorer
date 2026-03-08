@@ -195,6 +195,14 @@ function SynthesisView({ content }: { content: ParsedContent }) {
   const aOnly = ((content.a_only ?? content['A-ONLY'] ?? []) as Array<Record<string, unknown>>)
   const bOnly = ((content.b_only ?? content['B-ONLY'] ?? []) as Array<Record<string, unknown>>)
   const summary = content.summary as string | undefined
+  const aiVerified = content.ai_verified as boolean | undefined
+  const synthFindings = (content.synth_findings ?? []) as Array<Record<string, unknown>>
+  const crossCuttingFlags = (content.cross_cutting_flags ?? []) as string[]
+  const falsePositivesDropped = (content.false_positives_dropped ?? []) as Array<{ title?: string; reason?: string }>
+  const synthesisLog = (content.synthesis_log ?? []) as Array<{ finding?: string; action?: string; reasoning?: string }>
+  const perDomainSynthesis = content.per_domain_synthesis as Record<string, Record<string, unknown>> | undefined
+  const questions = (content.questions ?? []) as string[]
+  const [showLog, setShowLog] = useState(false)
 
   return (
     <div className="mx-step-content__synthesis">
@@ -202,14 +210,105 @@ function SynthesisView({ content }: { content: ParsedContent }) {
         <div className="mx-step-content__verdict">
           <strong>Final Verdict:</strong>
           <Badge variant={verdict === 'APPROVE' ? 'success' : 'warning'}>{verdict}</Badge>
+          {aiVerified && <Badge variant="info" size="sm">AI Verified</Badge>}
         </div>
       )}
       {summary && <p className="mx-step-content__summary">{summary}</p>}
+
       <div className="mx-step-content__classification-grid">
         <Section label="Agreed" variant="success" items={agreed} classification="AGREED" />
         <Section label="Agent A Only" variant="warning" items={aOnly} classification="A-ONLY" />
         <Section label="Agent B Only" variant="warning" items={bOnly} classification="B-ONLY" />
+        {synthFindings.length > 0 && (
+          <SynthSection items={synthFindings} />
+        )}
       </div>
+
+      {crossCuttingFlags.length > 0 && (
+        <div className="mx-step-content__class-section">
+          <h5><Badge variant="info" size="sm">Cross-Cutting Flags</Badge> {crossCuttingFlags.length}</h5>
+          <ul className="mx-step-content__flag-list">
+            {crossCuttingFlags.map((flag, i) => <li key={i}>{flag}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {falsePositivesDropped.length > 0 && (
+        <div className="mx-step-content__class-section">
+          <h5><Badge variant="neutral" size="sm">False Positives Dropped</Badge> {falsePositivesDropped.length}</h5>
+          {falsePositivesDropped.map((fp, i) => (
+            <div key={i} className="mx-step-content__pr-item">
+              <strong>{fp.title}</strong>
+              <span className="mx-step-content__pr-title">{fp.reason}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {questions.length > 0 && (
+        <div className="mx-step-content__class-section">
+          <h5>Questions ({questions.length})</h5>
+          <ol>{questions.map((q, i) => <li key={i}>{q}</li>)}</ol>
+        </div>
+      )}
+
+      {perDomainSynthesis && Object.keys(perDomainSynthesis).length > 0 && (
+        <div className="mx-step-content__class-section">
+          <h5>Per-Domain Synthesis</h5>
+          {Object.entries(perDomainSynthesis).map(([domain, ds]) => (
+            <div key={domain} className="mx-step-content__pr-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <Badge variant="info" size="sm">{domain}</Badge>
+                <Badge variant={(ds as Record<string, unknown>).verdict === 'APPROVE' ? 'success' : 'warning'} size="sm">
+                  {String((ds as Record<string, unknown>).verdict ?? 'COMMENT')}
+                </Badge>
+                <span>{String((ds as Record<string, unknown>).total_findings ?? 0)} findings</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {synthesisLog.length > 0 && (
+        <div className="mx-step-content__class-section">
+          <h5
+            style={{ cursor: 'pointer' }}
+            onClick={() => setShowLog(!showLog)}
+          >
+            {showLog ? '▼' : '▶'} Classification Reasoning ({synthesisLog.length})
+          </h5>
+          {showLog && synthesisLog.map((entry, i) => (
+            <div key={i} className="mx-step-content__pr-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <Badge variant={entry.action === 'CONFIRMED' ? 'success' : entry.action === 'DROPPED' ? 'neutral' : 'warning'} size="sm">
+                  {entry.action}
+                </Badge>
+                <strong>{entry.finding}</strong>
+              </div>
+              {entry.reasoning && <p style={{ margin: '4px 0 0', fontSize: '13px', opacity: 0.85 }}>{entry.reasoning}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SynthSection({ items }: { items: Array<Record<string, unknown>> }) {
+  if (!items.length) return null
+  return (
+    <div className="mx-step-content__class-section">
+      <h5>
+        <Badge variant="info" size="sm">SYNTH</Badge>
+        <span className="mx-step-content__class-count">{items.length}</span>
+      </h5>
+      {items.map((f, i) => (
+        <FindingCard
+          key={i}
+          finding={f as Record<string, unknown> & { title?: string; severity?: string; location?: { file?: string; start_line?: number; end_line?: number; raw?: string }; problem?: string; fix?: string }}
+          classification="SYNTH"
+        />
+      ))}
     </div>
   )
 }
@@ -237,36 +336,181 @@ function Section({ label, variant, items, classification }: {
 
 function FreshnessView({ content }: { content: ParsedContent }) {
   const checks = (content.checks ?? content.results ?? []) as Array<{
-    pr_number?: number; status?: string; head_sha?: string; reviewed_sha?: string
+    pr_number?: number; status?: string; classification?: string; head_sha?: string; reviewed_sha?: string
+    recommendation?: string; affected_findings?: string[]; unaffected_findings?: string[]
+    changed_files?: string[]; current_sha?: string
   }>
   if (!checks.length) return <p className="mx-step-content__empty">No freshness data.</p>
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
 
   return (
     <div className="mx-step-content__freshness">
-      {checks.map((c, i) => (
-        <div key={i} className="mx-step-content__freshness-item">
-          <span className="mx-step-content__freshness-pr">#{c.pr_number}</span>
-          <Badge
-            variant={c.status === 'CURRENT' ? 'success' : c.status === 'STALE-MINOR' ? 'warning' : 'error'}
-            size="sm"
-          >
-            {c.status ?? 'UNKNOWN'}
-          </Badge>
-          {c.head_sha && <code className="mx-step-content__sha">{c.head_sha.slice(0, 8)}</code>}
-        </div>
-      ))}
+      {checks.map((c, i) => {
+        const cls = c.status ?? c.classification ?? 'UNKNOWN'
+        const isOpen = expandedIdx === i
+        return (
+          <div key={i} className="mx-step-content__freshness-item" style={{ flexDirection: 'column', cursor: 'pointer' }} onClick={() => setExpandedIdx(isOpen ? null : i)}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', width: '100%' }}>
+              <span className="mx-step-content__freshness-pr">#{c.pr_number}</span>
+              <Badge
+                variant={cls === 'CURRENT' ? 'success' : cls === 'STALE-MINOR' ? 'warning' : 'error'}
+                size="sm"
+              >
+                {cls}
+              </Badge>
+              {c.head_sha && <code className="mx-step-content__sha">{(c.head_sha ?? c.current_sha ?? '').slice(0, 8)}</code>}
+              <span style={{ marginLeft: 'auto', fontSize: '12px', opacity: 0.6 }}>{isOpen ? '▼' : '▶'}</span>
+            </div>
+            {c.recommendation && (
+              <p style={{ margin: '6px 0 0', fontWeight: 500, fontSize: '13px' }}>{c.recommendation}</p>
+            )}
+            {isOpen && (
+              <div style={{ marginTop: '8px', width: '100%' }}>
+                {c.affected_findings && c.affected_findings.length > 0 && (
+                  <div style={{ marginBottom: '6px' }}>
+                    <strong style={{ fontSize: '12px' }}>Potentially Affected:</strong>
+                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '2px' }}>
+                      {c.affected_findings.map((f, j) => <Badge key={j} variant="warning" size="sm">{f}</Badge>)}
+                    </div>
+                  </div>
+                )}
+                {c.unaffected_findings && c.unaffected_findings.length > 0 && (
+                  <div style={{ marginBottom: '6px' }}>
+                    <strong style={{ fontSize: '12px' }}>Unaffected:</strong>
+                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '2px' }}>
+                      {c.unaffected_findings.map((f, j) => <Badge key={j} variant="success" size="sm">{f}</Badge>)}
+                    </div>
+                  </div>
+                )}
+                {c.changed_files && c.changed_files.length > 0 && (
+                  <div>
+                    <strong style={{ fontSize: '12px' }}>Changed files since review:</strong>
+                    <ul style={{ margin: '2px 0 0', paddingLeft: '16px', fontSize: '12px' }}>
+                      {c.changed_files.slice(0, 20).map((f, j) => <li key={j}><code>{f}</code></li>)}
+                      {c.changed_files.length > 20 && <li>...and {c.changed_files.length - 20} more</li>}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
 
 function HumanGateView({ step }: { step: WorkflowStep }) {
   const statusLabel = step.status === 'awaiting_gate' ? 'Awaiting human decision' : step.status
+  const gateOutputs = (() => {
+    if (!step.outputs_json) return null
+    try {
+      const raw = step.outputs_json
+      return typeof raw === 'string' ? JSON.parse(raw) : raw
+    } catch { return null }
+  })()
+  const gateType = gateOutputs?.gate_payload?.type ?? gateOutputs?.type ?? 'unknown'
+  const payload = gateOutputs?.gate_payload ?? gateOutputs ?? {}
+
+  const typeLabel = gateType === 'prompt_review' ? 'Prompt Review Gate'
+    : gateType === 'review_gate' ? 'Final Review Gate'
+    : 'Human Gate'
+
+  let contextLine = ''
+  if (gateType === 'prompt_review') {
+    const promptCount = (payload.prompts ?? []).length
+    const expertCount = (payload.experts ?? []).length
+    contextLine = `${promptCount} prompts from ${expertCount} expert domains ready for review`
+  } else if (gateType === 'review_gate') {
+    const synth = payload.synthesis ?? {}
+    const total = synth.total_findings ?? 0
+    const blocking = (synth.blocking ?? synth.blocking_findings ?? []).length
+    contextLine = `${total} findings, ${blocking} blocking`
+  }
+
   return (
     <div className="mx-step-content__gate">
       <Badge variant={step.status === 'awaiting_gate' ? 'warning' : step.status === 'completed' ? 'success' : 'neutral'}>
         {statusLabel}
       </Badge>
+      <div style={{ marginTop: '6px' }}>
+        <strong>{typeLabel}</strong>
+        {contextLine && <p style={{ margin: '4px 0 0', fontSize: '13px', opacity: 0.85 }}>{contextLine}</p>}
+      </div>
       {step.status === 'completed' && <p>Gate has been resolved.</p>}
+    </div>
+  )
+}
+
+function PublishView({ content }: { content: ParsedContent }) {
+  const published = content.published
+  const allPublished = content.all_published as boolean | undefined
+  const reason = content.reason as string | undefined
+  const prNumber = content.pr_number as number | undefined
+  const verdict = content.verdict as string | undefined
+  const commentUrl = content.comment_url as string | undefined
+  const commentBody = content.comment_body as string | undefined
+  const eventType = content.event_type as string | undefined
+
+  if (reason) {
+    return (
+      <div className="mx-step-content__gate">
+        <Badge variant="neutral">Not Published</Badge>
+        <p>{reason}</p>
+      </div>
+    )
+  }
+
+  if (Array.isArray(published)) {
+    return (
+      <div className="mx-step-content__publish">
+        <div className="mx-step-content__verdict">
+          <strong>Multi-PR Publication:</strong>
+          <Badge variant={allPublished ? 'success' : 'warning'}>
+            {allPublished ? 'All Published' : 'Partially Published'}
+          </Badge>
+        </div>
+        {published.map((r: Record<string, unknown>, i: number) => (
+          <div key={i} className="mx-step-content__pr-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <strong>PR #{String(r.pr_number)}</strong>
+              <Badge variant={r.published ? 'success' : 'error'} size="sm">
+                {r.published ? 'Published' : 'Failed'}
+              </Badge>
+              {r.event_type ? <Badge variant="neutral" size="sm">{String(r.event_type)}</Badge> : null}
+            </div>
+            {r.comment_url ? (
+              <a href={String(r.comment_url)} target="_blank" rel="noopener noreferrer" style={{ fontSize: '13px' }}>
+                View on GitHub
+              </a>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div className="mx-step-content__publish">
+      <div className="mx-step-content__verdict">
+        <Badge variant={content.published ? 'success' : 'error'}>
+          {content.published ? 'Published' : 'Not Published'}
+        </Badge>
+        {prNumber && <strong>PR #{prNumber}</strong>}
+        {verdict && <Badge variant={verdict === 'APPROVE' ? 'success' : 'warning'} size="sm">{verdict}</Badge>}
+        {eventType && <Badge variant="neutral" size="sm">{eventType}</Badge>}
+      </div>
+      {commentUrl && (
+        <a href={commentUrl} target="_blank" rel="noopener noreferrer" className="mx-step-content__pr-link">
+          View on GitHub
+        </a>
+      )}
+      {commentBody && (
+        <details style={{ marginTop: '8px' }}>
+          <summary style={{ cursor: 'pointer', fontSize: '13px' }}>Comment Preview</summary>
+          <pre className="mx-step-content__prompt" style={{ maxHeight: '400px', overflow: 'auto' }}>{commentBody}</pre>
+        </details>
+      )}
     </div>
   )
 }
@@ -349,21 +593,53 @@ function HolisticView({ content }: { content: ParsedContent }) {
   const verdict = content.verdict as string | undefined
   const confidence = content.confidence as string | undefined
   const summary = content.summary as string | undefined
-  const blocking = (content.blocking ?? []) as Array<Record<string, unknown>>
-  const nonBlocking = (content.non_blocking ?? []) as Array<Record<string, unknown>>
+  const aiPowered = content.ai_powered as boolean | undefined
+  const blocking = (content.blocking_findings ?? content.blocking ?? []) as Array<Record<string, unknown>>
+  const nonBlocking = (content.non_blocking_findings ?? content.non_blocking ?? []) as Array<Record<string, unknown>>
+  const crossCutting = (content.cross_cutting_findings ?? []) as Array<{ title?: string; domains?: string[]; description?: string; origin?: string }>
+  const domainVerdicts = (content.domain_verdicts ?? []) as Array<{ domain?: string; verdict?: string; finding_count?: number }>
+  const domainCoverage = (content.domain_coverage ?? []) as string[]
+  const crossDomainInteractions = (content.cross_domain_interactions ?? []) as Array<{ files?: string[]; domains?: string[]; description?: string }>
+  const analysisLog = (content.holistic_analysis_log ?? []) as Array<{ action?: string; finding?: string; reasoning?: string }>
   const recs = (content.recommendations ?? []) as Array<{ priority?: string; text?: string }>
+  const [showLog, setShowLog] = useState(false)
+
   return (
     <div className="mx-step-content__holistic">
       {verdict && (
         <div className="mx-step-content__verdict">
           <strong>Verdict:</strong>
-          <Badge variant={verdict === 'APPROVE' ? 'success' : verdict === 'CHANGES_REQUESTED' ? 'error' : 'warning'}>
+          <Badge variant={verdict === 'APPROVE' ? 'success' : verdict === 'REQUEST_CHANGES' ? 'error' : 'warning'}>
             {verdict}
           </Badge>
           {confidence && <Badge variant="neutral" size="sm">{confidence} confidence</Badge>}
+          {aiPowered && <Badge variant="info" size="sm">AI-Powered</Badge>}
         </div>
       )}
       {summary && <p className="mx-step-content__summary">{summary}</p>}
+
+      {domainCoverage.length > 0 && (
+        <div className="mx-step-content__verdict" style={{ marginTop: '8px' }}>
+          <strong>Domains:</strong>
+          {domainCoverage.map((d) => <Badge key={d} variant="info" size="sm">{d}</Badge>)}
+        </div>
+      )}
+
+      {domainVerdicts.length > 0 && (
+        <div className="mx-step-content__class-section">
+          <h5>Per-Domain Verdicts</h5>
+          {domainVerdicts.map((dv, i) => (
+            <div key={i} className="mx-step-content__pr-item">
+              <Badge variant="info" size="sm">{dv.domain}</Badge>
+              <Badge variant={dv.verdict === 'APPROVE' ? 'success' : dv.verdict === 'REQUEST_CHANGES' ? 'error' : 'warning'} size="sm">
+                {dv.verdict}
+              </Badge>
+              <span>{dv.finding_count ?? 0} findings</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {blocking.length > 0 && (
         <div className="mx-step-content__class-section">
           <h5><Badge variant="error" size="sm">Blocking</Badge> {blocking.length}</h5>
@@ -382,6 +658,42 @@ function HolisticView({ content }: { content: ParsedContent }) {
           })}
         </div>
       )}
+
+      {crossCutting.length > 0 && (
+        <div className="mx-step-content__class-section">
+          <h5><Badge variant="info" size="sm">Cross-Cutting</Badge> {crossCutting.length}</h5>
+          {crossCutting.map((cc, i) => (
+            <div key={i} className="mx-step-content__pr-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <strong>{cc.title}</strong>
+                {cc.origin && <Badge variant="neutral" size="sm">{cc.origin}</Badge>}
+              </div>
+              {cc.domains && cc.domains.length > 0 && (
+                <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+                  {cc.domains.map((d) => <Badge key={d} variant="info" size="sm">{d}</Badge>)}
+                </div>
+              )}
+              {cc.description && <p style={{ margin: '4px 0 0', fontSize: '13px' }}>{cc.description}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {crossDomainInteractions.length > 0 && (
+        <div className="mx-step-content__class-section">
+          <h5>Cross-Domain Interactions</h5>
+          {crossDomainInteractions.map((cdi, i) => (
+            <div key={i} className="mx-step-content__pr-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+              {cdi.domains && <div>{cdi.domains.map((d) => <Badge key={d} variant="neutral" size="sm">{d}</Badge>)}</div>}
+              {cdi.description && <p style={{ margin: '2px 0 0', fontSize: '13px' }}>{cdi.description}</p>}
+              {cdi.files && cdi.files.length > 0 && (
+                <div style={{ fontSize: '12px', opacity: 0.7 }}>{cdi.files.join(', ')}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {recs.length > 0 && (
         <div className="mx-step-content__class-section">
           <h5>Recommendations</h5>
@@ -389,6 +701,23 @@ function HolisticView({ content }: { content: ParsedContent }) {
             <div key={i} className="mx-step-content__pr-item">
               <Badge variant={r.priority === 'must_fix' ? 'error' : 'warning'} size="sm">{r.priority}</Badge>
               <span className="mx-step-content__pr-title">{r.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {analysisLog.length > 0 && (
+        <div className="mx-step-content__class-section">
+          <h5 style={{ cursor: 'pointer' }} onClick={() => setShowLog(!showLog)}>
+            {showLog ? '▼' : '▶'} Analysis Log ({analysisLog.length})
+          </h5>
+          {showLog && analysisLog.map((entry, i) => (
+            <div key={i} className="mx-step-content__pr-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <Badge variant={entry.action === 'PROMOTED' ? 'error' : entry.action === 'DEMOTED' ? 'success' : 'info'} size="sm">{entry.action}</Badge>
+                <strong>{entry.finding}</strong>
+              </div>
+              {entry.reasoning && <p style={{ margin: '4px 0 0', fontSize: '13px', opacity: 0.85 }}>{entry.reasoning}</p>}
             </div>
           ))}
         </div>
@@ -454,7 +783,7 @@ const VIEWERS: Record<string, React.FC<{ content: ParsedContent; step: WorkflowS
   synthesis: ({ content }) => <SynthesisView content={content} />,
   freshness_check: ({ content }) => <FreshnessView content={content} />,
   human_gate: ({ step }) => <HumanGateView step={step} />,
-  publish: ({ content }) => <DefaultView content={content} />,
+  publish: ({ content }) => <PublishView content={content} />,
   expert_select: ({ content }) => <ExpertSelectView content={content} />,
   holistic_review: ({ content }) => <HolisticView content={content} />,
   followup_check: ({ content }) => <FollowupCheckView content={content} />,
@@ -493,6 +822,22 @@ function LiveAgentOutput({ instanceId, stepId }: { instanceId: number; stepId: s
     )
   }
 
+  const domainSections = parseDomainSections(output)
+
+  if (domainSections.length > 1) {
+    return (
+      <div className="mx-step-content__live">
+        <div className="mx-step-content__live-header">
+          <Spinner size="sm" />
+          <span>Agents working ({domainSections.length} domains)</span>
+        </div>
+        {domainSections.map((sec) => (
+          <DomainLiveSection key={sec.domain} domain={sec.domain} content={sec.content} />
+        ))}
+      </div>
+    )
+  }
+
   return (
     <div className="mx-step-content__live">
       <div className="mx-step-content__live-header">
@@ -500,6 +845,69 @@ function LiveAgentOutput({ instanceId, stepId }: { instanceId: number; stepId: s
         <span>Agent output (live)</span>
       </div>
       <pre ref={termRef} className="mx-step-content__live-terminal">{output}</pre>
+    </div>
+  )
+}
+
+function parseDomainSections(output: string): Array<{ domain: string; content: string }> {
+  const sections: Array<{ domain: string; content: string }> = []
+  const parts = output.split(/--- \[/)
+  for (const part of parts) {
+    if (!part.trim()) continue
+    const closeBracket = part.indexOf('] ---')
+    if (closeBracket === -1) {
+      if (sections.length === 0) sections.push({ domain: 'output', content: part })
+      continue
+    }
+    const domain = part.slice(0, closeBracket)
+    const content = part.slice(closeBracket + 5).trim()
+    sections.push({ domain, content })
+  }
+  return sections
+}
+
+function DomainLiveSection({ domain, content }: { domain: string; content: string }) {
+  const [open, setOpen] = useState(true)
+  const ref = useRef<HTMLPreElement>(null)
+  useEffect(() => {
+    if (ref.current && open) {
+      ref.current.scrollTop = ref.current.scrollHeight
+    }
+  }, [content, open])
+
+  return (
+    <div className="mx-step-content__live-domain">
+      <div
+        className="mx-step-content__live-domain-header"
+        onClick={() => setOpen(!open)}
+        style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: 'pointer', padding: '6px 8px', background: 'rgba(255,255,255,0.05)', borderRadius: '4px', marginBottom: '4px' }}
+      >
+        <span>{open ? '▼' : '▶'}</span>
+        <Badge variant="info" size="sm">{domain}</Badge>
+        <Spinner size="sm" />
+      </div>
+      {open && (
+        <pre ref={ref} className="mx-step-content__live-terminal" style={{ maxHeight: '300px' }}>{content}</pre>
+      )}
+    </div>
+  )
+}
+
+const RUNNING_MESSAGES: Record<string, string> = {
+  freshness_check: 'Checking PR freshness against current HEAD...',
+  publish: 'Publishing review to GitHub...',
+  prompt_generate: 'Building expert review prompts...',
+  pr_select: 'Fetching pull requests...',
+  prioritize: 'Analyzing PR priority...',
+  human_gate: 'Awaiting human decision...',
+}
+
+function RunningStepIndicator({ stepType }: { stepType: string }) {
+  const message = RUNNING_MESSAGES[stepType] || 'Step in progress...'
+  return (
+    <div className="mx-step-content__running">
+      <Spinner size="sm" />
+      <span>{message}</span>
     </div>
   )
 }
@@ -513,10 +921,11 @@ export function StepContentViewer({ step, artifacts, instanceId }: StepContentVi
   }
 
   if (step.status === 'running') {
-    if (step.step_type === 'agent_review' && instanceId) {
+    const AI_STEP_TYPES = ['agent_review', 'expert_select', 'synthesis', 'holistic_review']
+    if (AI_STEP_TYPES.includes(step.step_type) && instanceId) {
       return <LiveAgentOutput instanceId={instanceId} stepId={step.step_id} />
     }
-    return <div className="mx-step-content__running"><Spinner size="sm" /> Step in progress...</div>
+    return <RunningStepIndicator stepType={step.step_type} />
   }
 
   if (step.error_message) {

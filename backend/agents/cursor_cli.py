@@ -134,12 +134,15 @@ class CursorCLIAgent(AgentBackend):
         is_followup = context.get("is_followup", False)
 
         repo_safe = repo.replace("/", "-")
-        suffix = "-followup" if is_followup else ""
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S") if is_followup else ""
+        phase = context.get("phase", "")
+        domain = context.get("domain", "")
+        phase_suffix = f"-review-{phase}" if phase else ""
+        domain_suffix = f"-{domain}" if domain else ""
         if is_followup:
-            review_file = reviews_dir / f"{owner}-{repo_safe}-pr-{pr_number}{suffix}-{timestamp}.md"
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            review_file = reviews_dir / f"{owner}-{repo_safe}-pr-{pr_number}-followup-{timestamp}.md"
         else:
-            review_file = reviews_dir / f"{owner}-{repo_safe}-pr-{pr_number}.md"
+            review_file = reviews_dir / f"{owner}-{repo_safe}-pr-{pr_number}{phase_suffix}{domain_suffix}.md"
         json_file = str(review_file).replace(".md", ".json")
 
         full_prompt = self._build_prompt(prompt, context, str(review_file), json_file)
@@ -157,6 +160,11 @@ class CursorCLIAgent(AgentBackend):
             cmd.extend(["--sandbox", self.sandbox])
         if self.mode:
             cmd.extend(["--mode", self.mode])
+
+        if context.get("phase") == "b":
+            phase_b_dir = reviews_dir / "phase-b"
+            phase_b_dir.mkdir(parents=True, exist_ok=True)
+            cmd.extend(["--workspace", str(phase_b_dir)])
 
         cmd.append(full_prompt)
 

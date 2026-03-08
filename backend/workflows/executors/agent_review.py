@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from backend.agents import get_agent, AgentStatus
 from backend.workflows.executor import StepExecutor, StepResult
@@ -12,6 +13,7 @@ from backend.workflows.step_types import register_step
 logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL = 5
+MAX_PARALLEL_AGENTS = 4
 
 _live_output_store: dict[str, str] = {}
 _live_output_lock = threading.Lock()
@@ -66,9 +68,12 @@ class AgentReviewExecutor(StepExecutor):
         except Exception as e:
             return StepResult(success=False, error=f"Failed to get agent '{agent_name}': {e}")
 
-        reviews = []
-        for prompt_data in prompts:
+        domain_live: dict[str, str] = {}
+        domain_lock = threading.Lock()
+
+        def _run_single_review(prompt_data: dict) -> dict:
             pr_number = prompt_data.get("pr_number")
+            domain = prompt_data.get("domain", "")
             prompt_text = prompt_data.get("prompt", "")
             context = {
                 "pr_url": prompt_data.get("pr_url", ""),
@@ -77,32 +82,33 @@ class AgentReviewExecutor(StepExecutor):
                 "pr_author": prompt_data.get("pr_author", ""),
                 "owner": prompt_data.get("owner", ""),
                 "repo": prompt_data.get("repo", ""),
+                "phase": phase,
+                "domain": domain,
             }
 
             try:
                 handle = agent.start_review(prompt_text, context)
             except Exception as e:
                 logger.error(f"Failed to start review for PR #{pr_number}: {e}")
-                reviews.append({
-                    "pr_number": pr_number,
-                    "status": "failed",
-                    "error": str(e),
-                })
-                continue
+                return {"pr_number": pr_number, "status": "failed", "error": str(e)}
 
             while True:
                 status = agent.check_status(handle)
                 if status in (AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED):
                     break
-                if inst_id and step_id:
-                    live = agent.get_live_output(handle)
-                    if live:
-                        _set_live_output(inst_id, step_id, live)
+                live = agent.get_live_output(handle)
+                if live and inst_id and step_id:
+                    with domain_lock:
+                        domain_live[domain or f"pr-{pr_number}"] = live
+                        composite = "\n\n".join(
+                            f"--- [{d}] ---\n{text}" for d, text in domain_live.items()
+                        )
+                    _set_live_output(inst_id, step_id, composite)
                 time.sleep(_POLL_INTERVAL)
 
             if status == AgentStatus.COMPLETED:
                 artifact = agent.get_output(handle)
-                review_entry = {
+                entry = {
                     "pr_number": pr_number,
                     "status": "completed",
                     "agent_name": agent_name,
@@ -112,17 +118,33 @@ class AgentReviewExecutor(StepExecutor):
                     "score": artifact.score,
                     "head_sha": prompt_data.get("head_sha", ""),
                 }
-                if prompt_data.get("domain"):
-                    review_entry["domain"] = prompt_data["domain"]
-                reviews.append(review_entry)
+                if domain:
+                    entry["domain"] = domain
+                return entry
             else:
                 artifact = agent.get_output(handle)
-                reviews.append({
+                return {
                     "pr_number": pr_number,
                     "status": "failed",
                     "agent_name": agent_name,
                     "error": artifact.error,
-                })
+                }
+
+        reviews: list[dict] = []
+        num_workers = min(len(prompts), MAX_PARALLEL_AGENTS)
+        with ThreadPoolExecutor(max_workers=max(num_workers, 1)) as pool:
+            futures = {pool.submit(_run_single_review, p): p for p in prompts}
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    reviews.append(result)
+                except Exception as e:
+                    prompt_data = futures[future]
+                    reviews.append({
+                        "pr_number": prompt_data.get("pr_number"),
+                        "status": "failed",
+                        "error": str(e),
+                    })
 
         if inst_id and step_id:
             _clear_live_output(inst_id, step_id)
@@ -143,10 +165,7 @@ class AgentReviewExecutor(StepExecutor):
 
         return StepResult(
             success=True,
-            outputs={
-                "reviews": reviews,
-                "agent_name": agent_name,
-            },
+            outputs={"reviews": reviews, "agent_name": agent_name},
             artifacts=[
                 {"type": "review", "pr_number": r["pr_number"], "data": r}
                 for r in completed_reviews

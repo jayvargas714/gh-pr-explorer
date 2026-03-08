@@ -390,9 +390,19 @@ class Database:
                     anti_patterns_json TEXT,
                     is_builtin BOOLEAN DEFAULT TRUE,
                     is_active BOOLEAN DEFAULT TRUE,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    repo TEXT DEFAULT NULL
                 )
             """)
+
+            cursor.execute("PRAGMA table_info(expert_domains)")
+            ed_columns = {row[1] for row in cursor.fetchall()}
+            if "repo" not in ed_columns:
+                try:
+                    cursor.execute("ALTER TABLE expert_domains ADD COLUMN repo TEXT DEFAULT NULL")
+                    logger.info("Added column repo to expert_domains table")
+                except sqlite3.OperationalError:
+                    pass
 
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS review_followups (

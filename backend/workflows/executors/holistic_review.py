@@ -4,11 +4,19 @@ from __future__ import annotations
 Consolidates per-domain synthesis (from self/deep review) or single-tier
 synthesis (team review) into a unified high-level review with cross-domain
 interaction analysis, promotion/demotion logic, and final verdict.
+
+Uses an AI agent for holistic analysis, with a heuristic fallback if the
+agent is unavailable or fails.
 """
 
+import json
 import logging
+import re
+import time
 
+from backend.agents import get_agent, AgentStatus
 from backend.workflows.executor import StepExecutor, StepResult
+from backend.workflows.executors.agent_review import _set_live_output, _clear_live_output
 from backend.workflows.step_types import register_step
 
 logger = logging.getLogger(__name__)
@@ -21,9 +29,66 @@ class HolisticReviewExecutor(StepExecutor):
         synthesis = inputs.get("synthesis", {})
         reviews = inputs.get("reviews", [])
         experts = inputs.get("experts", [])
-        mode = inputs.get("mode", "team-review")
-        per_domain_synthesis = inputs.get("per_domain_synthesis",
-                                          synthesis.get("per_domain_synthesis", []))
+        prs = inputs.get("prs", [])
+        owner = inputs.get("owner", "")
+        repo = inputs.get("repo", "")
+        mode = inputs.get("mode", "")
+        inst_id = self.instance_config.get("_instance_id", 0)
+        step_id = self.step_config.get("_step_id", "")
+
+        prompt = self._build_holistic_prompt(synthesis, reviews, experts, prs, owner, repo)
+
+        agent_name = self.step_config.get("agent", "cursor-opus")
+        try:
+            agent = get_agent(agent_name)
+        except Exception as e:
+            logger.warning(f"AI holistic review failed to get agent: {e}, falling back to heuristic")
+            return self._heuristic_holistic(synthesis, reviews, experts)
+
+        context = {
+            "pr_number": prs[0].get("number") if prs else 0,
+            "owner": owner,
+            "repo": repo,
+            "phase": "holistic",
+        }
+
+        try:
+            handle = agent.start_review(prompt, context)
+            while True:
+                status = agent.check_status(handle)
+                if status in (AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED):
+                    break
+                live = agent.get_live_output(handle)
+                if live and inst_id and step_id:
+                    _set_live_output(inst_id, step_id, live)
+                time.sleep(5)
+
+            if inst_id and step_id:
+                _clear_live_output(inst_id, step_id)
+
+            if status == AgentStatus.COMPLETED:
+                artifact = agent.get_output(handle)
+                holistic = self._parse_holistic_output(artifact.content_md, synthesis)
+                return StepResult(
+                    success=True,
+                    outputs={"holistic": holistic},
+                )
+            else:
+                logger.warning("AI holistic review failed, falling back to heuristic")
+                return self._heuristic_holistic(synthesis, reviews, experts)
+        except Exception as e:
+            logger.error(f"AI holistic review error: {e}")
+            if inst_id and step_id:
+                _clear_live_output(inst_id, step_id)
+            return self._heuristic_holistic(synthesis, reviews, experts)
+
+    # ------------------------------------------------------------------
+    # Heuristic fallback (original mechanical promotion/demotion logic)
+    # ------------------------------------------------------------------
+
+    def _heuristic_holistic(self, synthesis: dict, reviews: list,
+                            experts: list) -> StepResult:
+        per_domain_synthesis = synthesis.get("per_domain_synthesis", [])
 
         agreed = synthesis.get("agreed", [])
         a_only = synthesis.get("a_only", [])
@@ -31,7 +96,6 @@ class HolisticReviewExecutor(StepExecutor):
 
         holistic_log: list[dict] = []
 
-        # Per-domain verdict summary (for self/deep review)
         domain_verdicts: list[dict] = []
         if per_domain_synthesis:
             for ds in per_domain_synthesis:
@@ -57,7 +121,7 @@ class HolisticReviewExecutor(StepExecutor):
 
         overall_verdict, confidence, summary = self._compute_verdict_and_summary(
             blocking, non_blocking, agreed, a_only, b_only,
-            domain_verdicts, mode
+            domain_verdicts, synthesis.get("mode", "team-review")
         )
 
         domain_coverage = [e.get("domain_id", e.get("domain", "general")) for e in experts]
@@ -80,17 +144,159 @@ class HolisticReviewExecutor(StepExecutor):
 
         return StepResult(
             success=True,
-            outputs={
-                "holistic": holistic,
-                "synthesis": synthesis,
-                "reviews": reviews,
-            },
+            outputs={"holistic": holistic},
             artifacts=[{
                 "type": "holistic_review",
                 "pr_number": synthesis.get("pr_number"),
                 "data": holistic,
             }],
         )
+
+    # ------------------------------------------------------------------
+    # AI prompt construction
+    # ------------------------------------------------------------------
+
+    def _build_holistic_prompt(self, synthesis: dict, reviews: list,
+                               experts: list, prs: list,
+                               owner: str, repo: str) -> str:
+        sections = []
+
+        sections.append(
+            "You are a principal engineer with 15+ years of experience performing a HOLISTIC REVIEW.\n"
+            "You have read all per-domain synthesis results. Your job is cross-domain analysis:\n"
+            "finding interactions, contradictions, and gaps that domain experts missed."
+        )
+
+        for pr in prs:
+            pr_num = pr.get("number")
+            if pr_num:
+                sections.append(
+                    f"## Context for PR #{pr_num}\n"
+                    f"- `gh pr diff {pr_num}` — full diff\n"
+                    f"- `gh api repos/{owner}/{repo}/pulls/{pr_num}/reviews --paginate` — reviews\n"
+                )
+
+        if experts:
+            sections.append("## Expert Domains Analyzed")
+            for e in experts:
+                name = e.get("display_name", e.get("domain_id", "unknown"))
+                scope = e.get("scope", "")
+                sections.append(f"- **{name}**: {scope}")
+
+        cross_cutting = synthesis.get("cross_cutting_flags", [])
+        if cross_cutting:
+            sections.append("## Cross-Cutting Flags (Deferred from Tier 1)")
+            sections.append("You MUST process every cross-cutting flag. Assign each to the correct domain's findings or elevate as a new holistic finding:")
+            for flag in cross_cutting:
+                sections.append(f"- {flag}")
+
+        per_domain = synthesis.get("per_domain_synthesis", {})
+        if per_domain:
+            sections.append("## Per-Domain Synthesis Results")
+            for domain, domain_synth in (per_domain.items() if isinstance(per_domain, dict) else
+                                         ((d.get("domain", "unknown"), d) for d in per_domain)):
+                sections.append(f"### Domain: {domain}")
+                verdict = domain_synth.get("verdict", "unknown")
+                sections.append(f"Verdict: {verdict}")
+                for cat in ("agreed", "a_only", "b_only"):
+                    findings = domain_synth.get(cat, [])
+                    if findings:
+                        sections.append(f"  {cat.upper()}: {len(findings)} findings")
+                        for f in findings[:5]:
+                            inner = f.get("finding_a", f.get("finding_b", f.get("finding", {})))
+                            title = inner.get("title", "untitled")
+                            sev = inner.get("severity", "?")
+                            sections.append(f"  - [{sev}] {title}")
+        else:
+            sections.append("## Synthesis Results")
+            for cat in ("agreed", "a_only", "b_only"):
+                findings = synthesis.get(cat, [])
+                if findings:
+                    sections.append(f"### {cat.upper()} ({len(findings)} findings)")
+                    for f in findings[:10]:
+                        inner = f.get("finding_a", f.get("finding_b", f.get("finding", {})))
+                        title = inner.get("title", "untitled")
+                        sev = inner.get("severity", "?")
+                        sections.append(f"- [{sev}] {title}")
+
+        synth_findings = synthesis.get("synth_findings", [])
+        if synth_findings:
+            sections.append("## SYNTH Findings (from Tier 1)")
+            for f in synth_findings:
+                sections.append(f"- [{f.get('severity', '?')}] {f.get('title', 'untitled')}: {f.get('description', '')[:200]}")
+
+        sections.append(
+            "\n## Your Task\n\n"
+            "1. **Cross-domain interaction analysis**: Identify where changes in one domain affect another\n"
+            "2. **Contradiction resolution**: Flag where domain experts disagree and determine the correct interpretation\n"
+            "3. **Severity calibration**: Adjust severities considering the holistic impact\n"
+            "4. **Gap detection**: Find issues that fall between domain boundaries\n"
+            "5. **Process ALL cross-cutting flags**: Assign each to a domain or elevate as a holistic finding\n"
+            "6. **Final verdict**: APPROVE, REQUEST_CHANGES, or COMMENT\n\n"
+            "## Output Format\n\n"
+            "Output valid JSON only:\n"
+            "{\n"
+            '  "verdict": "APPROVE|REQUEST_CHANGES|COMMENT",\n'
+            '  "blocking_findings": [{"title": "...", "severity": "critical|major", "domain": "...", "description": "...", "evidence": "..."}],\n'
+            '  "non_blocking_findings": [{"title": "...", "severity": "minor|suggestion", "domain": "...", "description": "..."}],\n'
+            '  "cross_cutting_findings": [{"title": "...", "domains": ["...", "..."], "description": "...", "origin": "flag|new"}],\n'
+            '  "domain_verdicts": [{"domain": "...", "verdict": "...", "finding_count": 0}],\n'
+            '  "domain_coverage": ["domain-1", "domain-2"],\n'
+            '  "cross_domain_interactions": [{"files": ["..."], "domains": ["..."], "description": "..."}],\n'
+            '  "holistic_analysis_log": [{"action": "PROMOTED|DEMOTED|CONFIRMED", "finding": "...", "reasoning": "..."}],\n'
+            '  "summary": "2-3 sentence overall assessment"\n'
+            "}\n"
+        )
+
+        return "\n\n".join(sections)
+
+    # ------------------------------------------------------------------
+    # AI output parsing
+    # ------------------------------------------------------------------
+
+    def _parse_holistic_output(self, content: str, synthesis: dict) -> dict:
+        """Parse AI holistic review output."""
+        json_match = re.search(r'\{[\s\S]*\}', content)
+        if not json_match:
+            logger.warning("Could not parse AI holistic JSON, falling back")
+            return {
+                "verdict": synthesis.get("verdict", "COMMENT"),
+                "raw_content": content,
+                "ai_powered": True,
+                "parse_failed": True,
+            }
+
+        try:
+            parsed = json.loads(json_match.group())
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("Invalid JSON from AI holistic, falling back")
+            return {
+                "verdict": synthesis.get("verdict", "COMMENT"),
+                "raw_content": content,
+                "ai_powered": True,
+                "parse_failed": True,
+            }
+
+        result = {
+            "verdict": parsed.get("verdict", "COMMENT"),
+            "blocking_findings": parsed.get("blocking_findings", []),
+            "non_blocking_findings": parsed.get("non_blocking_findings", []),
+            "cross_cutting_findings": parsed.get("cross_cutting_findings", []),
+            "domain_verdicts": parsed.get("domain_verdicts", []),
+            "domain_coverage": parsed.get("domain_coverage", []),
+            "cross_domain_interactions": parsed.get("cross_domain_interactions", []),
+            "holistic_analysis_log": parsed.get("holistic_analysis_log", []),
+            "summary": parsed.get("summary", ""),
+            "total_blocking": len(parsed.get("blocking_findings", [])),
+            "total_non_blocking": len(parsed.get("non_blocking_findings", [])),
+            "ai_powered": True,
+        }
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Shared helpers (used by heuristic fallback)
+    # ------------------------------------------------------------------
 
     def _categorize_with_promotion(self, agreed: list, a_only: list,
                                     b_only: list,
@@ -121,7 +327,6 @@ class HolisticReviewExecutor(StepExecutor):
             else:
                 non_blocking.append(f)
 
-        high_agreement_non_blocking = []
         for f in list(non_blocking):
             if f.get("source") == "BOTH" and self._severity(f, "finding_a") == "minor":
                 inner = f.get("finding_a", {})
@@ -145,7 +350,6 @@ class HolisticReviewExecutor(StepExecutor):
         if not experts or len(experts) < 2:
             return []
 
-        domain_ids = {e.get("domain_id", e.get("domain", "")) for e in experts}
         interactions = []
 
         files_by_domain: dict[str, set[str]] = {}

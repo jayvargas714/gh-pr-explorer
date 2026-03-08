@@ -18,12 +18,36 @@ logger = logging.getLogger(__name__)
 class HumanGateExecutor(StepExecutor):
 
     def execute(self, inputs: dict) -> StepResult:
+        gate_type = self.step_config.get("gate_type", "default")
+
+        if gate_type == "prompt_review":
+            return self._execute_prompt_gate(inputs)
+
+        return self._execute_review_gate(inputs)
+
+    def _execute_prompt_gate(self, inputs: dict) -> StepResult:
+        gate_payload = {
+            "type": "prompt_review",
+            "prompts": inputs.get("prompts", []),
+            "experts": inputs.get("experts", []),
+            "mode": inputs.get("mode", ""),
+            "pr_count": len(inputs.get("prs", [])),
+        }
+
+        return StepResult(
+            success=True,
+            awaiting_gate=True,
+            gate_payload=gate_payload,
+        )
+
+    def _execute_review_gate(self, inputs: dict) -> StepResult:
         reviews = inputs.get("reviews", [])
         mode = inputs.get("mode", "team-review")
         synthesis = inputs.get("synthesis", {})
         freshness = inputs.get("freshness", [])
 
         gate_payload = {
+            "type": "review_gate",
             "mode": mode,
             "reviews": [],
             "synthesis": synthesis,
@@ -41,7 +65,6 @@ class HumanGateExecutor(StepExecutor):
             "finding_staleness": self._extract_staleness(freshness),
         }
 
-        # Also pass through follow-up results if this is a follow-up gate
         followup_results = inputs.get("followup_results")
         if followup_results is not None:
             gate_payload["followup_results"] = followup_results

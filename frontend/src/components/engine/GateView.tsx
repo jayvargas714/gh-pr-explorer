@@ -35,6 +35,154 @@ function parseContent(artifact: WorkflowArtifact): ParsedContent | null {
   return raw as ParsedContent
 }
 
+function PromptReviewGate({ instance, gateOutputs, onBack }: {
+  instance: WorkflowInstance
+  gateOutputs: Record<string, unknown>
+  onBack: () => void
+}) {
+  const { approveGate, rejectGate, loading } = useWorkflowEngineStore()
+  const payload = (gateOutputs?.gate_payload ?? gateOutputs) as Record<string, unknown>
+  const initialPrompts = (payload.prompts ?? []) as Array<{
+    pr_number?: number; pr_title?: string; domain?: string; prompt?: string; [key: string]: unknown
+  }>
+  const experts = (payload.experts ?? []) as Array<{
+    domain_id?: string; display_name?: string; persona?: string; scope?: string
+  }>
+  const mode = payload.mode as string | undefined
+
+  const [editedPrompts, setEditedPrompts] = useState(initialPrompts.map(p => ({ ...p, enabled: true, editedText: p.prompt ?? '' })))
+  const [submitting, setSubmitting] = useState(false)
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
+
+  const handleToggle = (idx: number) => {
+    setEditedPrompts(prev => prev.map((p, i) => i === idx ? { ...p, enabled: !p.enabled } : p))
+  }
+
+  const handleEdit = (idx: number, text: string) => {
+    setEditedPrompts(prev => prev.map((p, i) => i === idx ? { ...p, editedText: text } : p))
+  }
+
+  const handleApprove = async () => {
+    setSubmitting(true)
+    const finalPrompts = editedPrompts
+      .filter(p => p.enabled)
+      .map(p => ({ ...p, prompt: p.editedText }))
+    await approveGate(instance.id, { prompts: finalPrompts })
+    setSubmitting(false)
+    onBack()
+  }
+
+  const handleReject = async () => {
+    setSubmitting(true)
+    await rejectGate(instance.id, { reason: 'Prompts rejected by user' })
+    setSubmitting(false)
+    onBack()
+  }
+
+  const enabledCount = editedPrompts.filter(p => p.enabled).length
+
+  return (
+    <div className="mx-gate-view">
+      <div className="mx-gate-view__header">
+        <Button variant="ghost" size="sm" onClick={onBack}>&larr; Back to Run</Button>
+        <div className="mx-gate-view__title">
+          <h3>Prompt Review Gate — Run #{instance.id}</h3>
+          <Badge variant="warning">Awaiting Prompt Review</Badge>
+        </div>
+      </div>
+
+      <div className="mx-gate-view__stats">
+        <div className="mx-gate-view__stat">
+          <span className="mx-gate-view__stat-value">{editedPrompts.length}</span>
+          <span className="mx-gate-view__stat-label">Total Prompts</span>
+        </div>
+        <div className="mx-gate-view__stat">
+          <span className="mx-gate-view__stat-value">{enabledCount}</span>
+          <span className="mx-gate-view__stat-label">Enabled</span>
+        </div>
+        <div className="mx-gate-view__stat">
+          <span className="mx-gate-view__stat-value">{experts.length}</span>
+          <span className="mx-gate-view__stat-label">Expert Domains</span>
+        </div>
+        {mode && (
+          <div className="mx-gate-view__stat">
+            <span className="mx-gate-view__stat-value">{mode}</span>
+            <span className="mx-gate-view__stat-label">Mode</span>
+          </div>
+        )}
+      </div>
+
+      {experts.length > 0 && (
+        <div className="mx-gate-view__section" style={{ marginBottom: '16px' }}>
+          <h4>Expert Domains</h4>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            {experts.map((e, i) => (
+              <div key={i} style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.05)', borderRadius: '6px' }}>
+                <Badge variant="info" size="sm">{e.display_name ?? e.domain_id}</Badge>
+                {e.scope && <p style={{ margin: '4px 0 0', fontSize: '12px', opacity: 0.7 }}>{e.scope}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="mx-gate-view__body">
+        {editedPrompts.map((p, i) => {
+          const isOpen = expandedIdx === i
+          return (
+            <div key={i} className="mx-gate-view__section" style={{
+              opacity: p.enabled ? 1 : 0.5,
+              borderLeft: p.enabled ? '3px solid var(--mx-accent)' : '3px solid transparent',
+              paddingLeft: '12px',
+              marginBottom: '12px',
+            }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: 'pointer' }} onClick={() => setExpandedIdx(isOpen ? null : i)}>
+                <input
+                  type="checkbox"
+                  checked={p.enabled}
+                  onChange={(e) => { e.stopPropagation(); handleToggle(i) }}
+                  style={{ marginRight: '4px' }}
+                />
+                <span style={{ fontSize: '12px', opacity: 0.6 }}>{isOpen ? '▼' : '▶'}</span>
+                {p.pr_number && <strong>#{p.pr_number}</strong>}
+                {p.pr_title && <span>{p.pr_title}</span>}
+                {p.domain && <Badge variant="info" size="sm">{p.domain}</Badge>}
+              </div>
+              {isOpen && (
+                <div style={{ marginTop: '8px' }}>
+                  <textarea
+                    value={p.editedText}
+                    onChange={(e) => handleEdit(i, e.target.value)}
+                    className="mx-gate-view__reject-textarea"
+                    style={{ width: '100%', minHeight: '200px', fontFamily: 'monospace', fontSize: '12px' }}
+                  />
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="mx-gate-view__actions">
+        <Button
+          variant="primary"
+          onClick={handleApprove}
+          disabled={submitting || loading || enabledCount === 0}
+        >
+          {submitting ? <Spinner size="sm" /> : `Approve & Run Agents (${enabledCount} prompts)`}
+        </Button>
+        <Button
+          variant="danger"
+          onClick={handleReject}
+          disabled={submitting || loading}
+        >
+          Reject
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 export function GateView({ instance, onBack }: GateViewProps) {
   const { selectedInstance, fetchInstance, approveGate, rejectGate, loading } = useWorkflowEngineStore()
   const [tab, setTab] = useState<GateTab>('overview')
@@ -77,6 +225,13 @@ export function GateView({ instance, onBack }: GateViewProps) {
       return typeof raw === 'string' ? JSON.parse(raw) : raw
     } catch { return null }
   })()
+
+  const gatePayload = (gateOutputs?.gate_payload ?? gateOutputs ?? {}) as Record<string, unknown>
+  const gateType = gatePayload?.type as string | undefined
+
+  if (gateType === 'prompt_review' && !isResolved) {
+    return <PromptReviewGate instance={inst} gateOutputs={gateOutputs} onBack={onBack} />
+  }
 
   const verdict = synthContent?.verdict as string | undefined
   const agreed = (synthContent?.agreed ?? []) as Array<Record<string, unknown>>

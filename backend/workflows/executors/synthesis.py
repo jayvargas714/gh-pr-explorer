@@ -8,8 +8,11 @@ enhanced finding matching per the legacy adversarial review specification.
 
 import logging
 import re
+import time
 
+from backend.agents import get_agent, AgentStatus
 from backend.workflows.executor import StepExecutor, StepResult
+from backend.workflows.executors.agent_review import _set_live_output, _clear_live_output
 from backend.workflows.step_types import register_step
 
 logger = logging.getLogger(__name__)
@@ -21,17 +24,24 @@ class SynthesisExecutor(StepExecutor):
     def execute(self, inputs: dict) -> StepResult:
         reviews = inputs.get("reviews", [])
         mode = inputs.get("mode", "team-review")
+        prs = inputs.get("prs", [])
         completed = [r for r in reviews if r.get("status") == "completed"]
 
         if not completed:
             return StepResult(
                 success=True,
-                outputs={"synthesis": {}, "reviews": reviews},
+                outputs={"synthesis": {}},
             )
 
         if mode in ("self-review", "deep-review"):
-            return self._two_tier_synthesis(completed, reviews, mode)
-        return self._single_tier_synthesis(completed, reviews)
+            result = self._two_tier_synthesis(completed, reviews, mode)
+        else:
+            result = self._single_tier_synthesis(completed, reviews)
+
+        if self.step_config.get("ai_verify", False):
+            return self._ai_verify(result, completed, inputs)
+
+        return result
 
     # --- Single tier (team-review) ---
 
@@ -111,7 +121,7 @@ class SynthesisExecutor(StepExecutor):
 
         return StepResult(
             success=True,
-            outputs={"synthesis": summary_synthesis, "reviews": reviews},
+            outputs={"synthesis": summary_synthesis},
             artifacts=artifacts,
         )
 
@@ -204,10 +214,177 @@ class SynthesisExecutor(StepExecutor):
             outputs={
                 "synthesis": summary_synthesis,
                 "per_domain_synthesis": per_domain_synthesis,
-                "reviews": reviews,
             },
             artifacts=artifacts,
         )
+
+    # --- AI verification pass ---
+
+    def _ai_verify(self, mechanical_result: StepResult, reviews: list, inputs: dict) -> StepResult:
+        """Dispatch an AI agent to verify the mechanical synthesis results."""
+        synthesis = mechanical_result.outputs.get("synthesis", {})
+        owner = inputs.get("owner", "")
+        repo = inputs.get("repo", "")
+        prs = inputs.get("prs", [])
+        inst_id = self.instance_config.get("_instance_id", 0)
+        step_id = self.step_config.get("_step_id", "")
+
+        prompt = self._build_verification_prompt(synthesis, reviews, owner, repo, prs)
+
+        agent_name = self.step_config.get("agent", "cursor-opus")
+        try:
+            agent = get_agent(agent_name)
+        except Exception as e:
+            logger.warning(f"AI verify failed to get agent: {e}, returning mechanical result")
+            return mechanical_result
+
+        context = {
+            "pr_number": prs[0].get("number") if prs else 0,
+            "owner": owner,
+            "repo": repo,
+            "phase": "synthesis",
+        }
+
+        try:
+            handle = agent.start_review(prompt, context)
+            while True:
+                status = agent.check_status(handle)
+                if status in (AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED):
+                    break
+                live = agent.get_live_output(handle)
+                if live and inst_id and step_id:
+                    _set_live_output(inst_id, step_id, live)
+                time.sleep(5)
+
+            if inst_id and step_id:
+                _clear_live_output(inst_id, step_id)
+
+            if status == AgentStatus.COMPLETED:
+                artifact = agent.get_output(handle)
+                verified = self._parse_ai_verification(artifact.content_md, synthesis)
+                return StepResult(
+                    success=True,
+                    outputs={"synthesis": verified},
+                )
+            else:
+                logger.warning("AI verification failed, returning mechanical result")
+                return mechanical_result
+        except Exception as e:
+            logger.error(f"AI verify error: {e}")
+            if inst_id and step_id:
+                _clear_live_output(inst_id, step_id)
+            return mechanical_result
+
+    def _build_verification_prompt(self, synthesis: dict, reviews: list,
+                                   owner: str, repo: str, prs: list) -> str:
+        """Build the AI synthesis verification prompt."""
+        sections = []
+
+        sections.append(
+            "You are a senior engineering lead performing SYNTHESIS of two independent code reviews.\n"
+            "Your job is to verify every finding against the actual diff, resolve disputes with evidence, "
+            "and generate SYNTH findings for issues both reviewers missed.\n"
+        )
+
+        pr_numbers = [p.get("number") for p in prs if p.get("number")]
+        for pr_num in pr_numbers:
+            sections.append(
+                f"## Context Commands\n"
+                f"Run these to verify findings against the actual code:\n"
+                f"- `gh pr diff {pr_num}` — full diff\n"
+                f"- `gh api repos/{owner}/{repo}/pulls/{pr_num}/reviews --paginate` — existing reviews\n"
+                f"- `gh api repos/{owner}/{repo}/pulls/{pr_num}/comments --paginate` — existing comments\n"
+            )
+
+        sections.append("## Pre-Classified Findings\n")
+        for category in ("agreed", "a_only", "b_only"):
+            findings = synthesis.get(category, [])
+            if findings:
+                sections.append(f"### {category.upper()} ({len(findings)} findings)")
+                for i, f in enumerate(findings):
+                    inner = f.get("finding_a", f.get("finding_b", f.get("finding", {})))
+                    title = inner.get("title", f"Finding {i+1}")
+                    severity = inner.get("severity", "unknown")
+                    desc = inner.get("description", "")[:500]
+                    sections.append(f"- [{severity}] {title}: {desc}")
+                sections.append("")
+
+        sections.append("## Review A Content")
+        review_a = [r for r in reviews if r.get("agent_name", "").endswith("a") or "review_a" in r.get("agent_name", "")]
+        if not review_a:
+            review_a = reviews[:1]
+        for r in review_a:
+            sections.append(r.get("content_md", "")[:5000])
+
+        sections.append("\n## Review B Content")
+        review_b = [r for r in reviews if r.get("agent_name", "").endswith("b") or "review_b" in r.get("agent_name", "")]
+        if not review_b:
+            review_b = reviews[1:2]
+        for r in review_b:
+            sections.append(r.get("content_md", "")[:5000])
+
+        sections.append(
+            "\n## Your Task\n\n"
+            "For EVERY pre-classified finding:\n"
+            "1. **Verify** against the actual diff. Read the relevant code.\n"
+            "2. **Classify**: CONFIRMED (verified in code), FALSE_POSITIVE (not actually an issue), RECLASSIFIED (different severity)\n"
+            "3. **For disputed findings** (A_ONLY, B_ONLY): determine if the finding is valid with code evidence\n"
+            "4. **Drop false positives** with explicit reasoning\n\n"
+            "Additionally:\n"
+            "- **Generate SYNTH findings**: Issues BOTH reviewers missed. Source these as 'SYNTH'.\n"
+            "- **Extract cross-cutting flags**: Parse any [CROSS-CUTTING] tags from reviews. Output as `cross_cutting_flags` list for Tier 2 holistic review.\n"
+            "- If Jira tickets are mentioned (SIM-XXXX), consider the ticket's intent when resolving disputes.\n\n"
+            "## Output Format\n\n"
+            "Output valid JSON only:\n"
+            "{\n"
+            '  "verified_findings": [\n'
+            '    {"title": "...", "severity": "...", "classification": "CONFIRMED|FALSE_POSITIVE|RECLASSIFIED",\n'
+            '     "original_category": "AGREED|A_ONLY|B_ONLY", "evidence": "...", "source": "review_a|review_b|SYNTH"}\n'
+            "  ],\n"
+            '  "synth_findings": [\n'
+            '    {"title": "...", "severity": "...", "description": "...", "evidence": "...", "source": "SYNTH"}\n'
+            "  ],\n"
+            '  "cross_cutting_flags": ["flag description 1", "flag description 2"],\n'
+            '  "false_positives_dropped": [\n'
+            '    {"title": "...", "reason": "..."}\n'
+            "  ],\n"
+            '  "synthesis_log": [\n'
+            '    {"finding": "...", "action": "CONFIRMED|DROPPED|RECLASSIFIED", "reasoning": "..."}\n'
+            "  ]\n"
+            "}\n"
+        )
+
+        return "\n\n".join(sections)
+
+    def _parse_ai_verification(self, content: str, original_synthesis: dict) -> dict:
+        """Parse AI verification output and merge into synthesis."""
+        import json as json_mod
+
+        json_match = re.search(r'\{[\s\S]*\}', content)
+        if not json_match:
+            logger.warning("Could not parse AI verification JSON, using original")
+            original_synthesis["ai_verified"] = False
+            return original_synthesis
+
+        try:
+            verified = json_mod.loads(json_match.group())
+        except json_mod.JSONDecodeError:
+            logger.warning("Invalid JSON from AI verification, using original")
+            original_synthesis["ai_verified"] = False
+            return original_synthesis
+
+        result = dict(original_synthesis)
+        result["ai_verified"] = True
+        result["verified_findings"] = verified.get("verified_findings", [])
+        result["synth_findings"] = verified.get("synth_findings", [])
+        result["cross_cutting_flags"] = verified.get("cross_cutting_flags", [])
+        result["false_positives_dropped"] = verified.get("false_positives_dropped", [])
+        result["synthesis_log"] = verified.get("synthesis_log", [])
+
+        confirmed = [f for f in result["verified_findings"] if f.get("classification") != "FALSE_POSITIVE"]
+        result["total_findings"] = len(confirmed) + len(result.get("synth_findings", []))
+
+        return result
 
     # --- Finding extraction ---
 

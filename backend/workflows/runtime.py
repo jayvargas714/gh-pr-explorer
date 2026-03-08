@@ -223,7 +223,11 @@ class WorkflowRuntime:
         """Resume execution after a human gate decision.
 
         Continues from the step after the gate.
+        If gate_decision contains edited prompts, they replace the originals
+        so downstream steps (review agents) see the user-edited versions.
         """
+        if "prompts" in gate_decision:
+            all_outputs["prompts"] = gate_decision["prompts"]
         all_outputs.update(gate_decision)
         topo_order = self._topological_sort()
 
@@ -359,11 +363,16 @@ class WorkflowRuntime:
 
         return levels
 
+    _MERGEABLE_LIST_KEYS = {"reviews"}
+
     @staticmethod
     def _merge_outputs(target: dict, source: dict):
-        """Merge source outputs into target, concatenating lists for shared keys."""
+        """Merge source outputs into target, concatenating lists only for allowlisted keys."""
         for key, value in source.items():
-            if key in target and isinstance(target[key], list) and isinstance(value, list):
+            if (key in WorkflowRuntime._MERGEABLE_LIST_KEYS
+                    and key in target
+                    and isinstance(target[key], list)
+                    and isinstance(value, list)):
                 target[key] = target[key] + value
             else:
                 target[key] = value

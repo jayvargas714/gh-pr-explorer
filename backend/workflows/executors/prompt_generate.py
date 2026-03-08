@@ -59,7 +59,7 @@ class PromptGenerateExecutor(StepExecutor):
 
         return StepResult(
             success=True,
-            outputs={"prompts": prompts, "mode": mode},
+            outputs={"prompts": prompts},
             artifacts=[{
                 "type": "prompts",
                 "data": {
@@ -112,6 +112,9 @@ class PromptGenerateExecutor(StepExecutor):
         else:
             sections.append(self._generic_persona())
 
+        sections.append(self._depth_expectations_section(pr))
+        sections.append(self._cross_file_analysis_section())
+        sections.append(self._diff_ingestion_section(pr))
         sections.append(self._output_format(pr))
         return "\n\n".join(s for s in sections if s)
 
@@ -127,6 +130,9 @@ class PromptGenerateExecutor(StepExecutor):
         sections.append(self._checklist_section(expert))
         sections.append(self._anti_patterns_section(expert))
         sections.append(self._cross_cutting_section(expert, all_experts))
+        sections.append(self._depth_expectations_section(pr))
+        sections.append(self._cross_file_analysis_section())
+        sections.append(self._diff_ingestion_section(pr))
         sections.append(self._output_format(pr))
         return "\n\n".join(s for s in sections if s)
 
@@ -282,6 +288,65 @@ class PromptGenerateExecutor(StepExecutor):
         )
 
     @staticmethod
+    def _depth_expectations_section(pr: dict) -> str:
+        changed_files = pr.get("changedFiles", 0)
+        additions = pr.get("additions", 0)
+        deletions = pr.get("deletions", 0)
+        total = additions + deletions
+
+        lines = [
+            "## Depth Expectations",
+            "",
+            "Your review quality is measured by the synthesis phase. Calibration guidelines:",
+            "",
+        ]
+        if changed_files >= 50 or total >= 5000:
+            lines.append(f"- This is a LARGE PR ({changed_files} files, {total} lines). Expect 5-10+ findings.")
+        elif changed_files >= 10 or total >= 1000:
+            lines.append(f"- This is a medium PR ({changed_files} files, {total} lines). Expect 3+ findings.")
+        else:
+            lines.append(f"- This is a small PR ({changed_files} files, {total} lines). Findings should be proportionate.")
+
+        lines.extend([
+            "- Zero findings + zero questions = re-examine. Even clean PRs deserve questions about design intent.",
+            "- These are guidelines, not quotas — don't fabricate findings to hit a number.",
+            "- But if your review is significantly shorter than what the PR's complexity warrants, look harder.",
+        ])
+        return "\n".join(lines)
+
+    @staticmethod
+    def _cross_file_analysis_section() -> str:
+        return (
+            "## Cross-File Analysis\n\n"
+            "After reading the diff, perform cross-file analysis. Many real bugs live at boundaries:\n\n"
+            "- **Contract mismatches:** Does file A call a function with assumptions that file B's implementation doesn't satisfy?\n"
+            "- **Naming inconsistencies:** Is the same concept named differently across files?\n"
+            "- **Incomplete migrations:** If the PR changes a pattern in some files, does it miss applying the same change in others?\n"
+            "- **Initialization order:** If file A removes a safety check, is there proof that file B guarantees the precondition?"
+        )
+
+    @staticmethod
+    def _diff_ingestion_section(pr: dict) -> str:
+        total = pr.get("additions", 0) + pr.get("deletions", 0)
+        pr_number = pr.get("number", 0)
+
+        if total <= 5000:
+            return (
+                "## Diff Ingestion\n\n"
+                f"This PR has {total} lines changed. Read the ENTIRE diff — do not sample or skim."
+            )
+
+        return (
+            "## Diff Ingestion\n\n"
+            f"This PR has {total} lines changed (LARGE). Use a chunked strategy:\n\n"
+            f"1. `gh pr diff {pr_number} --name-only` to get the complete file list\n"
+            "2. Categorize files: source code, config, tests, docs, generated\n"
+            "3. Read ALL source code and config changes in full\n"
+            "4. Sample test files and generated code for anomalies\n"
+            "5. Document which files you reviewed and which you skipped (with justification)"
+        )
+
+    @staticmethod
     def _output_format(pr: dict) -> str:
         pr_number = pr.get("number", 0)
         title = pr.get("title", "")
@@ -314,6 +379,7 @@ class PromptGenerateExecutor(StepExecutor):
         try:
             result = subprocess.run(
                 ["gh", "api", f"repos/{owner}/{repo}/pulls/{pr_number}/reviews",
+                 "--paginate",
                  "--jq", '.[] | "\(.user.login): \(.state)"'],
                 capture_output=True, text=True, timeout=15,
             )
@@ -345,6 +411,7 @@ class PromptGenerateExecutor(StepExecutor):
         try:
             result = subprocess.run(
                 ["gh", "api", f"repos/{owner}/{repo}/pulls/{pr_number}/reviews",
+                 "--paginate",
                  "--jq", '.[] | "\(.user.login): \(.state)"'],
                 capture_output=True, text=True, timeout=15,
             )

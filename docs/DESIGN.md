@@ -483,12 +483,12 @@ The Review Workflows tab provides a UI for composable code review pipelines impl
 | `pr_select.py` | `pr_select` | Fetches PRs via `gh` CLI |
 | `prioritize.py` | `prioritize` | P0-P3 scoring, code owner boost, repo-scoped skip list |
 | `expert_select.py` | `expert_select` | DB-backed domain matching with file/keyword triggers, relevance thresholds, expert count caps |
-| `prompt_generate.py` | `prompt_generate` | Structured prompt builder: header, context commands, GitHub API dedup, persona, checklist, anti-patterns, cross-cutting concerns, output format. Per-expert fan-out for self/deep review |
+| `prompt_generate.py` | `prompt_generate` | Structured prompt builder: header, context commands, GitHub API dedup, persona, checklist, anti-patterns, cross-cutting concerns, depth expectations, cross-file analysis, diff ingestion strategy, output format. Per-expert fan-out for self/deep review |
 | `agent_review.py` | `agent_review` | Dispatches prompt to `AgentBackend`, Review B isolation, live output streaming, domain propagation |
 | `synthesis.py` | `synthesis` | Source attribution (A/B/BOTH), synthesis log, NEEDS_DISCUSSION verdict, two-tier synthesis for self/deep review |
 | `freshness_check.py` | `freshness_check` | SUPERSEDED detection (force-push/rebase), per-finding staleness tagging, justification summaries |
 | `human_gate.py` | `human_gate` | Enriched gate payload: synthesis log, questions, checklists, per-domain synthesis, holistic review, staleness |
-| `publish.py` | `publish` | Rich GitHub comments with blocking findings (file:line, evidence, fix), questions, staleness notes, auto-creates follow-up entries |
+| `publish.py` | `publish` | Rich GitHub comments with blocking findings (file:line, evidence, fix), questions, staleness notes, auto-creates follow-up entries. Multi-PR iteration via `per_pr` list. Publication dedup: fetches existing reviews/comments and filters already-raised findings before posting |
 | `holistic_review.py` | `holistic_review` | Tier 2 analysis: cross-domain interactions, promotion/demotion logic, domain verdict summary |
 | `followup_check.py` | `followup_check` | Checks PR state, new commits, author responses; classifies follow-up status |
 | `followup_action.py` | `followup_action` | Posts follow-up comments using templates (RESOLVED, PARTIALLY_RESOLVED, AUTHOR_DISAGREES, NO_RESPONSE) |

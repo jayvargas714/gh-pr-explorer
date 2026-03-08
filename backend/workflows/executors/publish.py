@@ -175,9 +175,33 @@ class PublishExecutor(StepExecutor):
                 outputs={"published": False, "reason": "self-review mode: local only"},
             )
 
+        per_pr = synthesis.get("per_pr", [])
+        if per_pr:
+            results = []
+            for pr_synth in per_pr:
+                result = self._publish_single_pr(pr_synth, owner, repo, mode, freshness)
+                results.append(result)
+            all_success = all(r.get("published", False) for r in results)
+            return StepResult(
+                success=True,
+                outputs={"published": results, "all_published": all_success},
+                artifacts=[
+                    {"type": "gh_comment", "pr_number": r.get("pr_number"), "data": r}
+                    for r in results
+                ],
+            )
+        else:
+            return self._publish_single_pr_result(synthesis, owner, repo, mode, freshness)
+
+    def _publish_single_pr(self, synthesis: dict, owner: str, repo: str,
+                           mode: str, freshness: list) -> dict:
+        """Publish a single PR review and return a result dict."""
         pr_number = synthesis.get("pr_number")
         if not pr_number:
-            return StepResult(success=False, error="No PR number in synthesis")
+            return {"published": False, "error": "No PR number in synthesis"}
+
+        existing = self._fetch_existing_findings(owner, repo, pr_number)
+        synthesis = self._filter_already_raised(synthesis, existing)
 
         verdict = synthesis.get("verdict", "COMMENT")
         comment_body = build_gh_comment(synthesis, mode, freshness)
@@ -198,20 +222,90 @@ class PublishExecutor(StepExecutor):
                 owner, repo, pr_number, synthesis, instance_id
             )
 
+        return {
+            "published": success,
+            "pr_number": pr_number,
+            "verdict": verdict,
+            "gh_event": gh_event,
+            "body": comment_body,
+            "posted": success,
+        }
+
+    def _publish_single_pr_result(self, synthesis: dict, owner: str, repo: str,
+                                  mode: str, freshness: list) -> StepResult:
+        """Wrap single-PR publish in a StepResult for the non-per_pr path."""
+        result = self._publish_single_pr(synthesis, owner, repo, mode, freshness)
+        if "error" in result:
+            return StepResult(success=False, error=result["error"])
         return StepResult(
             success=True,
             outputs={
-                "published": success,
-                "pr_number": pr_number,
-                "verdict": verdict,
-                "gh_event": gh_event,
+                "published": result["published"],
+                "pr_number": result["pr_number"],
+                "verdict": result["verdict"],
+                "gh_event": result["gh_event"],
             },
             artifacts=[{
                 "type": "gh_comment",
-                "pr_number": pr_number,
-                "data": {"body": comment_body, "event": gh_event, "posted": success},
+                "pr_number": result["pr_number"],
+                "data": {"body": result["body"], "event": result["gh_event"],
+                         "posted": result["posted"]},
             }],
         )
+
+    def _fetch_existing_findings(self, owner: str, repo: str, pr_number: int) -> set[str]:
+        """Fetch titles/summaries of findings already raised by other reviewers."""
+        existing: set[str] = set()
+        try:
+            result = subprocess.run(
+                ["gh", "api", f"repos/{owner}/{repo}/pulls/{pr_number}/reviews",
+                 "--paginate", "--jq", '.[].body'],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                for body in result.stdout.strip().split("\n"):
+                    if body.strip():
+                        existing.add(body.strip()[:200].lower())
+        except Exception:
+            pass
+        try:
+            result = subprocess.run(
+                ["gh", "api", f"repos/{owner}/{repo}/pulls/{pr_number}/comments",
+                 "--paginate", "--jq", '.[].body'],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                for body in result.stdout.strip().split("\n"):
+                    if body.strip():
+                        existing.add(body.strip()[:200].lower())
+        except Exception:
+            pass
+        return existing
+
+    def _filter_already_raised(self, synthesis: dict, existing: set[str]) -> dict:
+        """Remove findings that were already raised by other reviewers."""
+        if not existing:
+            return synthesis
+
+        def is_new(finding: dict) -> bool:
+            inner = finding.get("finding_a", finding.get("finding", {}))
+            title = inner.get("title", "").lower()
+            return not any(title in ex for ex in existing)
+
+        filtered = dict(synthesis)
+        for key in ("agreed", "a_only", "b_only"):
+            if key in filtered and isinstance(filtered[key], list):
+                filtered[key] = [f for f in filtered[key] if is_new(f)]
+
+        filtered["total_findings"] = (
+            len(filtered.get("agreed", [])) +
+            len(filtered.get("a_only", [])) +
+            len(filtered.get("b_only", []))
+        )
+        filtered["agreed_count"] = len(filtered.get("agreed", []))
+        filtered["disputed_count"] = len(filtered.get("a_only", [])) + len(filtered.get("b_only", []))
+
+        return filtered
 
     def _post_to_github(self, owner: str, repo: str, pr_number: int,
                          body: str, event: str) -> bool:
