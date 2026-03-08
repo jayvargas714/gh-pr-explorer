@@ -275,26 +275,38 @@ def _gate_action_inner(instance_id):
 
         db.update_step_status(instance_id, gate_step["step_id"], "failed",
                               error=f"Revised: {feedback_text[:100]}")
+
+        inst_lock = _get_instance_lock(instance_id)
+        if not inst_lock.acquire(blocking=False):
+            return jsonify({"error": "Another operation is already running for this instance"}), 409
         db.update_instance_status(instance_id, "running")
 
         refreshed_instance = db.get_instance(instance_id)
-        thread = threading.Thread(
-            target=_retry_from_step,
-            args=(instance_id, template_data["template"],
-                  refreshed_instance or instance, retry_target),
-            daemon=True,
-        )
+
+        def _guarded_revise():
+            try:
+                _retry_from_step(instance_id, template_data["template"],
+                                 refreshed_instance or instance, retry_target)
+            finally:
+                inst_lock.release()
+
+        thread = threading.Thread(target=_guarded_revise, daemon=True)
         thread.start()
         return jsonify({"ok": True, "status": "running",
                         "retrying_from": retry_target, "iteration": iteration})
 
+    inst_lock = _get_instance_lock(instance_id)
+    if not inst_lock.acquire(blocking=False):
+        return jsonify({"error": "Another operation is already running for this instance"}), 409
     db.update_instance_status(instance_id, "running")
 
-    thread = threading.Thread(
-        target=_resume_workflow,
-        args=(instance_id, template_data["template"], instance, data),
-        daemon=True,
-    )
+    def _guarded_resume():
+        try:
+            _resume_workflow(instance_id, template_data["template"], instance, data)
+        finally:
+            inst_lock.release()
+
+    thread = threading.Thread(target=_guarded_resume, daemon=True)
     thread.start()
 
     return jsonify({"ok": True, "status": "running"})
@@ -339,18 +351,25 @@ def retry_step(instance_id, step_id):
 
     if target["status"] == "running":
         return jsonify({"error": "Step is currently running"}), 400
+    if instance["status"] == "running":
+        return jsonify({"error": "Instance is already running"}), 409
 
     template_data = db.get_template(instance["template_id"])
     if not template_data:
         return jsonify({"error": "Template not found"}), 500
 
+    lock = _get_instance_lock(instance_id)
+    if not lock.acquire(blocking=False):
+        return jsonify({"error": "Another operation is already running for this instance"}), 409
     db.update_instance_status(instance_id, "running")
 
-    thread = threading.Thread(
-        target=_retry_from_step,
-        args=(instance_id, template_data["template"], instance, step_id),
-        daemon=True,
-    )
+    def _guarded_retry():
+        try:
+            _retry_from_step(instance_id, template_data["template"], instance, step_id)
+        finally:
+            lock.release()
+
+    thread = threading.Thread(target=_guarded_retry, daemon=True)
     thread.start()
 
     return jsonify({"ok": True, "status": "running", "retrying_from": step_id})
@@ -487,7 +506,27 @@ def get_followup(followup_id):
 
 # --- Background execution ---
 
+_instance_locks: dict[int, threading.Lock] = {}
+_instance_locks_lock = threading.Lock()
+
+
+def _get_instance_lock(instance_id: int) -> threading.Lock:
+    with _instance_locks_lock:
+        if instance_id not in _instance_locks:
+            _instance_locks[instance_id] = threading.Lock()
+        return _instance_locks[instance_id]
+
+
+def _set_terminal_status(db, instance_id: int, status: str):
+    """Set final instance status, but never overwrite 'cancelled'."""
+    current = db.get_instance(instance_id)
+    if current and current["status"] == "cancelled":
+        return
+    db.update_instance_status(instance_id, status)
+
+
 def _run_workflow(instance_id: int, template: dict, repo: str, config: dict):
+    from backend.workflows.cancellation import clear as cancel_clear
     db = get_workflow_db()
     db.update_instance_status(instance_id, "running")
     try:
@@ -496,14 +535,17 @@ def _run_workflow(instance_id: int, template: dict, repo: str, config: dict):
             initial_inputs={"repo": repo},
             instance_config={"repo": repo, **config},
         )
-        db.update_instance_status(instance_id, result["status"])
+        _set_terminal_status(db, instance_id, result["status"])
     except Exception as e:
         logger.error(f"Workflow instance {instance_id} failed: {e}")
-        db.update_instance_status(instance_id, "failed")
+        _set_terminal_status(db, instance_id, "failed")
+    finally:
+        cancel_clear(instance_id)
 
 
 def _resume_workflow(instance_id: int, template: dict, instance: dict, gate_decision: dict):
     import backend.workflows.executors  # noqa: F401
+    from backend.workflows.cancellation import clear as cancel_clear
     db = get_workflow_db()
     try:
         steps = db.get_steps(instance_id)
@@ -532,14 +574,18 @@ def _resume_workflow(instance_id: int, template: dict, instance: dict, gate_deci
             all_outputs=all_outputs,
             instance_config={"repo": instance.get("repo", ""), **config},
         )
-        db.update_instance_status(instance_id, result["status"])
+        _set_terminal_status(db, instance_id, result["status"])
     except Exception as e:
         logger.error(f"Workflow resume for instance {instance_id} failed: {e}")
-        db.update_instance_status(instance_id, "failed")
+        _set_terminal_status(db, instance_id, "failed")
+    finally:
+        cancel_clear(instance_id)
 
 
 def _retry_from_step(instance_id: int, template: dict, instance: dict, step_id: str):
     import backend.workflows.executors  # noqa: F401
+    from backend.workflows.cancellation import clear as cancel_clear
+    cancel_clear(instance_id)
     db = get_workflow_db()
     try:
         steps = db.get_steps(instance_id)
@@ -565,10 +611,12 @@ def _retry_from_step(instance_id: int, template: dict, instance: dict, step_id: 
             all_outputs=all_outputs,
             instance_config={"repo": instance.get("repo", ""), **config},
         )
-        db.update_instance_status(instance_id, result["status"])
+        _set_terminal_status(db, instance_id, result["status"])
     except Exception as e:
         logger.error(f"Workflow retry from {step_id} for instance {instance_id} failed: {e}")
-        db.update_instance_status(instance_id, "failed")
+        _set_terminal_status(db, instance_id, "failed")
+    finally:
+        cancel_clear(instance_id)
 
 
 @workflow_engine_bp.route(
