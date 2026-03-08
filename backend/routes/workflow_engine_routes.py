@@ -503,6 +503,7 @@ def _run_workflow(instance_id: int, template: dict, repo: str, config: dict):
 
 
 def _resume_workflow(instance_id: int, template: dict, instance: dict, gate_decision: dict):
+    import backend.workflows.executors  # noqa: F401
     db = get_workflow_db()
     try:
         steps = db.get_steps(instance_id)
@@ -538,6 +539,7 @@ def _resume_workflow(instance_id: int, template: dict, instance: dict, gate_deci
 
 
 def _retry_from_step(instance_id: int, template: dict, instance: dict, step_id: str):
+    import backend.workflows.executors  # noqa: F401
     db = get_workflow_db()
     try:
         steps = db.get_steps(instance_id)
