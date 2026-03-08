@@ -26,7 +26,9 @@ class FollowupCheckExecutor(StepExecutor):
 
         if not owner and "/" in full_repo:
             owner, repo_name = full_repo.split("/", 1)
-        repo_full = f"{owner}/{repo_name}" if owner and repo_name else full_repo
+        elif not owner and "/" in str(repo_name):
+            owner, repo_name = str(repo_name).split("/", 1)
+        repo_full = f"{owner}/{repo_name}" if owner and repo_name else (full_repo or repo_name or "")
 
         from backend.database import get_workflow_db
         db = get_workflow_db()

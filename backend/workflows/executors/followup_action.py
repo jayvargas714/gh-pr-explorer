@@ -73,6 +73,14 @@ class FollowupActionExecutor(StepExecutor):
                 })
                 continue
 
+            if not pr_number:
+                actions_taken.append({
+                    "pr_number": pr_number,
+                    "action": "skip",
+                    "reason": "Missing PR number",
+                })
+                continue
+
             comment = self._build_comment(result, followup_id)
             if not comment:
                 actions_taken.append({
