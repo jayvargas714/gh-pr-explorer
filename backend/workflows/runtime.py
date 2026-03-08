@@ -222,57 +222,39 @@ class WorkflowRuntime:
                           all_outputs: dict, instance_config: dict) -> dict:
         """Resume execution after a human gate decision.
 
-        Continues from the step after the gate.
+        Uses _parallel_levels so review_a/review_b run concurrently.
         If gate_decision contains edited prompts, they replace the originals
         so downstream steps (review agents) see the user-edited versions.
         """
         if "prompts" in gate_decision:
             all_outputs["prompts"] = gate_decision["prompts"]
         all_outputs.update(gate_decision)
-        topo_order = self._topological_sort()
 
+        self._update_step_status(gate_step_id, "completed")
+
+        levels = self._parallel_levels()
+        step_outputs: dict[str, dict] = {}
         past_gate = False
-        for step_id in topo_order:
-            if step_id == gate_step_id:
-                self._update_step_status(step_id, "completed")
+
+        for level in levels:
+            if gate_step_id in level:
                 past_gate = True
                 continue
             if not past_gate:
                 continue
 
-            step_def = self.steps[step_id]
-            step_type = step_def["type"]
-            step_config = step_def.get("config", {})
-
-            try:
-                executor_cls = get_executor_class(step_type)
-                enriched_config = {**step_config, "_step_id": step_id}
-                enriched_inst = {**instance_config, "_instance_id": self.instance_id}
-                executor = executor_cls(step_config=enriched_config, instance_config=enriched_inst)
-                result = executor.execute(all_outputs)
-            except Exception as e:
-                self._update_step_status(step_id, "failed", error=str(e))
-                return {"status": "failed", "outputs": all_outputs, "error": str(e)}
-
-            if not result.success:
-                self._update_step_status(step_id, "failed", error=result.error)
-                return {"status": "failed", "outputs": all_outputs, "error": result.error}
-
-            if result.awaiting_gate:
-                self._update_step_status(step_id, "awaiting_gate")
-                return {
-                    "status": "awaiting_gate",
-                    "outputs": all_outputs,
-                    "gate_step_id": step_id,
-                    "gate_payload": result.gate_payload,
-                }
-
-            all_outputs.update(result.outputs)
-            self._update_step_status(step_id, "completed")
-            self._save_step_outputs(step_id, result.outputs)
-
-            for artifact in result.artifacts:
-                self._save_artifact(step_id, artifact)
+            if len(level) == 1:
+                result = self._execute_single_step(
+                    level[0], step_outputs, all_outputs, instance_config
+                )
+                if result is not None:
+                    return result
+            else:
+                result = self._execute_parallel_steps(
+                    level, step_outputs, all_outputs, instance_config
+                )
+                if result is not None:
+                    return result
 
         return {"status": "completed", "outputs": all_outputs}
 
