@@ -9,6 +9,9 @@ venv/
 
 # Database
 pr_explorer.db
+pr_explorer.db-shm
+pr_explorer.db-wal
+pr_explorer.db-journal
 
 # IDE
 .idea/
