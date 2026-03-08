@@ -26,12 +26,31 @@ class HumanGateExecutor(StepExecutor):
         return self._execute_review_gate(inputs)
 
     def _execute_prompt_gate(self, inputs: dict) -> StepResult:
+        experts = inputs.get("experts", [])
+        prompts = inputs.get("prompts", [])
+        prs = inputs.get("prs", [])
+
+        expert_source = "unknown"
+        for e in experts:
+            if e.get("relevance_pct", 0) == 100.0 and not e.get("matched_files"):
+                expert_source = "ai_generated"
+                break
+            if e.get("matched_files"):
+                expert_source = "static_match"
+                break
+
+        unique_domains = sorted({p.get("domain", "") for p in prompts if p.get("domain")})
+
         gate_payload = {
             "type": "prompt_review",
-            "prompts": inputs.get("prompts", []),
-            "experts": inputs.get("experts", []),
+            "prompts": prompts,
+            "experts": experts,
             "mode": inputs.get("mode", ""),
-            "pr_count": len(inputs.get("prs", [])),
+            "pr_count": len(prs),
+            "expert_source": expert_source,
+            "domain_count": len(unique_domains),
+            "domains_list": unique_domains,
+            "prompts_per_pr": len(prompts) // max(len(prs), 1),
         }
 
         return StepResult(

@@ -50,6 +50,10 @@ function PromptReviewGate({ instance, gateOutputs, onBack }: {
   }>
   const mode = payload.mode as string | undefined
 
+  const expertSource = payload.expert_source as string | undefined
+  const domainCount = (payload.domain_count ?? 0) as number
+  const promptsPerPr = (payload.prompts_per_pr ?? 0) as number
+
   const [editedPrompts, setEditedPrompts] = useState(initialPrompts.map(p => ({ ...p, enabled: true, editedText: p.prompt ?? '' })))
   const [submitting, setSubmitting] = useState(false)
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
@@ -101,7 +105,7 @@ function PromptReviewGate({ instance, gateOutputs, onBack }: {
           <span className="mx-gate-view__stat-label">Enabled</span>
         </div>
         <div className="mx-gate-view__stat">
-          <span className="mx-gate-view__stat-value">{experts.length}</span>
+          <span className="mx-gate-view__stat-value">{domainCount || experts.length}</span>
           <span className="mx-gate-view__stat-label">Expert Domains</span>
         </div>
         {mode && (
@@ -110,7 +114,28 @@ function PromptReviewGate({ instance, gateOutputs, onBack }: {
             <span className="mx-gate-view__stat-label">Mode</span>
           </div>
         )}
+        <div className="mx-gate-view__stat">
+          <span className="mx-gate-view__stat-value">
+            <Badge variant={expertSource === 'ai_generated' ? 'success' : expertSource === 'static_match' ? 'warning' : 'neutral'} size="sm">
+              {expertSource === 'ai_generated' ? 'AI Generated' : expertSource === 'static_match' ? 'Static Match' : 'Unknown'}
+            </Badge>
+          </span>
+          <span className="mx-gate-view__stat-label">Expert Source</span>
+        </div>
+        {promptsPerPr > 0 && (
+          <div className="mx-gate-view__stat">
+            <span className="mx-gate-view__stat-value">{promptsPerPr}</span>
+            <span className="mx-gate-view__stat-label">Prompts / PR</span>
+          </div>
+        )}
       </div>
+
+      {domainCount <= 1 && mode && mode !== 'team-review' && (
+        <div style={{ padding: '10px 14px', background: 'rgba(255, 170, 0, 0.1)', border: '1px solid rgba(255, 170, 0, 0.3)', borderRadius: '6px', marginBottom: '12px', fontSize: '13px' }}>
+          <strong>Warning:</strong> Only {domainCount || 1} expert domain was selected. For {mode}, 2-4 diverse domains produce better adversarial coverage.
+          {expertSource !== 'ai_generated' && ' AI expert generation may have failed — check server logs.'}
+        </div>
+      )}
 
       {experts.length > 0 && (
         <div className="mx-gate-view__section" style={{ marginBottom: '16px' }}>
