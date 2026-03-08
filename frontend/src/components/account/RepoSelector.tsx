@@ -32,6 +32,8 @@ export function RepoSelector() {
   // Load repos when account changes
   useEffect(() => {
     if (selectedAccount) {
+      setSelectedRepo(null)
+      setRepoSearch('')
       loadRepos()
     } else {
       setRepos([])

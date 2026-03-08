@@ -21,6 +21,7 @@ export function useSettingsPersistence() {
 
   const filters = useFilterStore()
   const restoredRef = useRef(false)
+  const accountRestoredRef = useRef(false)
   const pendingSettingsRef = useRef<any>(null)
 
   // Phase 1: Fetch saved settings on mount
@@ -39,7 +40,8 @@ export function useSettingsPersistence() {
 
   // Phase 2: Once accounts load, restore selected account
   useEffect(() => {
-    if (restoredRef.current || accountsLoading || accounts.length === 0) return
+    if (accountRestoredRef.current || accountsLoading || accounts.length === 0) return
+    accountRestoredRef.current = true
     const saved = pendingSettingsRef.current
     if (!saved?.selectedAccountLogin) {
       restoredRef.current = true
@@ -74,7 +76,6 @@ export function useSettingsPersistence() {
     )
     if (repo) {
       setSelectedRepo(repo)
-      // Restore filters after repo selection so PRList re-fetches with them
       setTimeout(() => {
         if (saved.filters) {
           filters.restoreFilters(saved.filters)
