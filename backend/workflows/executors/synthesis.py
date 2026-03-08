@@ -32,6 +32,8 @@ class SynthesisExecutor(StepExecutor):
         reviews = inputs.get("reviews", [])
         mode = inputs.get("mode", "team-review")
         prs = inputs.get("prs", [])
+        self._human_feedback = [fb for fb in inputs.get("human_feedback", [])
+                                if fb.get("retry_target") == "synth"]
         completed = [r for r in reviews if r.get("status") == "completed"]
 
         if not completed:
@@ -432,6 +434,16 @@ class SynthesisExecutor(StepExecutor):
         md_b = review_b.get("content_md", "")
         sections.append(f"## Review A ({agent_a_name}) — Full Content\n\n{md_a[:8000]}")
         sections.append(f"## Review B ({agent_b_name}) — Full Content\n\n{md_b[:8000]}")
+
+        fb = getattr(self, "_human_feedback", [])
+        if fb:
+            latest = fb[-1]
+            sections.append(
+                f"## Human Reviewer Feedback (iteration {latest.get('iteration', '?')})\n"
+                f"The human reviewer has requested reconsideration with this guidance:\n"
+                f"> {latest['feedback']}\n"
+                f"You MUST address this feedback in your synthesis.\n"
+            )
 
         sections.append(
             "\n## Your Task\n\n"

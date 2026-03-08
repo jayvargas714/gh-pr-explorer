@@ -21,6 +21,29 @@ logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL = 5
 
+
+def _get_relevant_feedback(inputs: dict, my_step_id: str) -> list[dict]:
+    """Return only feedback entries whose retry_target matches this step."""
+    return [fb for fb in inputs.get("human_feedback", [])
+            if fb.get("retry_target") == my_step_id]
+
+
+def _format_feedback_prompt_section(feedback: list[dict]) -> str:
+    """Build a prompt section from human feedback history."""
+    if not feedback:
+        return ""
+    lines = ["\n## Human Feedback"]
+    latest = feedback[-1]
+    lines.append(f"The reviewer provided this guidance (iteration {latest.get('iteration', '?')}):")
+    lines.append(f"> {latest['feedback']}")
+    lines.append("You MUST adjust your selection to address this feedback.")
+    if len(feedback) > 1:
+        lines.append("\nPrevious feedback (already addressed in prior iterations):")
+        for fb in feedback[:-1]:
+            lines.append(f"- (iteration {fb.get('iteration', '?')}): {fb['feedback']}")
+    lines.append("")
+    return "\n".join(lines)
+
 EXPERT_GENERATION_PROMPT = """\
 You are selecting expert reviewers for a code review. Analyze the changed files and diff below, then generate 2-5 expert domains that are ACTUALLY relevant to this codebase and these changes.
 
@@ -30,6 +53,19 @@ You are selecting expert reviewers for a code review. Analyze the changed files 
 ## Diff Sample (first 3000 lines)
 {diff_sample}
 
+## Risk Assessment (evaluate BEFORE selecting experts)
+Scan the diff for structural risk signals. When present, include a meta-expert whose persona and checklist target that specific risk. Meta-experts compete for the same 2-5 slots as domain experts — prioritize by actual danger over domain coverage.
+
+Risk signals to look for:
+- Heavy branching, complex conditionals, boundary math → Edge Case & Boundary Condition Analyst
+- Concurrent, async, threaded code, shared mutable state → Concurrency Safety Reviewer
+- Non-trivial algorithms, data structures, perf-critical paths → Algorithm Correctness & Complexity Reviewer
+- State machines, workflow transitions, multi-phase orchestration → State Transition Integrity Analyst
+- Auth, input validation, trust boundaries, secrets handling → Security Boundary Analyst
+- Deep error recovery, retry logic, fallback chains → Failure Mode & Recovery Reviewer
+
+A meta-expert's persona, checklist, and anti_patterns must reference the SPECIFIC risk patterns found in the diff — not generic boilerplate. If no significant risk signals exist, use all slots for domain experts.
+
 ## Rules
 - Select 2-5 expert domains based on PR scale (<=300 lines: 2, 301-1500: 3-4, >1500: 4-5)
 - Each domain must be relevant to the ACTUAL languages, frameworks, and patterns in the diff
@@ -38,7 +74,7 @@ You are selecting expert reviewers for a code review. Analyze the changed files 
 - If the repo uses React+TypeScript, create a "React Frontend" expert, not a "Go Backend" expert
 - Think about the DOMAIN PURPOSE of the code, not just the language — if the code constructs prompts for AI agents, include a "Prompt Engineering & AI Integration" expert; if it orchestrates LLM calls, include an "LLM Orchestration" expert; if it manages CI/CD pipelines, include a "DevOps" expert
 - Consider cross-cutting concerns: security, observability, data integrity, prompt quality, UX coherence
-
+{human_feedback_section}
 ## Output Format
 You MUST output valid JSON and nothing else. No markdown, no explanation, just the JSON object:
 {{"experts": [{{"domain_id": "python-flask-backend", "display_name": "Python Flask Backend", "persona": "Principal Python backend engineer specializing in Flask... (3-5 sentences)", "scope": "Flask routes, database access, error handling, API design", "checklist": ["Is error handling consistent across routes?", "Are database queries properly parameterized?"], "anti_patterns": ["Bare except clauses swallowing errors", "SQL injection via string formatting"]}}, ...]}}\
@@ -60,7 +96,7 @@ class ExpertSelectExecutor(StepExecutor):
         if full_repo == "scala-computing/scala":
             return self._static_domain_match_flow(prs, owner, repo)
 
-        return self._ai_expert_generation_flow(prs, owner, repo, full_repo)
+        return self._ai_expert_generation_flow(prs, owner, repo, full_repo, inputs)
 
     # ------------------------------------------------------------------ #
     #  Path A: static domain matching (scala-computing/scala only)
@@ -148,14 +184,20 @@ class ExpertSelectExecutor(StepExecutor):
     # ------------------------------------------------------------------ #
 
     def _ai_expert_generation_flow(self, prs: list, owner: str, repo: str,
-                                   full_repo: str) -> StepResult:
+                                   full_repo: str,
+                                   inputs: dict | None = None) -> StepResult:
         from backend.database import get_workflow_db
         db = get_workflow_db()
 
-        cached = db.list_expert_domains(active_only=True, repo=full_repo)
-        if cached:
-            logger.info(f"Using {len(cached)} cached AI-generated domains for {full_repo}")
-            return self._build_result_from_domains(cached, prs, owner, repo)
+        feedback = _get_relevant_feedback(inputs or {}, "experts")
+        if not feedback:
+            cached = db.list_expert_domains(active_only=True, repo=full_repo)
+            if cached:
+                logger.info(f"Using {len(cached)} cached AI-generated domains for {full_repo}")
+                return self._build_result_from_domains(cached, prs, owner, repo)
+        else:
+            logger.info(f"Human feedback present (iteration {feedback[-1].get('iteration', '?')}), "
+                        f"bypassing expert cache for {full_repo}")
 
         all_files: list[str] = []
         all_diff_lines: list[str] = []
@@ -177,7 +219,7 @@ class ExpertSelectExecutor(StepExecutor):
         all_files = sorted(set(all_files))
         diff_sample = "\n".join(all_diff_lines[:3000])
 
-        prompt = self._build_expert_generation_prompt(all_files, diff_sample)
+        prompt = self._build_expert_generation_prompt(all_files, diff_sample, feedback)
 
         ai_experts = self._dispatch_ai_agent(prompt, owner, repo)
 
@@ -191,11 +233,14 @@ class ExpertSelectExecutor(StepExecutor):
         logger.warning(f"AI expert generation failed for {full_repo}, falling back to static matching")
         return self._fallback_static_match(prs, owner, repo, total_lines)
 
-    def _build_expert_generation_prompt(self, files: list[str], diff_sample: str) -> str:
+    def _build_expert_generation_prompt(self, files: list[str], diff_sample: str,
+                                        feedback: list[dict] | None = None) -> str:
         file_list = "\n".join(f"- {f}" for f in files) if files else "(no files detected)"
+        fb_section = _format_feedback_prompt_section(feedback) if feedback else ""
         return EXPERT_GENERATION_PROMPT.format(
             file_list=file_list,
             diff_sample=diff_sample or "(no diff available)",
+            human_feedback_section=fb_section,
         )
 
     def _dispatch_ai_agent(self, prompt: str, owner: str, repo: str) -> list[dict] | None:

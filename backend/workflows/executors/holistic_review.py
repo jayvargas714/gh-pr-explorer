@@ -35,6 +35,8 @@ class HolisticReviewExecutor(StepExecutor):
         mode = inputs.get("mode", "")
         inst_id = self.instance_config.get("_instance_id", 0)
         step_id = self.step_config.get("_step_id", "")
+        self._human_feedback = [fb for fb in inputs.get("human_feedback", [])
+                                if fb.get("retry_target") == "synth"]
 
         prompt = self._build_holistic_prompt(synthesis, reviews, experts, prs, owner, repo)
 
@@ -226,6 +228,16 @@ class HolisticReviewExecutor(StepExecutor):
             sections.append("## SYNTH Findings (from Tier 1)")
             for f in synth_findings:
                 sections.append(f"- [{f.get('severity', '?')}] {f.get('title', 'untitled')}: {f.get('description', '')[:200]}")
+
+        fb = getattr(self, "_human_feedback", [])
+        if fb:
+            latest = fb[-1]
+            sections.append(
+                f"## Human Reviewer Feedback (iteration {latest.get('iteration', '?')})\n"
+                f"The human reviewer has requested reconsideration with this guidance:\n"
+                f"> {latest['feedback']}\n"
+                f"You MUST address this feedback in your holistic analysis.\n"
+            )
 
         sections.append(
             "\n## Your Task\n\n"

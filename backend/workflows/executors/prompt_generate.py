@@ -34,6 +34,7 @@ class PromptGenerateExecutor(StepExecutor):
         owner = inputs.get("owner", "")
         repo = inputs.get("repo", "")
         experts = inputs.get("experts", [])
+        self._human_feedback = self._collect_feedback(inputs)
 
         if not prs:
             return StepResult(success=False, error="No PRs to generate prompts for")
@@ -102,6 +103,30 @@ class PromptGenerateExecutor(StepExecutor):
             entry["domain_display_name"] = domain_display_name
         return entry
 
+    @staticmethod
+    def _collect_feedback(inputs: dict) -> list[dict]:
+        """Gather human feedback relevant to prompt generation (targets 'experts' or 'prompt')."""
+        all_fb = inputs.get("human_feedback", [])
+        return [fb for fb in all_fb if fb.get("retry_target") in ("experts", "prompt")]
+
+    def _feedback_section(self) -> str:
+        """Build a prompt section from human feedback if present."""
+        fb = getattr(self, "_human_feedback", [])
+        if not fb:
+            return ""
+        latest = fb[-1]
+        lines = [
+            "## Human Reviewer Guidance",
+            f"The human reviewer provided this direction (iteration {latest.get('iteration', '?')}):",
+            f"> {latest['feedback']}",
+            "Incorporate this guidance into your review focus and priorities.",
+        ]
+        if len(fb) > 1:
+            lines.append("\nPrior guidance (already addressed):")
+            for entry in fb[:-1]:
+                lines.append(f"- (iteration {entry.get('iteration', '?')}): {entry['feedback']}")
+        return "\n".join(lines)
+
     # --- Prompt builders ---
 
     def _build_team_prompt(self, pr: dict, dominant_domain: Optional[dict],
@@ -118,6 +143,9 @@ class PromptGenerateExecutor(StepExecutor):
         else:
             sections.append(self._generic_persona())
 
+        fb = self._feedback_section()
+        if fb:
+            sections.append(fb)
         sections.append(self._depth_expectations_section(pr))
         sections.append(self._cross_file_analysis_section())
         sections.append(self._diff_ingestion_section(pr))
@@ -136,6 +164,9 @@ class PromptGenerateExecutor(StepExecutor):
         sections.append(self._checklist_section(expert))
         sections.append(self._anti_patterns_section(expert))
         sections.append(self._cross_cutting_section(expert, all_experts))
+        fb = self._feedback_section()
+        if fb:
+            sections.append(fb)
         sections.append(self._depth_expectations_section(pr))
         sections.append(self._cross_file_analysis_section())
         sections.append(self._diff_ingestion_section(pr))
