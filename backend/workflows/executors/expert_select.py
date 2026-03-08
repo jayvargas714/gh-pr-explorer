@@ -293,14 +293,14 @@ class ExpertSelectExecutor(StepExecutor):
         if inst_id and step_id:
             _clear_live_output(inst_id, step_id)
 
-        agent.cleanup(handle)
-
         if status != AgentStatus.COMPLETED:
             artifact = agent.get_output(handle)
+            agent.cleanup(handle)
             logger.error(f"Expert generation agent failed: {artifact.error}")
             return None
 
         artifact = agent.get_output(handle)
+        agent.cleanup(handle)
         raw = artifact.content_md
         if not raw:
             logger.error("Expert generation agent returned empty content_md")
