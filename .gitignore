@@ -25,5 +25,8 @@ frontend/dist/
 frontend/.env
 frontend/.vite/
 
+# Generated review files
+reviews/
+
 # Logs
 gh-pr-explorer.log

@@ -10,7 +10,7 @@ interface ParsedReview {
 
 interface ReviewComparisonProps {
   artifacts: WorkflowArtifact[]
-  synthesisArtifact?: WorkflowArtifact
+  synthesisData?: Record<string, unknown> | null
 }
 
 function parseContent(artifact: WorkflowArtifact): ParsedReview | null {
@@ -45,7 +45,7 @@ function ReviewColumn({ label, review }: { label: string; review: ParsedReview }
   )
 }
 
-export function ReviewComparison({ artifacts, synthesisArtifact }: ReviewComparisonProps) {
+export function ReviewComparison({ artifacts, synthesisData }: ReviewComparisonProps) {
   const reviewArtifacts = artifacts.filter(
     (a) => a.artifact_type === 'review' || a.artifact_type === 'review_json'
   )
@@ -57,14 +57,9 @@ export function ReviewComparison({ artifacts, synthesisArtifact }: ReviewCompari
   const reviewA = parseContent(reviewArtifacts[0])
   const reviewB = parseContent(reviewArtifacts[1])
 
-  let synthData: ParsedReview | null = null
-  if (synthesisArtifact) {
-    synthData = parseContent(synthesisArtifact)
-  }
-
-  const agreed = synthData ? ((synthData as Record<string, unknown>).agreed ?? []) as Array<Record<string, unknown>> : []
-  const aOnly = synthData ? (((synthData as Record<string, unknown>).a_only ?? (synthData as Record<string, unknown>)['A-ONLY'] ?? []) as Array<Record<string, unknown>>) : []
-  const bOnly = synthData ? (((synthData as Record<string, unknown>).b_only ?? (synthData as Record<string, unknown>)['B-ONLY'] ?? []) as Array<Record<string, unknown>>) : []
+  const agreed = synthesisData ? (synthesisData.agreed ?? []) as Array<Record<string, unknown>> : []
+  const aOnly = synthesisData ? ((synthesisData.a_only ?? synthesisData['A-ONLY'] ?? []) as Array<Record<string, unknown>>) : []
+  const bOnly = synthesisData ? ((synthesisData.b_only ?? synthesisData['B-ONLY'] ?? []) as Array<Record<string, unknown>>) : []
 
   return (
     <div className="mx-review-cmp">
@@ -73,7 +68,7 @@ export function ReviewComparison({ artifacts, synthesisArtifact }: ReviewCompari
         <ReviewColumn label="Agent B" review={reviewB ?? { findings: [] }} />
       </div>
 
-      {synthData && (agreed.length > 0 || aOnly.length > 0 || bOnly.length > 0) && (
+      {synthesisData && (agreed.length > 0 || aOnly.length > 0 || bOnly.length > 0) && (
         <div className="mx-review-cmp__synthesis-summary">
           <h5>Synthesis Classification</h5>
           <div className="mx-review-cmp__class-grid">

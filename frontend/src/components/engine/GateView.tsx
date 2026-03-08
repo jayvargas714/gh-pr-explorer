@@ -6,17 +6,13 @@ import { ReviewComparison } from './ReviewComparison'
 import { PublishPreview } from './PublishPreview'
 import { FindingCard } from './FindingCard'
 import { useWorkflowEngineStore } from '../../stores/useWorkflowEngineStore'
-import type { WorkflowInstance, WorkflowArtifact } from '../../api/workflow-engine'
+import type { WorkflowInstance } from '../../api/workflow-engine'
 
 type GateTab = 'overview' | 'comparison' | 'publish' | 'freshness' | 'synthesis_log' | 'questions' | 'domains'
 
 interface GateViewProps {
   instance: WorkflowInstance
   onBack: () => void
-}
-
-interface ParsedContent {
-  [key: string]: unknown
 }
 
 const VERDICT_VARIANT: Record<string, 'success' | 'warning' | 'error' | 'info' | 'neutral'> = {
@@ -26,14 +22,6 @@ const VERDICT_VARIANT: Record<string, 'success' | 'warning' | 'error' | 'info' |
   COMMENT: 'info',
 }
 
-function parseContent(artifact: WorkflowArtifact): ParsedContent | null {
-  const raw = artifact.content_json
-  if (!raw) return null
-  if (typeof raw === 'string') {
-    try { return JSON.parse(raw) } catch { return null }
-  }
-  return raw as ParsedContent
-}
 
 function PromptReviewGate({ instance, gateOutputs, onBack }: {
   instance: WorkflowInstance
@@ -224,56 +212,58 @@ export function GateView({ instance, onBack }: GateViewProps) {
   const artifacts = inst.artifacts ?? []
   const steps = inst.steps ?? []
 
-  const synthArtifact = artifacts.find((a) => a.artifact_type === 'synthesis')
-  const synthContent = synthArtifact ? parseContent(synthArtifact) : null
-
-  const freshnessArtifact = artifacts.find(
-    (a) => a.artifact_type === 'freshness' || a.step_id.includes('freshness')
-  )
-  const freshnessContent = freshnessArtifact ? parseContent(freshnessArtifact) : null
-  const freshnessChecks = (freshnessContent?.checks ?? freshnessContent?.results ?? []) as Array<{
-    pr_number?: number; classification?: string; review_sha?: string; current_sha?: string
-    affected_findings?: string[]; recommendation?: string
-  }>
-
   const reviewArtifacts = artifacts.filter(
     (a) => a.artifact_type === 'review' || a.artifact_type === 'review_json'
   )
 
-  const gateStep = steps.find((s) => s.step_type === 'human_gate')
-  const isResolved = gateStep?.status === 'completed'
+  const activeGateStep = steps.find((s) => s.step_type === 'human_gate' && s.status === 'awaiting_gate')
+    ?? [...steps].reverse().find((s) => s.step_type === 'human_gate')
+  const isResolved = activeGateStep?.status === 'completed'
 
   const gateOutputs = (() => {
-    if (!gateStep?.outputs_json) return null
+    if (!activeGateStep?.outputs_json) return null
     try {
-      const raw = gateStep.outputs_json
+      const raw = activeGateStep.outputs_json
       return typeof raw === 'string' ? JSON.parse(raw) : raw
     } catch { return null }
-  })()
+  })() as Record<string, unknown> | null
 
   const gatePayload = (gateOutputs?.gate_payload ?? gateOutputs ?? {}) as Record<string, unknown>
-  const gateType = gatePayload?.type as string | undefined
+  const gateType = (gatePayload?.type ?? gateOutputs?.type) as string | undefined
 
   if (gateType === 'prompt_review' && !isResolved) {
-    return <PromptReviewGate instance={inst} gateOutputs={gateOutputs} onBack={onBack} />
+    return <PromptReviewGate instance={inst} gateOutputs={gateOutputs!} onBack={onBack} />
   }
 
-  const verdict = synthContent?.verdict as string | undefined
-  const agreed = (synthContent?.agreed ?? []) as Array<Record<string, unknown>>
-  const aOnly = ((synthContent?.a_only ?? synthContent?.['A-ONLY'] ?? []) as Array<Record<string, unknown>>)
-  const bOnly = ((synthContent?.b_only ?? synthContent?.['B-ONLY'] ?? []) as Array<Record<string, unknown>>)
+  const synthData = (gateOutputs?.synthesis ?? {}) as Record<string, unknown>
+  const holisticData = (gateOutputs?.holistic ?? {}) as Record<string, unknown>
+
+  const verdict = (holisticData.verdict ?? synthData.verdict) as string | undefined
+  const agreed = (synthData.agreed ?? []) as Array<Record<string, unknown>>
+  const aOnly = ((synthData.a_only ?? synthData['A-ONLY'] ?? []) as Array<Record<string, unknown>>)
+  const bOnly = ((synthData.b_only ?? synthData['B-ONLY'] ?? []) as Array<Record<string, unknown>>)
   const totalFindings = agreed.length + aOnly.length + bOnly.length
   const agreementRate = totalFindings > 0 ? Math.round((agreed.length / totalFindings) * 100) : 0
 
-  const synthesisLog = (gateOutputs?.synthesis_log ?? synthContent?.synthesis_log ?? []) as Array<{
+  const synthesisLog = (gateOutputs?.synthesis_log ?? synthData.synthesis_log ?? []) as Array<{
     type?: string; finding_source?: string; agent?: string; finding?: Record<string, unknown>
     resolution?: string; evidence?: string
   }>
-  const questions = (gateOutputs?.questions ?? synthContent?.questions ?? []) as string[]
-  const perDomainSynthesis = (gateOutputs?.per_domain_synthesis ?? synthContent?.per_domain_synthesis ?? []) as Array<{
+  const questions = (gateOutputs?.questions ?? synthData.questions ?? []) as string[]
+  const perDomainSynthesis = (gateOutputs?.per_domain_synthesis ?? synthData.per_domain_synthesis ?? []) as Array<{
     domain?: string; verdict?: string; total_findings?: number; agent_a?: string; agent_b?: string
     agreed?: Array<Record<string, unknown>>; a_only?: Array<Record<string, unknown>>; b_only?: Array<Record<string, unknown>>
   }>
+
+  const freshnessChecks = (gateOutputs?.freshness ?? []) as Array<{
+    pr_number?: number; classification?: string; review_sha?: string; current_sha?: string
+    affected_findings?: string[]; recommendation?: string
+  }>
+
+  const blockingFindings = (holisticData.blocking_findings ?? []) as Array<Record<string, unknown>>
+  const nonBlockingFindings = (holisticData.non_blocking_findings ?? []) as Array<Record<string, unknown>>
+  const crossCuttingFindings = (holisticData.cross_cutting_findings ?? []) as Array<{ title?: string; domains?: string[]; description?: string; origin?: string }>
+  const holisticSummary = holisticData.summary as string | undefined
 
   const handleApprove = async () => {
     setSubmitting(true)
@@ -292,12 +282,12 @@ export function GateView({ instance, onBack }: GateViewProps) {
 
   const tabs: { id: GateTab; label: string; show: boolean }[] = [
     { id: 'overview', label: 'Overview', show: true },
+    { id: 'domains', label: `Domains (${perDomainSynthesis.length})`, show: perDomainSynthesis.length > 0 },
     { id: 'comparison', label: 'Comparison', show: true },
     { id: 'synthesis_log', label: `Synthesis Log (${synthesisLog.length})`, show: synthesisLog.length > 0 },
     { id: 'questions', label: `Questions (${questions.length})`, show: questions.length > 0 },
-    { id: 'domains', label: `Domains (${perDomainSynthesis.length})`, show: perDomainSynthesis.length > 0 },
     { id: 'publish', label: 'Publish Preview', show: true },
-    { id: 'freshness', label: 'Freshness', show: true },
+    { id: 'freshness', label: 'Freshness', show: freshnessChecks.length > 0 },
   ]
 
   return (
@@ -318,12 +308,16 @@ export function GateView({ instance, onBack }: GateViewProps) {
           <span className="mx-gate-view__stat-label">Verdict</span>
         </div>
         <div className="mx-gate-view__stat">
-          <span className="mx-gate-view__stat-value mx-gate-view__stat-value--agreed">{agreed.length}</span>
-          <span className="mx-gate-view__stat-label">Agreed</span>
+          <span className="mx-gate-view__stat-value mx-gate-view__stat-value--disputed">{blockingFindings.length}</span>
+          <span className="mx-gate-view__stat-label">Blocking</span>
         </div>
         <div className="mx-gate-view__stat">
-          <span className="mx-gate-view__stat-value mx-gate-view__stat-value--disputed">{aOnly.length + bOnly.length}</span>
-          <span className="mx-gate-view__stat-label">Disputed</span>
+          <span className="mx-gate-view__stat-value">{nonBlockingFindings.length}</span>
+          <span className="mx-gate-view__stat-label">Non-Blocking</span>
+        </div>
+        <div className="mx-gate-view__stat">
+          <span className="mx-gate-view__stat-value mx-gate-view__stat-value--agreed">{agreed.length}</span>
+          <span className="mx-gate-view__stat-label">Agreed</span>
         </div>
         <div className="mx-gate-view__stat">
           <span className="mx-gate-view__stat-value">{totalFindings}</span>
@@ -350,10 +344,57 @@ export function GateView({ instance, onBack }: GateViewProps) {
       <div className="mx-gate-view__body">
         {tab === 'overview' && (
           <div className="mx-gate-view__overview">
-            {Boolean(synthContent?.summary) && (
+            {holisticSummary && (
               <div className="mx-gate-view__section">
-                <h4>Summary</h4>
-                <p>{String(synthContent!.summary)}</p>
+                <h4>Holistic Summary</h4>
+                <p>{holisticSummary}</p>
+              </div>
+            )}
+
+            {blockingFindings.length > 0 && (
+              <div className="mx-gate-view__section">
+                <h4>
+                  <Badge variant="error" size="sm">Blocking</Badge>
+                  <span>{blockingFindings.length} findings</span>
+                </h4>
+                {blockingFindings.map((f, i) => (
+                  <FindingCard key={i} finding={f as Record<string, unknown> & { title?: string; severity?: string; location?: { file?: string; start_line?: number; end_line?: number; raw?: string }; problem?: string; fix?: string }} />
+                ))}
+              </div>
+            )}
+
+            {nonBlockingFindings.length > 0 && (
+              <div className="mx-gate-view__section">
+                <h4>
+                  <Badge variant="warning" size="sm">Non-Blocking</Badge>
+                  <span>{nonBlockingFindings.length} findings</span>
+                </h4>
+                {nonBlockingFindings.map((f, i) => (
+                  <FindingCard key={i} finding={f as Record<string, unknown> & { title?: string; severity?: string; location?: { file?: string; start_line?: number; end_line?: number; raw?: string }; problem?: string; fix?: string }} />
+                ))}
+              </div>
+            )}
+
+            {crossCuttingFindings.length > 0 && (
+              <div className="mx-gate-view__section">
+                <h4>
+                  <Badge variant="info" size="sm">Cross-Cutting</Badge>
+                  <span>{crossCuttingFindings.length} findings</span>
+                </h4>
+                {crossCuttingFindings.map((cc, i) => (
+                  <div key={i} className="mx-gate-view__log-entry" style={{ padding: '8px 12px' }}>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <strong>{cc.title}</strong>
+                      {cc.origin && <Badge variant="neutral" size="sm">{cc.origin}</Badge>}
+                    </div>
+                    {cc.domains && cc.domains.length > 0 && (
+                      <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+                        {cc.domains.map((d) => <Badge key={d} variant="info" size="sm">{d}</Badge>)}
+                      </div>
+                    )}
+                    {cc.description && <p style={{ margin: '4px 0 0', fontSize: '13px', opacity: 0.85 }}>{cc.description}</p>}
+                  </div>
+                ))}
               </div>
             )}
 
@@ -393,14 +434,14 @@ export function GateView({ instance, onBack }: GateViewProps) {
               </div>
             )}
 
-            {totalFindings === 0 && !synthContent?.summary && (
+            {totalFindings === 0 && !holisticSummary && (
               <p className="mx-gate-view__empty">No synthesis data available yet.</p>
             )}
           </div>
         )}
 
         {tab === 'comparison' && (
-          <ReviewComparison artifacts={reviewArtifacts} synthesisArtifact={synthArtifact} />
+          <ReviewComparison artifacts={reviewArtifacts} synthesisData={synthData} />
         )}
 
         {tab === 'synthesis_log' && (

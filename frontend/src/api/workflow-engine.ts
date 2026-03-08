@@ -128,6 +128,14 @@ export async function getStepLiveOutput(instanceId: number, stepId: string): Pro
   return res.output
 }
 
+export async function retryStep(instanceId: number, stepId: string): Promise<{ ok: boolean; status: string }> {
+  return api.post(`/workflows/instances/${instanceId}/steps/${stepId}/retry`, {})
+}
+
+export function getStepDownloadUrl(instanceId: number, stepId: string, format: 'md' | 'json' = 'md'): string {
+  return `/api/workflows/instances/${instanceId}/steps/${stepId}/download?format=${format}`
+}
+
 // --- Expert Domains ---
 
 export interface ExpertDomain {

@@ -200,7 +200,12 @@ function SynthesisView({ content }: { content: ParsedContent }) {
   const crossCuttingFlags = (content.cross_cutting_flags ?? []) as string[]
   const falsePositivesDropped = (content.false_positives_dropped ?? []) as Array<{ title?: string; reason?: string }>
   const synthesisLog = (content.synthesis_log ?? []) as Array<{ finding?: string; action?: string; reasoning?: string }>
-  const perDomainSynthesis = content.per_domain_synthesis as Record<string, Record<string, unknown>> | undefined
+  const rawPerDomain = content.per_domain_synthesis
+  const perDomainList: Array<Record<string, unknown>> = Array.isArray(rawPerDomain)
+    ? rawPerDomain as Array<Record<string, unknown>>
+    : rawPerDomain && typeof rawPerDomain === 'object'
+      ? Object.values(rawPerDomain as Record<string, Record<string, unknown>>)
+      : []
   const questions = (content.questions ?? []) as string[]
   const [showLog, setShowLog] = useState(false)
 
@@ -252,20 +257,33 @@ function SynthesisView({ content }: { content: ParsedContent }) {
         </div>
       )}
 
-      {perDomainSynthesis && Object.keys(perDomainSynthesis).length > 0 && (
+      {perDomainList.length > 0 && (
         <div className="mx-step-content__class-section">
-          <h5>Per-Domain Synthesis</h5>
-          {Object.entries(perDomainSynthesis).map(([domain, ds]) => (
-            <div key={domain} className="mx-step-content__pr-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <Badge variant="info" size="sm">{domain}</Badge>
-                <Badge variant={(ds as Record<string, unknown>).verdict === 'APPROVE' ? 'success' : 'warning'} size="sm">
-                  {String((ds as Record<string, unknown>).verdict ?? 'COMMENT')}
-                </Badge>
-                <span>{String((ds as Record<string, unknown>).total_findings ?? 0)} findings</span>
+          <h5>Per-Domain Synthesis ({perDomainList.length} domains)</h5>
+          {perDomainList.map((ds, i) => {
+            const domain = String(ds.domain ?? `Domain ${i + 1}`)
+            const domainVerdict = String(ds.verdict ?? 'COMMENT')
+            const totalFindings = Number(ds.total_findings ?? 0)
+            const agreedCount = Array.isArray(ds.agreed) ? (ds.agreed as unknown[]).length : 0
+            const aOnlyCount = Array.isArray(ds.a_only) ? (ds.a_only as unknown[]).length : 0
+            const bOnlyCount = Array.isArray(ds.b_only) ? (ds.b_only as unknown[]).length : 0
+            return (
+              <div key={i} className="mx-step-content__pr-item" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <Badge variant="info" size="sm">{domain}</Badge>
+                  <Badge variant={domainVerdict === 'APPROVE' ? 'success' : domainVerdict === 'CHANGES_REQUESTED' ? 'error' : 'warning'} size="sm">
+                    {domainVerdict}
+                  </Badge>
+                  <span style={{ fontSize: '12px', opacity: 0.7 }}>
+                    {totalFindings} findings ({agreedCount} agreed, {aOnlyCount} A-only, {bOnlyCount} B-only)
+                  </span>
+                </div>
+                {ds.agent_a ? (
+                  <span style={{ fontSize: '11px', opacity: 0.5 }}>A: {String(ds.agent_a)} / B: {String(ds.agent_b ?? '?')}</span>
+                ) : null}
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -957,8 +975,18 @@ export function StepContentViewer({ step, artifacts, instanceId }: StepContentVi
     let parsed: ParsedContent | null = null
     if (typeof outputsRaw === 'string') {
       try { parsed = JSON.parse(outputsRaw) } catch { parsed = null }
+    } else if (typeof outputsRaw === 'object') {
+      parsed = outputsRaw as ParsedContent
     }
     if (parsed) {
+      const WRAPPER_KEYS: Record<string, string> = {
+        synthesis: 'synthesis',
+        holistic_review: 'holistic',
+      }
+      const wrapperKey = WRAPPER_KEYS[step.step_type]
+      if (wrapperKey && parsed[wrapperKey] && typeof parsed[wrapperKey] === 'object') {
+        parsed = parsed[wrapperKey] as ParsedContent
+      }
       return (
         <div className="mx-step-content">
           <Viewer content={parsed} step={step} />

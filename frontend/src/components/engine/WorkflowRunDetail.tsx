@@ -4,7 +4,8 @@ import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
 import { StepContentViewer } from './StepContentViewer'
 import { useWorkflowEngineStore } from '../../stores/useWorkflowEngineStore'
-import type { WorkflowInstance, WorkflowStep } from '../../api/workflow-engine'
+import { retryStep, getStepDownloadUrl } from '../../api/workflow-engine'
+import type { WorkflowInstance } from '../../api/workflow-engine'
 
 const STATUS_VARIANT: Record<string, 'success' | 'warning' | 'error' | 'info' | 'neutral'> = {
   completed: 'success',
@@ -58,7 +59,7 @@ function formatDuration(start?: string, end?: string): string {
 
 export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunDetailProps) {
   const { selectedInstance, fetchInstance, loading } = useWorkflowEngineStore()
-  const [selectedStep, setSelectedStep] = useState<WorkflowStep | null>(null)
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
 
   const inst = selectedInstance ?? instance
 
@@ -68,7 +69,7 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
 
   useEffect(() => {
     if (inst.status === 'running' || inst.status === 'awaiting_gate') {
-      const iv = setInterval(() => fetchInstance(inst.id), 5000)
+      const iv = setInterval(() => fetchInstance(inst.id), 3000)
       return () => clearInterval(iv)
     }
   }, [inst.id, inst.status, fetchInstance])
@@ -77,13 +78,14 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
   const artifacts = inst.artifacts ?? []
   const completedCount = steps.filter((s) => s.status === 'completed').length
   const hasGate = steps.some((s) => s.step_type === 'human_gate' && s.status === 'awaiting_gate')
+  const selectedStep = steps.find((s) => s.step_id === selectedStepId) ?? null
 
   useEffect(() => {
-    if (!selectedStep && steps.length > 0) {
+    if (!selectedStepId && steps.length > 0) {
       const active = steps.find((s) => s.status === 'running' || s.status === 'awaiting_gate')
-      setSelectedStep(active ?? steps[steps.length - 1])
+      setSelectedStepId((active ?? steps[steps.length - 1]).step_id)
     }
-  }, [steps, selectedStep])
+  }, [steps, selectedStepId])
 
   if (loading && !selectedInstance) {
     return <div className="mx-run-detail__loading"><Spinner /></div>
@@ -132,7 +134,7 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
               <button
                 key={step.step_id}
                 className={`mx-run-detail__step ${isActive ? 'mx-run-detail__step--active' : ''}`}
-                onClick={() => setSelectedStep(step)}
+                onClick={() => setSelectedStepId(step.step_id)}
               >
                 <div className={`mx-run-detail__step-indicator mx-run-detail__step-indicator--${step.status}`}>
                   {isRunning && <span className="mx-run-detail__step-pulse" />}
@@ -169,6 +171,37 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
                 <Badge variant={STATUS_VARIANT[selectedStep.status] ?? 'neutral'} size="sm">
                   {selectedStep.status}
                 </Badge>
+                {selectedStep.status === 'completed' && (
+                  <>
+                    <a
+                      href={getStepDownloadUrl(inst.id, selectedStep.step_id, 'md')}
+                      download
+                      style={{ textDecoration: 'none' }}
+                    >
+                      <Button variant="ghost" size="sm">↓ .md</Button>
+                    </a>
+                    <a
+                      href={getStepDownloadUrl(inst.id, selectedStep.step_id, 'json')}
+                      download
+                      style={{ textDecoration: 'none' }}
+                    >
+                      <Button variant="ghost" size="sm">↓ .json</Button>
+                    </a>
+                  </>
+                )}
+                {(selectedStep.status === 'completed' || selectedStep.status === 'failed') && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={async () => {
+                      if (!confirm(`Retry from "${selectedStep.step_id}"? This will re-run this step and all downstream steps.`)) return
+                      await retryStep(inst.id, selectedStep.step_id)
+                      fetchInstance(inst.id)
+                    }}
+                  >
+                    ↻ Retry from here
+                  </Button>
+                )}
               </div>
               <div className="mx-run-detail__content-body">
                 <StepContentViewer step={selectedStep} artifacts={artifacts} instanceId={inst.id} />
