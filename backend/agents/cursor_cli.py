@@ -81,8 +81,6 @@ class _ProcessState:
                 try:
                     msg = json.loads(raw_line)
                 except json.JSONDecodeError:
-                    with self._lock:
-                        self._live_lines.append(raw_line + "\n")
                     continue
                 if not isinstance(msg, dict):
                     continue
