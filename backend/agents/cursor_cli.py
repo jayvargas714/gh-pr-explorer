@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from backend.agents.base import AgentBackend, AgentHandle, AgentStatus, ReviewArtifact
+from backend.agents.pid_tracker import register_pid, unregister_pid
 from backend.config import get_reviews_dir
 from backend.services.review_schema import (
     markdown_to_json, validate_review_json, json_to_markdown, SCHEMA_VERSION,
@@ -56,6 +57,7 @@ class _ProcessState:
         self._stderr_lines: list[str] = []
         self._result_text: Optional[str] = None
         self._lock = threading.Lock()
+        self._last_cum_len = 0
         self._stdout_thread = threading.Thread(target=self._read_stream_json, daemon=True)
         self._stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
         self._stdout_thread.start()
@@ -65,14 +67,16 @@ class _ProcessState:
         """Parse stream-json stdout, extracting text deltas for live display.
 
         Each ``assistant`` message from ``--stream-partial-output`` is
-        *cumulative* — it contains all content blocks produced so far.
-        We replace ``_live_lines`` with the latest message's content
-        to avoid duplication.
+        *cumulative* within a turn.  We track the cumulative length and
+        only append the delta so the live display shows a continuous
+        stream across multiple turns rather than replacing on each update.
         """
         try:
             for raw_line in self.process.stdout:
                 raw_line = raw_line.strip()
                 if not raw_line:
+                    continue
+                if not isinstance(raw_line, str):
                     continue
                 try:
                     msg = json.loads(raw_line)
@@ -80,23 +84,36 @@ class _ProcessState:
                     with self._lock:
                         self._live_lines.append(raw_line + "\n")
                     continue
+                if not isinstance(msg, dict):
+                    continue
                 msg_type = msg.get("type", "")
                 if msg_type == "assistant":
                     content = msg.get("message", {}).get("content", [])
-                    new_lines: list[str] = []
+                    parts: list[str] = []
                     for block in content:
+                        if not isinstance(block, dict):
+                            continue
                         if block.get("type") == "text":
                             text = block.get("text", "")
                             if text:
-                                new_lines.append(text)
+                                parts.append(text)
                         elif block.get("type") == "tool_use":
                             tool_name = block.get("name", "tool")
-                            new_lines.append(f"\n[Using tool: {tool_name}]\n")
-                    if new_lines:
+                            parts.append(f"\n[Using tool: {tool_name}]\n")
+                    full = "".join(parts)
+                    cum_len = len(full)
+                    if cum_len < self._last_cum_len:
+                        self._last_cum_len = 0
+                    if cum_len > self._last_cum_len:
+                        delta = full[self._last_cum_len:]
                         with self._lock:
-                            self._live_lines = new_lines
+                            self._live_lines.append(delta)
+                            if len(self._live_lines) > 500:
+                                self._live_lines = self._live_lines[-300:]
+                        self._last_cum_len = cum_len
                 elif msg_type == "result":
-                    self._result_text = msg.get("result", "")
+                    with self._lock:
+                        self._result_text = msg.get("result", "")
         except (ValueError, OSError):
             pass
 
@@ -195,6 +212,14 @@ class CursorCLIAgent(AgentBackend):
         handle_id = str(uuid.uuid4())
         self._processes[handle_id] = _ProcessState(process, str(review_file), json_file)
 
+        register_pid(
+            process.pid,
+            instance_id=context.get("instance_id"),
+            step_id=context.get("step_id"),
+            agent_name=self.name,
+            domain=context.get("domain"),
+        )
+
         logger.info(
             f"CursorCLI: started PID {process.pid} for {owner}/{repo}#{pr_number} "
             f"(handle={handle_id[:8]}, model={self.model or 'default'})"
@@ -230,6 +255,7 @@ class CursorCLIAgent(AgentBackend):
         state = self._processes.pop(handle.handle_id, None)
         if state is None:
             return
+        unregister_pid(state.process.pid)
         for pipe in (state.process.stdout, state.process.stderr):
             try:
                 if pipe and not pipe.closed:

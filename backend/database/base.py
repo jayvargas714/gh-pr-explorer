@@ -458,6 +458,19 @@ class Database:
             """)
 
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS active_agent_pids (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    instance_id INTEGER,
+                    step_id TEXT,
+                    pid INTEGER NOT NULL,
+                    agent_name TEXT,
+                    domain TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (instance_id) REFERENCES workflow_instances(id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_code_owner_registry_reviewer
                 ON code_owner_registry(is_reviewer)
             """)

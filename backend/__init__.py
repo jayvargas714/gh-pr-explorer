@@ -32,7 +32,15 @@ def _seed_workflow_data():
 
 
 def _recover_orphaned_steps():
-    """Mark any steps/instances left 'running' by a prior server as failed."""
+    """Kill leftover agent processes and mark orphaned steps as failed."""
+    try:
+        from backend.agents.pid_tracker import kill_all_tracked
+        killed = kill_all_tracked()
+        if killed:
+            logger.info(f"Killed {killed} orphaned agent process(es) from prior server")
+    except Exception as e:
+        logger.error(f"Failed to kill orphaned agent processes: {e}")
+
     try:
         from backend.database import get_workflow_db
         db = get_workflow_db()

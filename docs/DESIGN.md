@@ -465,6 +465,7 @@ The Review Workflows tab provides a UI for composable code review pipelines impl
 | `claude_cli.py` | `ClaudeCLIAgent` — wraps subprocess calls to `claude` CLI with live output streaming. `cancel()` terminates subprocess and calls `cleanup()` to close pipes and remove `_processes` entries |
 | `openai_api.py` | `OpenAIAgent` — OpenAI chat completions via `httpx` |
 | `cursor_cli.py` | `CursorCLIAgent` — wraps `agent` CLI with stream-json live output. `cancel()` terminates subprocess and calls `cleanup()` |
+| `pid_tracker.py` | Persists active agent subprocess PIDs to `active_agent_pids` table. `register_pid()` on start, `unregister_pid()` on cleanup, `kill_all_tracked()` on server boot to SIGTERM orphaned processes |
 | `registry.py` | `get_agent(name)`, `list_agents()`, agent type registry |
 
 **Workflows** (`backend/workflows/`):
@@ -2765,7 +2766,7 @@ The formal JSON Schema specification is available at `backend/services/review_sc
 6. **Review Stats Sampling**: Reviews fetched for a configurable number of PRs (default 250, set via `review_sample_limit` in config.json)
 7. **Claude CLI Required**: Code review feature requires Claude CLI installed and authenticated
 8. **One Review Per PR**: Cannot run multiple concurrent reviews for the same PR
-9. **Active Review Volatility**: In-progress reviews lost if server restarts mid-review (completed reviews are persisted)
+9. **Active Review Volatility**: In-progress reviews lost if server restarts mid-review (completed reviews are persisted). On restart, orphaned agent subprocesses are automatically killed via `pid_tracker.kill_all_tracked()` and their workflow steps marked as failed with a retry prompt
 10. **Fixed Review Output Path**: Reviews always written to hardcoded directory
 11. **Score Extraction Heuristic**: Score parsing relies on regex patterns; unusual formats may not be detected
 12. **Migration One-Time**: Data migration from legacy JSON/markdown runs once; subsequent manual additions to old format not auto-imported

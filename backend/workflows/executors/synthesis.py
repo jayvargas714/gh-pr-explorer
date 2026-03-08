@@ -17,12 +17,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from backend.agents import get_agent, AgentStatus
 from backend.workflows.executor import StepExecutor, StepResult
-from backend.workflows.executors.agent_review import _set_live_output, _clear_live_output
+from backend.workflows.executors.agent_review import (
+    _set_live_output, _clear_live_output,
+    _agent_domain_store, _agent_domain_lock, _register_domain,
+)
 from backend.workflows.step_types import register_step
 
 logger = logging.getLogger(__name__)
 
-MAX_PARALLEL_VERIFY = 4
 
 
 @register_step("synthesis")
@@ -275,6 +277,8 @@ class SynthesisExecutor(StepExecutor):
         domain_live: dict[str, str] = {}
         domain_lock = threading.Lock()
 
+        synth_key = f"{inst_id}:{step_id}"
+
         def verify_single_domain(domain_synth: dict) -> dict:
             domain = domain_synth.get("domain", "general")
             domain_reviews = reviews_by_domain.get(domain, {})
@@ -295,16 +299,19 @@ class SynthesisExecutor(StepExecutor):
                 "phase": "synthesis", "task": "synthesis",
                 "domain": domain,
                 "instance_id": inst_id,
+                "step_id": step_id,
             }
 
             try:
                 handle = agent.start_review(prompt, context)
+                _register_domain(synth_key, domain, agent, handle, {}, agent_name)
                 if inst_id:
                     register_agent(inst_id, agent, handle)
                 elapsed = 0
                 while True:
                     if inst_id and is_cancelled(inst_id):
                         agent.cancel(handle)
+                        self._update_domain_status(synth_key, domain, "cancelled")
                         domain_synth["ai_verified"] = False
                         return domain_synth
                     status = agent.check_status(handle)
@@ -316,6 +323,9 @@ class SynthesisExecutor(StepExecutor):
                         break
                     live = agent.get_live_output(handle)
                     if live and inst_id and step_id:
+                        with _agent_domain_lock:
+                            if synth_key in _agent_domain_store and domain in _agent_domain_store[synth_key]:
+                                _agent_domain_store[synth_key][domain]["live_output"] = live
                         with domain_lock:
                             domain_live[domain] = live
                             composite = "\n\n".join(
@@ -330,20 +340,25 @@ class SynthesisExecutor(StepExecutor):
                 if status == AgentStatus.COMPLETED:
                     artifact = agent.get_output(handle)
                     agent.cleanup(handle)
-                    return self._parse_domain_verification(artifact.content_md, domain_synth)
+                    result = self._parse_domain_verification(artifact.content_md, domain_synth)
+                    self._update_domain_status(synth_key, domain, "completed",
+                                               content_md=artifact.content_md)
+                    return result
                 else:
                     agent.cleanup(handle)
                     logger.warning(f"AI verification failed for domain {domain}")
+                    self._update_domain_status(synth_key, domain, "failed",
+                                               error=f"Agent status: {status.value}")
                     domain_synth["ai_verified"] = False
                     return domain_synth
             except Exception as e:
                 logger.error(f"AI verify error for domain {domain}: {e}")
+                self._update_domain_status(synth_key, domain, "failed", error=str(e))
                 domain_synth["ai_verified"] = False
                 return domain_synth
 
         verified_domains: list[dict] = []
-        num_workers = min(len(per_domain), MAX_PARALLEL_VERIFY)
-        with ThreadPoolExecutor(max_workers=max(num_workers, 1)) as pool:
+        with ThreadPoolExecutor(max_workers=max(len(per_domain), 1)) as pool:
             futures = {pool.submit(verify_single_domain, d): d for d in per_domain}
             for future in as_completed(futures):
                 try:
@@ -355,8 +370,27 @@ class SynthesisExecutor(StepExecutor):
 
         if inst_id and step_id:
             _clear_live_output(inst_id, step_id)
+        with _agent_domain_lock:
+            _agent_domain_store.pop(synth_key, None)
 
         return self._merge_verified_domains(synthesis, verified_domains, mechanical_result)
+
+    @staticmethod
+    def _update_domain_status(key: str, domain: str, status: str, *,
+                              content_md: str | None = None,
+                              error: str | None = None):
+        with _agent_domain_lock:
+            store = _agent_domain_store.get(key, {})
+            info = store.get(domain)
+            if not info:
+                return
+            info["status"] = status
+            info["completed_at"] = time.time()
+            if content_md is not None:
+                info["result"] = {"content_md": content_md, "status": status}
+            if error:
+                info["error"] = error
+                info.setdefault("result", {})["error"] = error
 
     def _ai_verify_single(self, agent, synthesis: dict, reviews: list,
                           owner: str, repo: str, prs: list,

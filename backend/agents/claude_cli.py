@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from backend.agents.base import AgentBackend, AgentHandle, AgentStatus, ReviewArtifact
+from backend.agents.pid_tracker import register_pid, unregister_pid
 from backend.config import get_reviews_dir
 from backend.services.review_schema import (
     markdown_to_json, validate_review_json, json_to_markdown, SCHEMA_VERSION,
@@ -130,6 +131,14 @@ class ClaudeCLIAgent(AgentBackend):
         handle_id = str(uuid.uuid4())
         self._processes[handle_id] = _ProcessState(process, str(review_file), json_file)
 
+        register_pid(
+            process.pid,
+            instance_id=context.get("instance_id"),
+            step_id=context.get("step_id"),
+            agent_name=self.name,
+            domain=context.get("domain"),
+        )
+
         logger.info(
             f"ClaudeCLI: started PID {process.pid} for {owner}/{repo}#{pr_number} (handle={handle_id[:8]})"
         )
@@ -170,6 +179,7 @@ class ClaudeCLIAgent(AgentBackend):
         state = self._processes.pop(handle.handle_id, None)
         if state is None:
             return
+        unregister_pid(state.process.pid)
         for pipe in (state.process.stdout, state.process.stderr):
             try:
                 if pipe and not pipe.closed:

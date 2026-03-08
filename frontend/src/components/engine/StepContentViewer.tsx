@@ -1183,10 +1183,11 @@ export function StepContentViewer({ step, artifacts, instanceId }: StepContentVi
   }
 
   if (step.status === 'running') {
-    if (step.step_type === 'agent_review' && instanceId) {
+    const DOMAIN_TRACKED_TYPES = ['agent_review', 'synthesis']
+    if (DOMAIN_TRACKED_TYPES.includes(step.step_type) && instanceId) {
       return <AgentDomainTracker instanceId={instanceId} stepId={step.step_id} />
     }
-    const AI_STEP_TYPES = ['expert_select', 'synthesis', 'holistic_review']
+    const AI_STEP_TYPES = ['expert_select', 'holistic_review']
     if (AI_STEP_TYPES.includes(step.step_type) && instanceId) {
       return <LiveAgentOutput instanceId={instanceId} stepId={step.step_id} />
     }
