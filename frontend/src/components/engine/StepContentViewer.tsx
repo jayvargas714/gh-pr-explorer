@@ -441,9 +441,11 @@ function HumanGateView({ step }: { step: WorkflowStep }) {
     contextLine = `${promptCount} prompts from ${expertCount} expert domains ready for review`
   } else if (gateType === 'review_gate') {
     const synth = payload.synthesis ?? {}
+    const holistic = payload.holistic ?? {}
     const total = synth.total_findings ?? 0
-    const blocking = (synth.blocking ?? synth.blocking_findings ?? []).length
-    contextLine = `${total} findings, ${blocking} blocking`
+    const blocking = ((holistic as Record<string, unknown>).blocking_findings as unknown[] ?? []).length
+    const verdict = ((holistic as Record<string, unknown>).verdict ?? synth.verdict ?? '') as string
+    contextLine = `${verdict ? verdict + ' — ' : ''}${total} findings, ${blocking} blocking`
   }
 
   return (
