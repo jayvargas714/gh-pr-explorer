@@ -4,7 +4,7 @@ import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
 import { StepContentViewer } from './StepContentViewer'
 import { useWorkflowEngineStore } from '../../stores/useWorkflowEngineStore'
-import { retryStep, getStepDownloadUrl } from '../../api/workflow-engine'
+import { retryStep, getStepDownloadUrl, getInstanceFeedback, clearInstanceFeedback } from '../../api/workflow-engine'
 import type { WorkflowInstance } from '../../api/workflow-engine'
 
 const STATUS_VARIANT: Record<string, 'success' | 'warning' | 'error' | 'info' | 'neutral'> = {
@@ -203,17 +203,7 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
                   </>
                 )}
                 {(selectedStep.status === 'completed' || selectedStep.status === 'failed') && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={async () => {
-                      if (!confirm(`Retry from "${selectedStep.step_id}"? This will re-run this step and all downstream steps.`)) return
-                      await retryStep(inst.id, selectedStep.step_id)
-                      fetchInstance(inst.id)
-                    }}
-                  >
-                    ↻ Retry from here
-                  </Button>
+                  <RetryButton instanceId={inst.id} stepId={selectedStep.step_id} onRetried={() => fetchInstance(inst.id)} />
                 )}
               </div>
               <div className="mx-run-detail__content-body">
@@ -225,6 +215,59 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+
+function RetryButton({ instanceId, stepId, onRetried }: { instanceId: number; stepId: string; onRetried: () => void }) {
+  const [hasFeedback, setHasFeedback] = useState(false)
+  const [feedbackText, setFeedbackText] = useState('')
+  const checked = useRef(false)
+
+  useEffect(() => {
+    if (checked.current) return
+    checked.current = true
+    getInstanceFeedback(instanceId).then(({ human_feedback }) => {
+      const relevant = human_feedback.filter((fb) => fb.retry_target === stepId)
+      if (relevant.length > 0) {
+        setHasFeedback(true)
+        setFeedbackText(relevant.map((fb) => fb.feedback).join('; '))
+      }
+    }).catch(() => {})
+  }, [instanceId, stepId])
+
+  const handleRetry = async (clearFb: boolean) => {
+    const msg = clearFb
+      ? `Retry from "${stepId}" and clear stale feedback? This will re-run this step and all downstream steps.`
+      : `Retry from "${stepId}"? This will re-run this step and all downstream steps.`
+    if (!confirm(msg)) return
+    await retryStep(instanceId, stepId, clearFb)
+    onRetried()
+  }
+
+  const handleClearOnly = async () => {
+    await clearInstanceFeedback(instanceId)
+    setHasFeedback(false)
+    setFeedbackText('')
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      {hasFeedback && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} title={`Stale feedback: "${feedbackText}"`}>
+          <Badge variant="warning" size="sm">has feedback</Badge>
+          <Button variant="ghost" size="sm" onClick={() => handleRetry(true)}>
+            ↻ Retry (clear feedback)
+          </Button>
+          <Button variant="ghost" size="sm" onClick={handleClearOnly} title="Clear stale feedback without retrying">
+            ✕
+          </Button>
+        </div>
+      )}
+      <Button variant="ghost" size="sm" onClick={() => handleRetry(false)}>
+        ↻ Retry from here
+      </Button>
     </div>
   )
 }

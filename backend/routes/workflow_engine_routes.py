@@ -358,14 +358,21 @@ def retry_step(instance_id, step_id):
     if not template_data:
         return jsonify({"error": "Template not found"}), 500
 
+    data = request.get_json(silent=True) or {}
+    clear_feedback = data.get("clear_feedback", False)
+    if clear_feedback:
+        _clear_feedback_for_step(db, instance_id, instance, step_id, template_data["template"])
+
     lock = _get_instance_lock(instance_id)
     if not lock.acquire(blocking=False):
         return jsonify({"error": "Another operation is already running for this instance"}), 409
     db.update_instance_status(instance_id, "running")
 
+    refreshed = db.get_instance(instance_id) or instance
+
     def _guarded_retry():
         try:
-            _retry_from_step(instance_id, template_data["template"], instance, step_id)
+            _retry_from_step(instance_id, template_data["template"], refreshed, step_id)
         finally:
             lock.release()
 
@@ -373,6 +380,34 @@ def retry_step(instance_id, step_id):
     thread.start()
 
     return jsonify({"ok": True, "status": "running", "retrying_from": step_id})
+
+
+@workflow_engine_bp.route(
+    "/api/workflows/instances/<int:instance_id>/feedback", methods=["GET"]
+)
+def get_instance_feedback(instance_id):
+    """Return current human feedback entries for this instance."""
+    db = get_workflow_db()
+    instance = db.get_instance(instance_id)
+    if not instance:
+        return jsonify({"error": "Instance not found"}), 404
+    config = json.loads(instance.get("config_json") or "{}")
+    return jsonify({"human_feedback": config.get("human_feedback", [])})
+
+
+@workflow_engine_bp.route(
+    "/api/workflows/instances/<int:instance_id>/feedback", methods=["DELETE"]
+)
+def clear_instance_feedback(instance_id):
+    """Clear all human feedback from this instance's config."""
+    db = get_workflow_db()
+    instance = db.get_instance(instance_id)
+    if not instance:
+        return jsonify({"error": "Instance not found"}), 404
+    config = json.loads(instance.get("config_json") or "{}")
+    removed = config.pop("human_feedback", [])
+    db.update_instance_config(instance_id, config)
+    return jsonify({"ok": True, "removed_count": len(removed)})
 
 
 @workflow_engine_bp.route(
@@ -582,6 +617,25 @@ def _resume_workflow(instance_id: int, template: dict, instance: dict, gate_deci
         cancel_clear(instance_id)
 
 
+def _clear_feedback_for_step(db, instance_id: int, instance: dict,
+                             step_id: str, template: dict):
+    """Remove human_feedback entries whose retry_target is the retried step or downstream."""
+    config = json.loads(instance.get("config_json") or "{}")
+    fb_list = config.get("human_feedback", [])
+    if not fb_list:
+        return
+    runtime = WorkflowRuntime(template, instance_id, db_accessor=db)
+    downstream = runtime._get_downstream_inclusive(step_id)
+    kept = [fb for fb in fb_list if fb.get("retry_target") not in downstream]
+    if len(kept) < len(fb_list):
+        logger.info(f"Cleared {len(fb_list) - len(kept)} stale feedback entries for retry from {step_id}")
+        if kept:
+            config["human_feedback"] = kept
+        else:
+            config.pop("human_feedback", None)
+        db.update_instance_config(instance_id, config)
+
+
 def _retry_from_step(instance_id: int, template: dict, instance: dict, step_id: str):
     import backend.workflows.executors  # noqa: F401
     from backend.workflows.cancellation import clear as cancel_clear
@@ -603,8 +657,11 @@ def _retry_from_step(instance_id: int, template: dict, instance: dict, step_id: 
                     pass
 
         config = json.loads(instance.get("config_json") or "{}")
-        if "human_feedback" in config:
-            all_outputs["human_feedback"] = config["human_feedback"]
+        fb_list = config.get("human_feedback", [])
+        if fb_list:
+            relevant_fb = [fb for fb in fb_list if fb.get("retry_target") not in downstream]
+            if relevant_fb:
+                all_outputs["human_feedback"] = relevant_fb
 
         result = runtime.retry_from_step(
             retry_step_id=step_id,

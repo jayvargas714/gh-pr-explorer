@@ -57,7 +57,7 @@ class _ProcessState:
         self._stderr_lines: list[str] = []
         self._result_text: Optional[str] = None
         self._lock = threading.Lock()
-        self._last_cum_len = 0
+        self._last_full: str = ""
         self._stdout_thread = threading.Thread(target=self._read_stream_json, daemon=True)
         self._stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
         self._stdout_thread.start()
@@ -101,16 +101,18 @@ class _ProcessState:
                             tool_name = block.get("name", "tool")
                             parts.append(f"\n[Using tool: {tool_name}]\n")
                     full = "".join(parts)
-                    cum_len = len(full)
-                    if cum_len < self._last_cum_len:
-                        self._last_cum_len = 0
-                    if cum_len > self._last_cum_len:
-                        delta = full[self._last_cum_len:]
-                        with self._lock:
-                            self._live_lines.append(delta)
-                            if len(self._live_lines) > 500:
-                                self._live_lines = self._live_lines[-300:]
-                        self._last_cum_len = cum_len
+                    if full != self._last_full:
+                        prefix_len = 0
+                        min_len = min(len(full), len(self._last_full))
+                        while prefix_len < min_len and full[prefix_len] == self._last_full[prefix_len]:
+                            prefix_len += 1
+                        new_text = full[prefix_len:]
+                        if new_text:
+                            with self._lock:
+                                self._live_lines.append(new_text)
+                                if len(self._live_lines) > 500:
+                                    self._live_lines = self._live_lines[-300:]
+                        self._last_full = full
                 elif msg_type == "result":
                     with self._lock:
                         self._result_text = msg.get("result", "")

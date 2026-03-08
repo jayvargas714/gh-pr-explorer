@@ -141,8 +141,16 @@ export async function getStepLiveOutput(instanceId: number, stepId: string): Pro
   return res.output
 }
 
-export async function retryStep(instanceId: number, stepId: string): Promise<{ ok: boolean; status: string }> {
-  return api.post(`/workflows/instances/${instanceId}/steps/${stepId}/retry`, {})
+export async function retryStep(instanceId: number, stepId: string, clearFeedback = false): Promise<{ ok: boolean; status: string }> {
+  return api.post(`/workflows/instances/${instanceId}/steps/${stepId}/retry`, { clear_feedback: clearFeedback })
+}
+
+export async function getInstanceFeedback(instanceId: number): Promise<{ human_feedback: Array<{ gate_step_id: string; retry_target: string; feedback: string; iteration: number }> }> {
+  return api.get(`/workflows/instances/${instanceId}/feedback`)
+}
+
+export async function clearInstanceFeedback(instanceId: number): Promise<{ ok: boolean }> {
+  return api.delete(`/workflows/instances/${instanceId}/feedback`)
 }
 
 export function getStepDownloadUrl(instanceId: number, stepId: string, format: 'md' | 'json' = 'md'): string {
