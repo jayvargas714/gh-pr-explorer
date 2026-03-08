@@ -513,7 +513,7 @@ function FreshnessView({ content }: { content: ParsedContent }) {
   )
 }
 
-function HumanGateView({ step }: { step: WorkflowStep }) {
+function HumanGateView({ step, instanceId }: { step: WorkflowStep; instanceId?: number }) {
   const statusLabel = step.status === 'awaiting_gate' ? 'Awaiting human decision' : step.status
   const gateOutputs = parseOutputs(step.outputs_json) as Record<string, unknown> | null
   const gatePayload = (gateOutputs?.gate_payload ?? gateOutputs) as Record<string, unknown> | null
@@ -538,6 +538,10 @@ function HumanGateView({ step }: { step: WorkflowStep }) {
     contextLine = `${verdict ? verdict + ' — ' : ''}${total} findings, ${blocking} blocking`
   }
 
+  if (step.status === 'completed' && gateType === 'review_gate') {
+    return <CompletedReviewGateView payload={payload} instanceId={instanceId} />
+  }
+
   return (
     <div className="mx-step-content__gate">
       <Badge variant={step.status === 'awaiting_gate' ? 'warning' : step.status === 'completed' ? 'success' : 'neutral'}>
@@ -550,6 +554,151 @@ function HumanGateView({ step }: { step: WorkflowStep }) {
       {step.status === 'completed' && <p>Gate has been resolved.</p>}
     </div>
   )
+}
+
+function CompletedReviewGateView({ payload, instanceId }: { payload: Record<string, unknown>; instanceId?: number }) {
+  const synth = (payload.synthesis ?? {}) as Record<string, unknown>
+  const holistic = (payload.holistic ?? {}) as Record<string, unknown>
+  const verdict = (holistic.verdict ?? synth.verdict ?? 'COMMENT') as string
+  const summary = (holistic.summary ?? '') as string
+  const blocking = (holistic.blocking_findings ?? []) as Array<Record<string, unknown>>
+  const nonBlocking = (holistic.non_blocking_findings ?? []) as Array<Record<string, unknown>>
+  const crossCutting = (holistic.cross_cutting_findings ?? []) as Array<{ title?: string; domains?: string[]; description?: string; origin?: string }>
+  const agreed = (synth.agreed ?? []) as Array<Record<string, unknown>>
+  const aOnly = ((synth.a_only ?? synth['A-ONLY'] ?? []) as Array<Record<string, unknown>>)
+  const bOnly = ((synth.b_only ?? synth['B-ONLY'] ?? []) as Array<Record<string, unknown>>)
+  const domains = (holistic.domain_coverage ?? []) as string[]
+  const totalFindings = agreed.length + aOnly.length + bOnly.length
+  const reviews = (payload.reviews ?? []) as Array<Record<string, unknown>>
+  const confidence = holistic.confidence as string | undefined
+
+  const markdown = buildFinalReviewMarkdown({
+    verdict, summary, blocking, nonBlocking, crossCutting,
+    agreed, aOnly, bOnly, domains, totalFindings, reviews, confidence,
+  })
+
+  const handleDownload = (format: 'md' | 'json') => {
+    const blob = format === 'md'
+      ? new Blob([markdown], { type: 'text/markdown' })
+      : new Blob([JSON.stringify({ holistic, synthesis: synth }, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `review${instanceId ? `-run-${instanceId}` : ''}.${format}`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div className="mx-step-content__gate">
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+        <Badge variant="success">Approved</Badge>
+        <Badge variant={verdict === 'APPROVE' ? 'success' : verdict === 'REQUEST_CHANGES' ? 'error' : 'warning'}>
+          {verdict}
+        </Badge>
+        {confidence && <Badge variant="neutral" size="sm">{confidence} confidence</Badge>}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+          <Button variant="primary" size="sm" onClick={() => handleDownload('md')}>
+            Download .md
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => handleDownload('json')}>
+            Download .json
+          </Button>
+        </div>
+      </div>
+      <div className="mx-step-content__review-markdown">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+      </div>
+    </div>
+  )
+}
+
+function buildFinalReviewMarkdown(data: {
+  verdict: string; summary: string
+  blocking: Array<Record<string, unknown>>; nonBlocking: Array<Record<string, unknown>>
+  crossCutting: Array<{ title?: string; domains?: string[]; description?: string; origin?: string }>
+  agreed: Array<Record<string, unknown>>; aOnly: Array<Record<string, unknown>>; bOnly: Array<Record<string, unknown>>
+  domains: string[]; totalFindings: number
+  reviews: Array<Record<string, unknown>>; confidence?: string
+}): string {
+  const { verdict, summary, blocking, nonBlocking, crossCutting, agreed, aOnly, bOnly, domains, totalFindings, reviews, confidence } = data
+  const lines: string[] = []
+  lines.push(`# Adversarial Code Review — ${verdict}\n`)
+  if (confidence) lines.push(`**Confidence:** ${confidence}\n`)
+  if (summary) lines.push(`${summary}\n`)
+  lines.push(`**${totalFindings}** findings across **${domains.length}** domains | **${blocking.length}** blocking | **${agreed.length}** agreed by both agents\n`)
+  lines.push(`---\n`)
+
+  if (blocking.length > 0) {
+    lines.push(`## Blocking Findings (${blocking.length})\n`)
+    blocking.forEach((f, i) => {
+      const title = (f.title ?? 'Untitled') as string
+      const severity = (f.severity ?? '') as string
+      const domain = (f.domain ?? '') as string
+      const desc = (f.description ?? f.problem ?? '') as string
+      lines.push(`### ${i + 1}. [${severity}] ${title}${domain ? ` _(${domain})_` : ''}\n`)
+      if (desc) lines.push(`${desc}\n`)
+      const loc = f.location as Record<string, unknown> | undefined
+      if (loc?.file) lines.push(`**File:** \`${loc.file}\`${loc.start_line ? `:${loc.start_line}` : ''}\n`)
+      const fix = (f.fix ?? f.suggestion ?? '') as string
+      if (fix) lines.push(`**Fix:** ${fix}\n`)
+    })
+  }
+
+  if (nonBlocking.length > 0) {
+    lines.push(`## Non-Blocking Findings (${nonBlocking.length})\n`)
+    nonBlocking.forEach((f, i) => {
+      const title = (f.title ?? 'Untitled') as string
+      const severity = (f.severity ?? '') as string
+      const desc = (f.description ?? f.problem ?? '') as string
+      lines.push(`### ${i + 1}. [${severity}] ${title}\n`)
+      if (desc) lines.push(`${desc}\n`)
+    })
+  }
+
+  if (crossCutting.length > 0) {
+    lines.push(`## Cross-Cutting Concerns (${crossCutting.length})\n`)
+    crossCutting.forEach((cc, i) => {
+      lines.push(`${i + 1}. **${cc.title}**${cc.domains?.length ? ` _(${cc.domains.join(', ')})_` : ''}`)
+      if (cc.description) lines.push(`   ${cc.description}\n`)
+    })
+  }
+
+  if (agreed.length > 0) {
+    lines.push(`## Agreed Findings (${agreed.length})\n`)
+    agreed.forEach((f, i) => {
+      const inner = (f.finding_a ?? f.finding ?? f) as Record<string, unknown>
+      const title = (inner.title ?? 'Untitled') as string
+      const severity = (inner.severity ?? '') as string
+      lines.push(`${i + 1}. **[${severity}]** ${title}`)
+    })
+    lines.push('')
+  }
+
+  if (aOnly.length > 0) {
+    lines.push(`## Agent A Only (${aOnly.length})\n`)
+    aOnly.forEach((f, i) => {
+      const inner = (f.finding_a ?? f.finding ?? f) as Record<string, unknown>
+      const title = (inner.title ?? 'Untitled') as string
+      const severity = (inner.severity ?? '') as string
+      lines.push(`${i + 1}. **[${severity}]** ${title}`)
+    })
+    lines.push('')
+  }
+
+  if (bOnly.length > 0) {
+    lines.push(`## Agent B Only (${bOnly.length})\n`)
+    bOnly.forEach((f, i) => {
+      const inner = (f.finding_b ?? f.finding ?? f) as Record<string, unknown>
+      const title = (inner.title ?? 'Untitled') as string
+      const severity = (inner.severity ?? '') as string
+      lines.push(`${i + 1}. **[${severity}]** ${title}`)
+    })
+    lines.push('')
+  }
+
+  lines.push(`---\n_Generated by adversarial review (${reviews.length} expert reviews across ${domains.length} domains)_`)
+  return lines.join('\n')
 }
 
 function PublishView({ content }: { content: ParsedContent }) {
@@ -885,14 +1034,14 @@ function FollowupActionView({ content }: { content: ParsedContent }) {
   )
 }
 
-const VIEWERS: Record<string, React.FC<{ content: ParsedContent; step: WorkflowStep }>> = {
+const VIEWERS: Record<string, React.FC<{ content: ParsedContent; step: WorkflowStep; instanceId?: number }>> = {
   pr_select: ({ content }) => <PRSelectView content={content} />,
   prioritize: ({ content }) => <PrioritizeView content={content} />,
   prompt_generate: ({ content }) => <PromptView content={content} />,
   agent_review: ({ content }) => <ReviewView content={content} />,
   synthesis: ({ content }) => <SynthesisView content={content} />,
   freshness_check: ({ content }) => <FreshnessView content={content} />,
-  human_gate: ({ step }) => <HumanGateView step={step} />,
+  human_gate: ({ step, instanceId }) => <HumanGateView step={step} instanceId={instanceId} />,
   publish: ({ content }) => <PublishView content={content} />,
   expert_select: ({ content }) => <ExpertSelectView content={content} />,
   holistic_review: ({ content }) => <HolisticView content={content} />,
@@ -959,6 +1108,22 @@ function AgentDomainTracker({ instanceId, stepId }: { instanceId: number; stepId
               instanceId={instanceId}
               stepId={stepId}
             />
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  if (domainSections.length > 1) {
+    return (
+      <div className="mx-step-content__live">
+        <div className="mx-step-content__live-header">
+          <Spinner size="sm" />
+          <span>Agents working ({domainSections.length} domains)</span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+          {domainSections.map((sec) => (
+            <DomainLiveFallbackCard key={sec.domain} domain={sec.domain} content={sec.content} />
           ))}
         </div>
       </div>
@@ -1155,6 +1320,34 @@ function DomainLiveSection({ domain, content }: { domain: string; content: strin
   )
 }
 
+function DomainLiveFallbackCard({ domain, content }: { domain: string; content: string }) {
+  const [open, setOpen] = useState(true)
+  const ref = useRef<HTMLPreElement>(null)
+  useEffect(() => {
+    if (ref.current && open) ref.current.scrollTop = ref.current.scrollHeight
+  }, [content, open])
+
+  return (
+    <div style={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, overflow: 'hidden' }}>
+      <div
+        onClick={() => setOpen(!open)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+          cursor: 'pointer', background: 'rgba(255,255,255,0.03)',
+        }}
+      >
+        <span>{open ? '\u25BC' : '\u25B6'}</span>
+        <Badge variant="info" size="sm">running</Badge>
+        <Badge variant="info" size="sm">{domain}</Badge>
+        <Spinner size="sm" />
+      </div>
+      {open && (
+        <pre ref={ref} className="mx-step-content__live-terminal" style={{ maxHeight: 300 }}>{content}</pre>
+      )}
+    </div>
+  )
+}
+
 const RUNNING_MESSAGES: Record<string, string> = {
   freshness_check: 'Checking PR freshness against current HEAD...',
   publish: 'Publishing review to GitHub...',
@@ -1203,7 +1396,7 @@ export function StepContentViewer({ step, artifacts, instanceId }: StepContentVi
   }
 
   if (step.step_type === 'human_gate') {
-    return <Viewer content={{}} step={step} />
+    return <Viewer content={{}} step={step} instanceId={instanceId} />
   }
 
   if (stepArtifacts.length > 0) {
