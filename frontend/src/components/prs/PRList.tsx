@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { usePRStore, PRReviewInfo } from '../../stores/usePRStore'
 import { useAccountStore } from '../../stores/useAccountStore'
 import { useFilterStore, getFilterParams } from '../../stores/useFilterStore'
+import { usePolling } from '../../hooks/usePolling'
 import { fetchPRs, fetchDivergence } from '../../api/prs'
 import { fetchReviewHistory } from '../../api/reviews'
 import { PRCard } from './PRCard'
@@ -9,6 +10,8 @@ import { Pagination } from '../common/Pagination'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 import { Button } from '../common/Button'
+
+const PR_POLL_INTERVAL = 60_000 // 60 seconds
 
 export function PRList() {
   const selectedRepo = useAccountStore((state) => state.selectedRepo)
@@ -30,12 +33,17 @@ export function PRList() {
     setPRReviewScores,
   } = usePRStore()
 
-  const loadPRs = useCallback(async () => {
+  // Track whether initial load has happened to distinguish user-initiated vs silent refresh
+  const hasLoadedRef = useRef(false)
+
+  const loadPRs = useCallback(async (silent = false) => {
     if (!selectedRepo) return
 
     try {
-      setLoading(true)
-      setError(null)
+      if (!silent) {
+        setLoading(true)
+        setError(null)
+      }
 
       const response = await fetchPRs(
         selectedRepo.owner.login,
@@ -43,7 +51,8 @@ export function PRList() {
         filters
       )
 
-      setPRs(response.prs)
+      // On silent refresh, preserve current page position
+      setPRs(response.prs, !silent)
 
       // Fetch divergence for open PRs
       const openPRs = response.prs.filter((pr) => pr.state === 'OPEN')
@@ -53,19 +62,35 @@ export function PRList() {
 
       // Fetch review scores for displayed PRs
       loadReviewScores()
+      hasLoadedRef.current = true
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load pull requests')
+      // Only show errors for user-initiated loads, not silent refreshes
+      if (!silent) {
+        setError(err instanceof Error ? err.message : 'Failed to load pull requests')
+      }
     } finally {
-      setLoading(false)
+      if (!silent) {
+        setLoading(false)
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRepo, filters])
 
   useEffect(() => {
     if (selectedRepo) {
+      hasLoadedRef.current = false
       loadPRs()
     }
   }, [selectedRepo, filters, loadPRs])
+
+  // Auto-refresh PR data every 60s to keep CI status, review status, etc. current
+  const silentRefresh = useCallback(() => {
+    if (hasLoadedRef.current) {
+      loadPRs(true)
+    }
+  }, [loadPRs])
+
+  usePolling(silentRefresh, PR_POLL_INTERVAL, !!selectedRepo)
 
   const loadDivergence = async (openPRs: any[]) => {
     if (!selectedRepo) return
@@ -153,7 +178,7 @@ export function PRList() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={loadPRs}
+          onClick={() => loadPRs()}
           disabled={loading}
           data-tooltip="Refresh PR list"
         >

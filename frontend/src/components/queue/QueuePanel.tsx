@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import {
   DndContext,
   closestCenter,
@@ -16,10 +16,13 @@ import {
 import { useQueueStore } from '../../stores/useQueueStore'
 import { useUIStore } from '../../stores/useUIStore'
 import { fetchMergeQueue, reorderQueue } from '../../api/queue'
+import { usePolling } from '../../hooks/usePolling'
 import { QueueItem } from './QueueItem'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 import { Button } from '../common/Button'
+
+const QUEUE_POLL_INTERVAL = 60_000 // 60 seconds
 
 export function QueuePanel() {
   const showQueuePanel = useUIStore((state) => state.showQueuePanel)
@@ -32,24 +35,43 @@ export function QueuePanel() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   )
 
+  const hasLoadedRef = useRef(false)
+
   useEffect(() => {
     if (showQueuePanel) {
+      hasLoadedRef.current = false
       loadQueue()
     }
   }, [showQueuePanel])
 
-  const loadQueue = async () => {
+  const loadQueue = async (silent = false) => {
     try {
-      setQueueLoading(true)
-      setQueueError(null)
+      if (!silent) {
+        setQueueLoading(true)
+        setQueueError(null)
+      }
       const response = await fetchMergeQueue()
       setMergeQueue(response.queue)
+      hasLoadedRef.current = true
     } catch (err) {
-      setQueueError(err instanceof Error ? err.message : 'Failed to load merge queue')
+      if (!silent) {
+        setQueueError(err instanceof Error ? err.message : 'Failed to load merge queue')
+      }
     } finally {
-      setQueueLoading(false)
+      if (!silent) {
+        setQueueLoading(false)
+      }
     }
   }
+
+  // Auto-refresh queue data every 60s to keep CI status, PR state, etc. current
+  const silentRefresh = useCallback(() => {
+    if (hasLoadedRef.current) {
+      loadQueue(true)
+    }
+  }, [])
+
+  usePolling(silentRefresh, QUEUE_POLL_INTERVAL, showQueuePanel)
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event

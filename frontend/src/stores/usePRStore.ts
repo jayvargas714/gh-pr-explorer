@@ -24,7 +24,7 @@ interface PRState {
   prReviewScores: Record<number, PRReviewInfo>
 
   // Actions
-  setPRs: (prs: PullRequest[]) => void
+  setPRs: (prs: PullRequest[], resetPage?: boolean) => void
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
   setCurrentPage: (page: number) => void
@@ -55,7 +55,7 @@ export const usePRStore = create<PRState>((set, get) => ({
   prReviewScores: {},
 
   // Actions
-  setPRs: (prs) => set({ prs, currentPage: 1 }),
+  setPRs: (prs, resetPage = true) => set(resetPage ? { prs, currentPage: 1 } : { prs }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
   setCurrentPage: (page) => set({ currentPage: page }),
