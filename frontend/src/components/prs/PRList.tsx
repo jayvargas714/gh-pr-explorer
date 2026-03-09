@@ -140,6 +140,15 @@ export function PRList() {
     }
   }
 
+  // Client-side PR number filter (must be before early returns to satisfy rules of hooks)
+  const prNumberFilter = filterState.prNumber
+  const filteredPRs = useMemo(() => {
+    if (!prNumberFilter) return prs
+    const num = parseInt(prNumberFilter, 10)
+    if (isNaN(num)) return prs
+    return prs.filter((pr) => pr.number === num)
+  }, [prs, prNumberFilter])
+
   if (loading && prs.length === 0) {
     return (
       <div className="mx-pr-list mx-pr-list--loading">
@@ -158,15 +167,6 @@ export function PRList() {
       </div>
     )
   }
-
-  // Client-side PR number filter
-  const prNumberFilter = filterState.prNumber
-  const filteredPRs = useMemo(() => {
-    if (!prNumberFilter) return prs
-    const num = parseInt(prNumberFilter, 10)
-    if (isNaN(num)) return prs
-    return prs.filter((pr) => pr.number === num)
-  }, [prs, prNumberFilter])
 
   if (prs.length === 0) {
     return (
