@@ -160,11 +160,15 @@ class WorkflowRuntime:
                 futures[future] = step_id
 
             early_exit = None
+            completed_step_ids: set[str] = set()
             for future in as_completed(futures):
                 step_id = futures[future]
                 step_type = self.steps[step_id]["type"]
 
                 if early_exit is not None:
+                    # Drain remaining futures but don't process results —
+                    # sibling was already signalled to cancel via the
+                    # cancellation registry below.
                     continue
 
                 try:
@@ -172,18 +176,14 @@ class WorkflowRuntime:
                 except Exception as e:
                     logger.error(f"Step {step_id} ({step_type}) failed: {e}")
                     self._update_step_status(step_id, "failed", error=str(e))
-                    for f, sid in futures.items():
-                        if f is not future and not f.done():
-                            f.cancel()
                     early_exit = {"status": "failed", "outputs": all_outputs, "error": str(e)}
+                    self._cancel_sibling_agents()
                     continue
 
                 if not result.success:
                     self._update_step_status(step_id, "failed", error=result.error)
-                    for f, sid in futures.items():
-                        if f is not future and not f.done():
-                            f.cancel()
                     early_exit = {"status": "failed", "outputs": all_outputs, "error": result.error}
+                    self._cancel_sibling_agents()
                     continue
 
                 if result.awaiting_gate:
@@ -193,8 +193,10 @@ class WorkflowRuntime:
                         "status": "awaiting_gate", "outputs": all_outputs,
                         "gate_step_id": step_id, "gate_payload": result.gate_payload,
                     }
+                    self._cancel_sibling_agents()
                     continue
 
+                completed_step_ids.add(step_id)
                 step_outputs[step_id] = result.outputs
                 self._merge_outputs(all_outputs, result.outputs)
                 self._update_step_status(step_id, "completed")
@@ -203,11 +205,16 @@ class WorkflowRuntime:
                 for artifact in result.artifacts:
                     self._save_artifact(step_id, artifact)
 
-        if early_exit is not None and early_exit["status"] == "failed":
-            for f, sid in futures.items():
-                if sid not in step_outputs and not f.done():
-                    self._update_step_status(sid, "cancelled",
-                                             error="Cancelled: sibling step failed")
+        if early_exit is not None:
+            # Mark sibling steps that didn't complete as cancelled
+            for sid in step_ids:
+                if sid not in completed_step_ids:
+                    db_status = self._get_step_db_status(sid)
+                    if db_status and db_status not in ("failed", "completed"):
+                        self._update_step_status(
+                            sid, "cancelled",
+                            error="Cancelled: sibling step failed",
+                        )
 
         return early_exit
 
@@ -471,6 +478,24 @@ class WorkflowRuntime:
 
     def _get_upstream(self, step_id: str) -> list[str]:
         return [e["from"] for e in self.edges if e["to"] == step_id]
+
+    def _cancel_sibling_agents(self):
+        """Signal instance cancellation so running sibling agent polls exit early."""
+        from backend.workflows.cancellation import cancel as cancel_instance
+        cancel_instance(self.instance_id)
+
+    def _get_step_db_status(self, step_id: str) -> Optional[str]:
+        """Read current step status from DB (avoids overwriting a step already marked failed)."""
+        if not self.db:
+            return None
+        try:
+            rows = self.db.get_steps(self.instance_id)
+            for row in rows:
+                if row.get("step_id") == step_id:
+                    return row.get("status")
+            return None
+        except Exception:
+            return None
 
     def _update_step_status(self, step_id: str, status: str, error: Optional[str] = None):
         if self.db:

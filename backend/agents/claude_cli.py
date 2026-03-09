@@ -48,7 +48,7 @@ _ALLOWED_TOOLS = (
 
 
 class _ProcessState:
-    """Tracks a running Claude CLI subprocess."""
+    """Tracks a running Claude CLI subprocess using stream-json for live output."""
     def __init__(self, process: subprocess.Popen, review_file: str, json_file: str):
         self.process = process
         self.review_file = review_file
@@ -57,22 +57,71 @@ class _ProcessState:
         self.stderr: Optional[str] = None
         self.exit_code: Optional[int] = None
         self._live_lines: list[str] = []
+        self._stderr_lines: list[str] = []
+        self._result_text: Optional[str] = None
         self._lock = threading.Lock()
-        self._stdout_thread = threading.Thread(target=self._read_stream,
-                                                args=(self.process.stdout,), daemon=True)
-        self._stderr_thread = threading.Thread(target=self._read_stream,
-                                                args=(self.process.stderr,), daemon=True)
+        self._last_full: str = ""
+        self._stdout_thread = threading.Thread(target=self._read_stream_json, daemon=True)
+        self._stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
         self._stdout_thread.start()
         self._stderr_thread.start()
 
-    def _read_stream(self, stream):
-        """Read from a process stream (stdout or stderr) into _live_lines."""
+    def _read_stream_json(self):
+        """Parse stream-json stdout, extracting text deltas for live display."""
         try:
-            for line in stream:
+            for raw_line in self.process.stdout:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    msg = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    with self._lock:
+                        self._live_lines.append(raw_line + "\n")
+                    continue
+                if not isinstance(msg, dict):
+                    continue
+                msg_type = msg.get("type", "")
+                if msg_type == "assistant":
+                    content = msg.get("message", {}).get("content", [])
+                    parts: list[str] = []
+                    for block in content:
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") == "text":
+                            text = block.get("text", "")
+                            if text:
+                                parts.append(text)
+                        elif block.get("type") == "tool_use":
+                            tool_name = block.get("name", "tool")
+                            parts.append(f"\n[Using tool: {tool_name}]\n")
+                    full = "".join(parts)
+                    if full != self._last_full:
+                        prefix_len = 0
+                        min_len = min(len(full), len(self._last_full))
+                        while prefix_len < min_len and full[prefix_len] == self._last_full[prefix_len]:
+                            prefix_len += 1
+                        new_text = full[prefix_len:]
+                        if new_text:
+                            with self._lock:
+                                self._live_lines.append(new_text)
+                                if len(self._live_lines) > 500:
+                                    self._live_lines = self._live_lines[-300:]
+                        self._last_full = full
+                elif msg_type == "result":
+                    with self._lock:
+                        self._result_text = msg.get("result", "")
+        except (ValueError, OSError):
+            pass
+
+    def _read_stderr(self):
+        """Capture stderr separately for error reporting."""
+        try:
+            for line in self.process.stderr:
                 with self._lock:
-                    self._live_lines.append(line)
-                    if len(self._live_lines) > 500:
-                        self._live_lines = self._live_lines[-300:]
+                    self._stderr_lines.append(line)
+                    if len(self._stderr_lines) > 200:
+                        self._stderr_lines = self._stderr_lines[-100:]
         except (ValueError, OSError):
             pass
 
@@ -80,6 +129,10 @@ class _ProcessState:
         with self._lock:
             lines = self._live_lines[-tail:]
         return "".join(lines)
+
+    def get_stderr_text(self) -> str:
+        with self._lock:
+            return "".join(self._stderr_lines[-50:])
 
 
 class ClaudeCLIAgent(AgentBackend):
@@ -118,6 +171,7 @@ class ClaudeCLIAgent(AgentBackend):
         cmd = [
             "claude",
             "-p", full_prompt,
+            "--output-format", "stream-json",
             "--allowedTools", _ALLOWED_TOOLS,
             "--dangerously-skip-permissions",
         ]
@@ -127,7 +181,8 @@ class ClaudeCLIAgent(AgentBackend):
 
         try:
             process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                start_new_session=True,
             )
         except FileNotFoundError:
             raise RuntimeError("Claude CLI not found. Ensure 'claude' is installed and in PATH.")
@@ -166,8 +221,8 @@ class ClaudeCLIAgent(AgentBackend):
 
         state._stdout_thread.join(timeout=3)
         state._stderr_thread.join(timeout=2)
-        state.stdout = state.get_live_text()
-        state.stderr = None
+        state.stdout = state._result_text or state.get_live_text()
+        state.stderr = state.get_stderr_text() or None
 
         state.exit_code = exit_code
         return AgentStatus.COMPLETED if exit_code == 0 else AgentStatus.FAILED
@@ -248,10 +303,15 @@ class ClaudeCLIAgent(AgentBackend):
         if state is None or state.exit_code is not None:
             return False
         try:
-            state.process.terminate()
+            import os, signal
+            os.killpg(os.getpgid(state.process.pid), signal.SIGTERM)
             state.process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            state.process.kill()
+        except (subprocess.TimeoutExpired, OSError):
+            try:
+                import os, signal
+                os.killpg(os.getpgid(state.process.pid), signal.SIGKILL)
+            except OSError:
+                state.process.kill()
         state.exit_code = -1
         logger.info(f"ClaudeCLI: cancelled handle {handle.handle_id[:8]}")
         self.cleanup(handle)

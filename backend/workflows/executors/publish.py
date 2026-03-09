@@ -250,6 +250,15 @@ class PublishExecutor(StepExecutor):
         verdict = synthesis.get("verdict", "COMMENT")
         comment_body = build_gh_comment(synthesis, mode, freshness)
 
+        # Auto-promote COMMENT to APPROVE when there are no blocking findings
+        if verdict == "COMMENT":
+            agreed = synthesis.get("agreed", [])
+            a_only = synthesis.get("a_only", [])
+            b_only = synthesis.get("b_only", [])
+            blocking = synthesis.get("_holistic_blocking", []) or _collect_blocking(agreed, a_only, b_only)
+            if not blocking:
+                verdict = "APPROVE"
+
         event_map = {
             "APPROVE": "APPROVE",
             "CHANGES_REQUESTED": "REQUEST_CHANGES",

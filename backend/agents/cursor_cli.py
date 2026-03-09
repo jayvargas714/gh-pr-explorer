@@ -202,7 +202,8 @@ class CursorCLIAgent(AgentBackend):
 
         try:
             process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                start_new_session=True,
             )
         except FileNotFoundError:
             raise RuntimeError(
@@ -328,10 +329,15 @@ class CursorCLIAgent(AgentBackend):
         if state is None or state.exit_code is not None:
             return False
         try:
-            state.process.terminate()
+            import os, signal
+            os.killpg(os.getpgid(state.process.pid), signal.SIGTERM)
             state.process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            state.process.kill()
+        except (subprocess.TimeoutExpired, OSError):
+            try:
+                import os, signal
+                os.killpg(os.getpgid(state.process.pid), signal.SIGKILL)
+            except OSError:
+                state.process.kill()
         state.exit_code = -1
         logger.info(f"CursorCLI: cancelled handle {handle.handle_id[:8]}")
         self.cleanup(handle)
