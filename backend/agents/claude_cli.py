@@ -172,6 +172,7 @@ class ClaudeCLIAgent(AgentBackend):
             "claude",
             "-p", full_prompt,
             "--output-format", "stream-json",
+            "--verbose",
             "--allowedTools", _ALLOWED_TOOLS,
             "--dangerously-skip-permissions",
         ]
