@@ -107,6 +107,12 @@
   gap: var(--mx-space-2);
 }
 
+.mx-filter-group__actions {
+  display: flex;
+  gap: var(--mx-space-2);
+  align-items: center;
+}
+
 .mx-filter-label {
   font-size: var(--mx-font-size-sm);
   font-weight: var(--mx-font-weight-medium);

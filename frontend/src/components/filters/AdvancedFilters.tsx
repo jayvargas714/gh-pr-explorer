@@ -1,10 +1,13 @@
+import { useState } from 'react'
 import { useFilterStore } from '../../stores/useFilterStore'
 import { Input } from '../common/Input'
 import { Select } from '../common/Select'
 import { Toggle } from '../common/Toggle'
+import { Button } from '../common/Button'
 
 export function AdvancedFilters() {
   const filters = useFilterStore()
+  const [prNumberInput, setPrNumberInput] = useState(filters.prNumber)
 
   const searchInOptions = ['title', 'body', 'comments']
 
@@ -48,12 +51,38 @@ export function AdvancedFilters() {
           label="PR Number"
           type="text"
           placeholder="e.g., 945"
-          value={filters.prNumber}
+          value={prNumberInput}
           onChange={(e) => {
-            const val = e.target.value.replace(/[^0-9]/g, '')
-            filters.setFilter('prNumber', val)
+            setPrNumberInput(e.target.value.replace(/[^0-9]/g, ''))
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && prNumberInput) {
+              filters.setFilter('prNumber', prNumberInput)
+            }
           }}
         />
+        <div className="mx-filter-group__actions">
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => filters.setFilter('prNumber', prNumberInput)}
+            disabled={!prNumberInput}
+          >
+            Search
+          </Button>
+          {filters.prNumber && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setPrNumberInput('')
+                filters.setFilter('prNumber', '')
+              }}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="mx-filter-group">
