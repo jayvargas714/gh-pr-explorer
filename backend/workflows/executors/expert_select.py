@@ -477,6 +477,21 @@ class ExpertSelectExecutor(StepExecutor):
         "ensure", "check", "verify", "focus", "specific", "based",
     })
 
+    _CHECKLIST_STOP_WORDS = frozenset({
+        "does", "could", "correctly", "especially", "inside", "conflict",
+        "required", "safe", "first", "call", "break", "name", "contains",
+        "work", "either", "fail", "paths", "errors", "handler", "loop",
+        "spaces", "characters", "unexpectedly", "interrupted", "validated",
+        "before", "after", "between", "true", "false", "null", "none",
+        "used", "uses", "using", "properly", "correctly", "always",
+        "should", "would", "could", "might", "must", "need", "ensure",
+        "file", "files", "function", "method", "class", "type", "types",
+        "data", "value", "values", "result", "results", "return", "input",
+        "output", "case", "cases", "test", "tests", "handle", "handled",
+        "missing", "invalid", "valid", "default", "expected", "actual",
+        "check", "checks", "verify", "verified", "present", "correct",
+    })
+
     _EXT_TO_LANG: dict[str, list[str]] = {
         ".py": ["python"], ".pyx": ["python", "cython"],
         ".js": ["javascript"], ".ts": ["typescript"], ".tsx": ["typescript", "react"],
@@ -496,6 +511,8 @@ class ExpertSelectExecutor(StepExecutor):
         ".css": ["css", "frontend", "style"], ".scss": ["css", "frontend", "style"],
         ".html": ["html", "frontend"],
         ".md": ["docs", "documentation"],
+        ".toml": ["config"], ".json": ["config", "api"],
+        ".lock": ["dependencies"],
     }
 
     _DIR_SIGNALS: dict[str, list[str]] = {
@@ -507,7 +524,14 @@ class ExpertSelectExecutor(StepExecutor):
         "infra": ["infra", "infrastructure"],
         "db": ["database", "sql"], "database": ["database", "sql"],
         "migration": ["database", "migration", "sql"],
+        "migrations": ["database", "migration", "sql"],
+        "seeds": ["database", "seed"],
         "api": ["api", "backend"],
+        "services": ["service", "backend"],
+        "server": ["server", "backend", "api"],
+        "routes": ["routes", "api", "backend"],
+        "middleware": ["middleware", "backend"],
+        "schemas": ["schema", "api"],
         "frontend": ["frontend", "ui"],
         "security": ["security", "auth"],
         "auth": ["auth", "security", "authentication"],
@@ -517,34 +541,43 @@ class ExpertSelectExecutor(StepExecutor):
                                   files_lower: str, diff_lower: str) -> float:
         """Score a domain's relevance to the given files and diff content.
 
-        Returns 0-100. Uses keywords extracted from domain metadata matched
-        against file paths and diff text.
+        Returns 0-100. Identity keywords (name/scope/language) match against
+        file paths, signals, and diff. Checklist keywords only match against
+        diff content to avoid false positives from generic terms in paths.
         """
         name = (domain.get("display_name", "") or "").lower()
         scope = (domain.get("scope", "") or "").lower()
         persona = (domain.get("persona", "") or "").lower()
 
         raw_tokens = re.split(r'[\s,;/\-_&|():.]+', f"{name} {scope}")
-        keywords = {t for t in raw_tokens
-                    if len(t) >= 2 and t not in self._DOMAIN_STOP_WORDS}
+        identity_kw = {t for t in raw_tokens
+                       if len(t) >= 2 and t not in self._DOMAIN_STOP_WORDS}
+        identity_kw.update(self._extract_language_keywords(name, scope, persona))
 
+        all_stops = self._DOMAIN_STOP_WORDS | self._CHECKLIST_STOP_WORDS
         checklist_text = " ".join(domain.get("checklist", [])).lower()
+        checklist_kw = set()
         for tok in re.split(r'[\s,;/\-_&|():.?]+', checklist_text):
-            if len(tok) >= 4 and tok not in self._DOMAIN_STOP_WORDS:
-                keywords.add(tok)
+            if len(tok) >= 5 and tok not in all_stops and tok not in identity_kw:
+                checklist_kw.add(tok)
 
-        file_signals = self._extract_file_signals(files)
-        keywords.update(self._extract_language_keywords(name, scope, persona))
-
-        if not keywords:
+        if not identity_kw:
             return 0
 
-        file_hits = sum(1 for kw in keywords if kw in files_lower)
-        signal_hits = sum(1 for kw in keywords if kw in file_signals)
-        diff_hits = sum(1 for kw in keywords if kw in diff_lower)
+        file_signals = self._extract_file_signals(files)
 
-        total_possible = len(keywords)
-        score = ((file_hits * 4) + (signal_hits * 3) + diff_hits) / total_possible * 12.5
+        file_hits = sum(1 for kw in identity_kw if kw in files_lower)
+        signal_hits = sum(1 for kw in identity_kw if kw in file_signals)
+        identity_diff = sum(1 for kw in identity_kw if kw in diff_lower)
+        checklist_diff = sum(1 for kw in checklist_kw if kw in diff_lower)
+
+        has_file_evidence = file_hits > 0 or signal_hits > 0
+        diff_weight = 2 if has_file_evidence else 4
+        total_identity = len(identity_kw)
+        score = (
+            (file_hits * 4) + (signal_hits * 3) +
+            (identity_diff * diff_weight) + (checklist_diff * 1)
+        ) / total_identity * 12.5
 
         return min(score, 100.0)
 
@@ -563,10 +596,17 @@ class ExpertSelectExecutor(StepExecutor):
                     signals.extend(langs)
                     break
 
-            if "dockerfile" in f_lower:
+            basename = parts[-1] if parts else f_lower
+            if "dockerfile" in f_lower or "docker-compose" in f_lower:
                 signals.extend(["docker", "container", "infra"])
-            if "makefile" in f_lower:
-                signals.extend(["build", "make"])
+            if "makefile" in f_lower or basename in ("justfile", "taskfile"):
+                signals.extend(["build", "make", "shell", "bash", "infra", "ops"])
+            if basename in ("vagrantfile", "procfile"):
+                signals.extend(["infra", "ops", "deployment"])
+            if basename in ("gemfile", "rakefile", "guardfile"):
+                signals.extend(["ruby", "build"])
+            if basename == "brewfile":
+                signals.extend(["infra", "ops", "dependencies"])
             if "cron" in f_lower:
                 signals.extend(["cron", "scheduling", "ops", "infra"])
 
