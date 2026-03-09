@@ -140,15 +140,6 @@ export function PRList() {
     }
   }
 
-  // Client-side PR number filter (must be before early returns to satisfy rules of hooks)
-  const prNumberFilter = filterState.prNumber
-  const filteredPRs = useMemo(() => {
-    if (!prNumberFilter) return prs
-    const num = parseInt(prNumberFilter, 10)
-    if (isNaN(num)) return prs
-    return prs.filter((pr) => pr.number === num)
-  }, [prs, prNumberFilter])
-
   if (loading && prs.length === 0) {
     return (
       <div className="mx-pr-list mx-pr-list--loading">
@@ -177,19 +168,13 @@ export function PRList() {
     )
   }
 
-  const pageSize = 20
-  const displayPRs = prNumberFilter
-    ? filteredPRs
-    : getPaginatedPRs()
-  const totalPages = prNumberFilter
-    ? Math.ceil(filteredPRs.length / pageSize)
-    : getTotalPages()
-  const displayCount = prNumberFilter ? filteredPRs.length : prs.length
+  const paginatedPRs = getPaginatedPRs()
+  const totalPages = getTotalPages()
 
   return (
     <div className="mx-pr-list">
       <div className="mx-pr-list__header">
-        <h2>{displayCount} Pull Requests</h2>
+        <h2>{prs.length} Pull Requests</h2>
         <Button
           variant="ghost"
           size="sm"
@@ -202,12 +187,12 @@ export function PRList() {
       </div>
 
       <div className="mx-pr-list__items">
-        {displayPRs.map((pr) => (
+        {paginatedPRs.map((pr) => (
           <PRCard key={pr.number} pr={pr} />
         ))}
       </div>
 
-      {!prNumberFilter && totalPages > 1 && (
+      {totalPages > 1 && (
         <Pagination
           currentPage={currentPage}
           totalPages={totalPages}

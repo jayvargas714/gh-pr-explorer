@@ -129,16 +129,18 @@ export function debouncedSaveSettings(filters: Record<string, any>, accountLogin
   }, 1000)
 }
 
-// Keys that are client-side only filters (not sent to API)
-const CLIENT_ONLY_KEYS = new Set(['prNumber'])
-
-/** Extract only API-relevant filter parameters from the store (excludes functions, internal state, and client-only filters) */
+/** Extract only API-relevant filter parameters from the store (excludes functions and internal state).
+ *  When prNumber is set, it's the only filter sent to the API. */
 export function getFilterParams(state: FilterState): Record<string, any> {
+  // PR number lookup bypasses all other filters
+  if (state.prNumber) {
+    return { prNumber: state.prNumber }
+  }
+
   const params: Record<string, any> = {}
   for (const key of FILTER_KEYS) {
-    if (!CLIENT_ONLY_KEYS.has(key)) {
-      params[key] = state[key]
-    }
+    if (key === 'prNumber') continue
+    params[key] = state[key]
   }
   return params
 }

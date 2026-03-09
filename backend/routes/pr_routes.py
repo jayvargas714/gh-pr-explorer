@@ -13,11 +13,48 @@ from backend.services.pr_service import get_review_status, get_ci_status
 
 pr_bp = Blueprint("pr", __name__)
 
+PR_JSON_FIELDS = (
+    "number,title,author,state,isDraft,createdAt,updatedAt,closedAt,"
+    "mergedAt,url,body,headRefName,baseRefName,labels,assignees,"
+    "reviewRequests,reviewDecision,mergeable,additions,deletions,changedFiles,"
+    "milestone,statusCheckRollup"
+)
+
+
+def _get_pr_by_number(owner, repo, pr_number):
+    """Fetch a single PR by number using gh pr view."""
+    try:
+        output = run_gh_command([
+            "pr", "view", str(pr_number),
+            "-R", f"{owner}/{repo}",
+            "--json", PR_JSON_FIELDS
+        ])
+        pr = parse_json_output(output)
+        if not pr:
+            return jsonify({"prs": []})
+
+        # parse_json_output returns a list for list commands, dict for view
+        if isinstance(pr, list):
+            pr = pr[0] if pr else None
+        if not pr:
+            return jsonify({"prs": []})
+
+        pr["reviewStatus"] = get_review_status(pr.get("reviewDecision"))
+        pr["ciStatus"] = get_ci_status(pr.get("statusCheckRollup"))
+        return jsonify({"prs": [pr]})
+    except RuntimeError:
+        return jsonify({"prs": []})
+
 
 @pr_bp.route("/api/repos/<owner>/<repo>/prs")
 def get_prs(owner, repo):
     """Get PRs with advanced filtering support."""
     try:
+        # Direct PR number lookup — bypasses all other filters
+        pr_number = request.args.get("prNumber")
+        if pr_number:
+            return _get_pr_by_number(owner, repo, pr_number)
+
         config = get_config()
         params = PRFilterParams.from_request_args(request.args, default_per_page=config.get("default_per_page", 30))
         builder = PRFilterBuilder(owner, repo, params)
