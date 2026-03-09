@@ -4,7 +4,7 @@ import { Modal } from '../common/Modal'
 import { Button } from '../common/Button'
 import { Alert } from '../common/Alert'
 import { Spinner } from '../common/Spinner'
-import { formatRelativeTime } from '../../utils/formatters'
+import { formatNoteTimestamp } from '../../utils/formatters'
 import type { QueueNote } from '../../api/types'
 
 interface NotesModalProps {
@@ -84,7 +84,7 @@ export function NotesModal({ prNumber, repo, onClose, onUpdate }: NotesModalProp
                   <div className="mx-notes-modal__item-content">{note.content}</div>
                   <div className="mx-notes-modal__item-footer">
                     <span className="mx-notes-modal__item-time">
-                      {formatRelativeTime(note.createdAt)}
+                      {formatNoteTimestamp(note.createdAt)}
                     </span>
                     <Button variant="ghost" size="sm" onClick={() => handleDeleteNote(note.id)}>
                       Delete

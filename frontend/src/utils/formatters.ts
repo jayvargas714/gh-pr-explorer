@@ -54,6 +54,21 @@ export function formatFullDateTime(dateString: string): string {
 }
 
 /**
+ * Format a date string to local date and time for notes (e.g., "Mar 9, 2026 2:15 PM")
+ */
+export function formatNoteTimestamp(dateString: string): string {
+  const date = new Date(dateString)
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  })
+}
+
+/**
  * Format a number with K/M suffixes (e.g., 1500 -> "1.5K")
  */
 export function formatNumber(num: number): string {
