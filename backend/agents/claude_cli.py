@@ -88,6 +88,7 @@ class ClaudeCLIAgent(AgentBackend):
     def __init__(self, name: str, config: dict):
         super().__init__(name, config)
         self._processes: dict[str, _ProcessState] = {}
+        self.model = config.get("model")
 
     def start_review(self, prompt: str, context: dict) -> AgentHandle:
         base_reviews_dir = get_reviews_dir()
@@ -120,6 +121,9 @@ class ClaudeCLIAgent(AgentBackend):
             "--allowedTools", _ALLOWED_TOOLS,
             "--dangerously-skip-permissions",
         ]
+
+        if self.model:
+            cmd.extend(["--model", self.model])
 
         try:
             process = subprocess.Popen(
