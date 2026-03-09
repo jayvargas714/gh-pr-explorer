@@ -1,6 +1,5 @@
 """Seed built-in workflow templates, agents, expert domains, and code owners."""
 
-import json
 import logging
 
 from backend.database import get_workflow_db
@@ -191,8 +190,11 @@ BUILTIN_EXPERT_DOMAINS = [
         ),
         "scope": "SQLx queries, PostgreSQL, transactions, migrations, models, schema",
         "triggers": {
-            "file_patterns": [r"models/.*\.rs", r"migrations/"],
-            "keywords": ["sqlx::", "BEGIN", "COMMIT", "transaction", ".execute("],
+            "file_patterns": [r"models/.*\.rs", r"migrations/", r"migrations_archive/",
+                              r"db/.*\.rs", r"seeds/.*\.sql", r"\.sql$"],
+            "keywords": ["sqlx::", "BEGIN", "COMMIT", "transaction", ".execute(",
+                         "pg_dump", "pg_restore", "psql", "backup", "sync-db",
+                         "connection_limit", "CONNECTION LIMIT"],
         },
         "checklist": [
             "Are migrations backward-compatible with the previous schema version?",
@@ -285,9 +287,10 @@ BUILTIN_EXPERT_DOMAINS = [
         ),
         "scope": "Input validation, path traversal, auth/authz, injection, RBAC, secrets",
         "triggers": {
-            "file_patterns": [],
+            "file_patterns": [r"auth[_/]", r"security[_/]", r"middleware/"],
             "keywords": ["validate_", "sanitize", "traversal", "../", "role",
-                         "permission", "auth", "RBAC", "secret", "credential"],
+                         "permission", "auth", "RBAC", "secret", "credential",
+                         "CORS", "cors", "rate_limit"],
         },
         "checklist": [
             "Is all user input validated before use?",
@@ -350,7 +353,8 @@ BUILTIN_EXPERT_DOMAINS = [
         "triggers": {
             "file_patterns": ["Dockerfile", r"\.github/", "Makefile", "justfile",
                               r"terraform/", r"\.tf$", "docker-compose"],
-            "keywords": [],
+            "keywords": ["pipeline", "deploy", "workflow", "runner", "build_image",
+                         "CI/CD", "github_actions", "release"],
         },
         "checklist": [
             "Are Docker images using multi-stage builds with minimal final image?",

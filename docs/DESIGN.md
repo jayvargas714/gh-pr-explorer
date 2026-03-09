@@ -541,18 +541,31 @@ CREATE TABLE followup_findings (id, followup_id FK CASCADE, finding_id, original
 
 | Domain | Trigger Patterns | Trigger Keywords |
 |--------|-----------------|-----------------|
-| rust-api | `routes/*.rs`, `server/*.rs` | `axum::`, `StatusCode`, `handler`, `into_response` |
-| database | `models/*.rs`, `migrations/` | `sqlx::`, `BEGIN`, `COMMIT`, `transaction` |
-| s3-cloud | — | `s3_client`, `multipart`, `presign`, `upload_id` |
-| concurrency | — | `claim_`, `Mutex`, `RwLock`, `atomic`, `OCC` |
-| security | — | `validate_`, `sanitize`, `traversal`, `auth`, `RBAC` |
-| testing | `tests/` | `assert`, `mock`, `fixture` |
-| infra-ci | `Dockerfile`, `.github/`, `Makefile`, `terraform/` | — |
+| rust-api | `routes/*.rs`, `server/*.rs` | `axum::`, `StatusCode`, `handler`, `into_response`, `IntoResponse` |
+| database | `models/*.rs`, `migrations/`, `migrations_archive/`, `db/*.rs`, `seeds/*.sql`, `*.sql` | `sqlx::`, `BEGIN`, `COMMIT`, `transaction`, `.execute(`, `pg_dump`, `pg_restore`, `psql`, `backup`, `sync-db`, `connection_limit`, `CONNECTION LIMIT` |
+| s3-cloud | — | `s3_client`, `multipart`, `presign`, `upload_id`, `complete_multipart`, `abort_multipart`, `copy_object` |
+| concurrency | — | `claim_`, `status.*transition`, `Mutex`, `RwLock`, `atomic`, `race`, `CancellationToken`, `OCC`, `competing` |
+| security | `auth[_/]`, `security[_/]`, `middleware/` | `validate_`, `sanitize`, `traversal`, `../`, `role`, `permission`, `auth`, `RBAC`, `secret`, `credential`, `CORS`, `cors`, `rate_limit` |
+| testing | `tests/`, `#[test]`, `#[tokio::test]` | `assert`, `mock`, `fixture` |
+| infra-ci | `Dockerfile`, `.github/`, `Makefile`, `justfile`, `terraform/`, `*.tf`, `docker-compose` | `pipeline`, `deploy`, `workflow`, `runner`, `build_image`, `CI/CD`, `github_actions`, `release` |
 | go-backend | `*.go`, `go.mod` | `goroutine`, `chan`, `sync.`, `http.Handler` |
 | cpp-simulator | `*.cc`, `*.cpp`, `*.h` | `ns3::`, `Simulator::`, `congestion`, `cwnd` |
-| python-tooling | `*.py`, `requirements.txt`, `pyproject.toml` | `pip` |
+| python-tooling | `*.py`, `requirements.txt`, `pyproject.toml`, `setup.py` | `pip` |
 
 Each domain includes: full persona text, review scope, 5-7 checklist items, 3-4 anti-patterns.
+
+#### Expert Selection Scoring Algorithm
+
+The `_compute_domain_relevance()` scorer uses multi-signal NLP-style matching with:
+
+- **Language exclusion**: Hard-excludes language-specific domains when PR files use a different language (e.g., cpp-simulator excluded from Rust-only PRs, shell-script domains excluded from pure-Rust/Go PRs). Recognized languages: Rust, Python, Go, C++, Java, Kotlin, Scala, JavaScript, TypeScript, Ruby, PHP, Bash/Shell
+- **Language match bonus**: 1.4x multiplier when domain's language matches file languages
+- **Identity keywords**: Extracted from domain name + scope, matched against files, file signals, and diff
+- **Trigger keywords**: Domain-specific high-signal terms (e.g., `CORS`, `sqlx::`) scored independently, not diluted by identity keyword count
+- **Title matching**: PR title keywords weighted 8x for identity, 12x for trigger matches
+- **File signal detection**: Language/framework signals from extensions (`_EXT_TO_LANG`), directory names (`_DIR_SIGNALS`), and Python-specific basenames (`pyproject.toml`, `poetry.lock`, etc.)
+- **Minimum relevance threshold**: 15.0 (domains scoring below are excluded)
+- **Expert count cap**: Based on total lines changed (≤300→2, ≤800→3, ≤2000→4, >2000→5)
 
 #### Frontend Components
 

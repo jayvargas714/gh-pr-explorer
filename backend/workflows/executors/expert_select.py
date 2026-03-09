@@ -398,12 +398,19 @@ class ExpertSelectExecutor(StepExecutor):
         """Score cached domains against actual PR content. Returns None on cache miss."""
         files_lower = " ".join(f.lower() for f in all_files)
         diff_lower = diff_sample.lower()
+        file_langs = self._detect_file_languages(all_files)
+        title_lower = " ".join(
+            pr.get("title", "").lower() for pr in prs
+        )
 
-        _MIN_RELEVANCE = 2.0
+        _MIN_RELEVANCE = 15.0
 
         scored: list[tuple[dict, float]] = []
         for d in domains:
-            relevance = self._compute_domain_relevance(d, all_files, files_lower, diff_lower)
+            relevance = self._compute_domain_relevance(
+                d, all_files, files_lower, diff_lower,
+                title_lower=title_lower, file_langs=file_langs,
+            )
             if relevance >= _MIN_RELEVANCE:
                 scored.append((d, relevance))
 
@@ -537,23 +544,104 @@ class ExpertSelectExecutor(StepExecutor):
         "auth": ["auth", "security", "authentication"],
     }
 
+    # Primary programming languages used for domain↔file exclusion/boosting.
+    # Excludes "sql" deliberately: SQL is a query language embedded in app code
+    # (e.g. Rust+SQLx, Python+psycopg2), so database domains should NOT be
+    # excluded just because the changed files are .rs/.py instead of .sql.
+    _LANG_IDENTIFIERS = frozenset({
+        "rust", "python", "go", "golang", "c++", "cpp", "c",
+        "java", "kotlin", "scala", "javascript", "typescript",
+        "react", "jsx", "tsx", "ruby", "php",
+        "node", "nodejs", "cython",
+        "bash", "shell",
+    })
+
+    # Canonical groups so "go" matches "golang", "c++" matches "cpp", etc.
+    _LANG_GROUPS: dict[str, str] = {
+        "golang": "go", "nodejs": "node", "node": "javascript",
+        "jsx": "javascript", "tsx": "typescript", "react": "typescript",
+        "cython": "python", "cpp": "c++",
+        "shell": "bash",
+    }
+
+    def _detect_domain_languages(self, domain: dict) -> set[str]:
+        """Detect which programming languages this domain is tied to."""
+        name = (domain.get("display_name", "") or "").lower()
+        scope = (domain.get("scope", "") or "").lower()
+        persona = (domain.get("persona", "") or "").lower()
+        lang_kw = self._extract_language_keywords(name, scope, persona)
+        # Also check simple token matches in name/scope
+        for tok in re.split(r'[\s,;/\-_&|():.]+', f"{name} {scope}"):
+            if tok in self._LANG_IDENTIFIERS:
+                lang_kw.add(tok)
+        # Normalize to canonical groups
+        canonical: set[str] = set()
+        for l in lang_kw:
+            if l in self._LANG_IDENTIFIERS:
+                canonical.add(self._LANG_GROUPS.get(l, l))
+        return canonical
+
+    _PYTHON_BASENAMES = frozenset({
+        "pyproject.toml", "setup.cfg", "setup.py", "pipfile", "pipfile.lock",
+        "poetry.lock", "tox.ini", ".flake8", ".pylintrc", "mypy.ini",
+        "requirements.txt",
+    })
+
+    def _detect_file_languages(self, files: list[str]) -> set[str]:
+        """Detect which programming languages are present in the file list."""
+        langs: set[str] = set()
+        for f in files:
+            f_lower = f.lower()
+            basename = f_lower.rsplit("/", 1)[-1] if "/" in f_lower else f_lower
+            # Check Python-specific basenames first
+            if basename in self._PYTHON_BASENAMES or basename.startswith("requirements"):
+                langs.add("python")
+            for ext, ext_langs in self._EXT_TO_LANG.items():
+                if f_lower.endswith(ext):
+                    for l in ext_langs:
+                        langs.add(self._LANG_GROUPS.get(l, l))
+                    break
+        return langs
+
     def _compute_domain_relevance(self, domain: dict, files: list[str],
-                                  files_lower: str, diff_lower: str) -> float:
+                                  files_lower: str, diff_lower: str,
+                                  title_lower: str = "",
+                                  file_langs: set[str] | None = None) -> float:
         """Score a domain's relevance to the given files and diff content.
 
-        Returns 0-100. Identity keywords (name/scope/language) match against
-        file paths, signals, and diff. Checklist keywords only match against
-        diff content to avoid false positives from generic terms in paths.
+        Returns 0-100. Applies language exclusion for language-specific domains,
+        boosts for file/language match, and uses PR title as a strong signal.
         """
         name = (domain.get("display_name", "") or "").lower()
         scope = (domain.get("scope", "") or "").lower()
         persona = (domain.get("persona", "") or "").lower()
 
+        # --- Language exclusion ---
+        domain_langs = self._detect_domain_languages(domain)
+        if file_langs is None:
+            file_langs = self._detect_file_languages(files)
+        lang_overlap = domain_langs & file_langs if domain_langs and file_langs else set()
+        # Hard-exclude language-specific domains when files use a different language
+        if domain_langs and file_langs and not lang_overlap:
+            return 0.0
+
+        # --- Identity keywords (from name + scope + language patterns) ---
         raw_tokens = re.split(r'[\s,;/\-_&|():.]+', f"{name} {scope}")
         identity_kw = {t for t in raw_tokens
                        if len(t) >= 2 and t not in self._DOMAIN_STOP_WORDS}
         identity_kw.update(self._extract_language_keywords(name, scope, persona))
 
+        # --- Trigger keywords (domain-specific, high signal) ---
+        # These are the most discriminating terms (e.g. "CORS", "sqlx::", "axum::")
+        trigger_kw: set[str] = set()
+        triggers = domain.get("triggers", {})
+        for kw in triggers.get("keywords", []):
+            # Normalize: strip trailing punctuation, lowercase
+            clean = kw.strip().rstrip(":(").lower()
+            if len(clean) >= 2 and clean not in self._DOMAIN_STOP_WORDS:
+                trigger_kw.add(clean)
+
+        # --- Checklist keywords (diff-only, strict) ---
         all_stops = self._DOMAIN_STOP_WORDS | self._CHECKLIST_STOP_WORDS
         checklist_text = " ".join(domain.get("checklist", [])).lower()
         checklist_kw = set()
@@ -569,15 +657,29 @@ class ExpertSelectExecutor(StepExecutor):
         file_hits = sum(1 for kw in identity_kw if kw in files_lower)
         signal_hits = sum(1 for kw in identity_kw if kw in file_signals)
         identity_diff = sum(1 for kw in identity_kw if kw in diff_lower)
+        # Trigger keywords matched in diff or title are very strong signals
+        trigger_diff = sum(1 for kw in trigger_kw if kw in diff_lower)
+        trigger_title = sum(1 for kw in trigger_kw if kw in title_lower) if title_lower else 0
         checklist_diff = sum(1 for kw in checklist_kw if kw in diff_lower)
+        title_hits = sum(1 for kw in identity_kw if kw in title_lower) if title_lower else 0
 
         has_file_evidence = file_hits > 0 or signal_hits > 0
-        diff_weight = 2 if has_file_evidence else 4
+        # Diff keywords alone are weak evidence; reduce their weight
+        diff_weight = 1.5 if has_file_evidence else 2.0
         total_identity = len(identity_kw)
-        score = (
-            (file_hits * 4) + (signal_hits * 3) +
-            (identity_diff * diff_weight) + (checklist_diff * 1)
+        # Trigger hits are scored separately (not divided by total_identity)
+        # because they are already highly specific to the domain
+        base_score = (
+            (file_hits * 5) + (signal_hits * 4) +
+            (identity_diff * diff_weight) + (checklist_diff * 0.5) +
+            (title_hits * 8)
         ) / total_identity * 12.5
+        trigger_score = (trigger_diff * 6) + (trigger_title * 12)
+        score = base_score + trigger_score
+
+        # Language match bonus: reward domains whose language matches the files
+        if lang_overlap:
+            score *= 1.4
 
         return min(score, 100.0)
 
@@ -607,6 +709,13 @@ class ExpertSelectExecutor(StepExecutor):
                 signals.extend(["ruby", "build"])
             if basename == "brewfile":
                 signals.extend(["infra", "ops", "dependencies"])
+            # Python-specific config files (pyproject.toml, poetry.lock, etc.)
+            if basename in ("pyproject.toml", "setup.cfg", "setup.py", "pipfile",
+                            "pipfile.lock", "poetry.lock", "tox.ini", ".flake8",
+                            ".pylintrc", "mypy.ini", ".pyre_configuration"):
+                signals.extend(["python", "pip", "dependencies"])
+            if basename == "requirements.txt" or basename.startswith("requirements"):
+                signals.extend(["python", "pip", "dependencies"])
             if "cron" in f_lower:
                 signals.extend(["cron", "scheduling", "ops", "infra"])
 
