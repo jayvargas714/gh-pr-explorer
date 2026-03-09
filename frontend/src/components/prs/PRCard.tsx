@@ -73,6 +73,7 @@ export function PRCard({ pr }: PRCardProps) {
           isFollowup: false,
           reviewDecision: pr.reviewDecision,
           ciStatus: pr.ciStatus,
+          isDraft: pr.isDraft,
         })
         await apiAddToQueue({
           number: pr.number,

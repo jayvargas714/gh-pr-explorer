@@ -45,6 +45,7 @@ def get_merge_queue():
             is_followup = False
             review_decision = None
             ci_status = None
+            is_draft = False
 
             if len(repo_parts) == 2:
                 owner, repo = repo_parts
@@ -53,6 +54,7 @@ def get_merge_queue():
                 current_sha = queue_data["headRefOid"]
                 review_decision = queue_data["reviewDecision"]
                 ci_status = get_ci_status(queue_data["statusCheckRollup"])
+                is_draft = queue_data.get("isDraft", False)
 
                 latest_review = reviews_db.get_latest_review_for_pr(item["repo"], item["pr_number"])
                 if latest_review:
@@ -105,7 +107,8 @@ def get_merge_queue():
                 "minorFoundCount": minor_found_count,
                 "isFollowup": is_followup,
                 "reviewDecision": review_decision,
-                "ciStatus": ci_status
+                "ciStatus": ci_status,
+                "isDraft": is_draft
             }
 
         with ThreadPoolExecutor(max_workers=5) as executor:

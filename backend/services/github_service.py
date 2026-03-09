@@ -164,7 +164,7 @@ def fetch_pr_queue_data(owner, repo, pr_number):
         output = run_gh_command([
             "pr", "view", str(pr_number),
             "-R", f"{owner}/{repo}",
-            "--json", "state,headRefOid,reviewDecision,statusCheckRollup",
+            "--json", "state,headRefOid,reviewDecision,statusCheckRollup,isDraft",
         ])
         data = parse_json_output(output)
         if isinstance(data, dict):
@@ -173,8 +173,9 @@ def fetch_pr_queue_data(owner, repo, pr_number):
                 "headRefOid": data.get("headRefOid") or None,
                 "reviewDecision": data.get("reviewDecision") or None,
                 "statusCheckRollup": data.get("statusCheckRollup") or None,
+                "isDraft": data.get("isDraft", False),
             }
-        return {"state": None, "headRefOid": None, "reviewDecision": None, "statusCheckRollup": None}
+        return {"state": None, "headRefOid": None, "reviewDecision": None, "statusCheckRollup": None, "isDraft": False}
     except RuntimeError as e:
         logger.warning(f"Failed to fetch PR queue data for {owner}/{repo}#{pr_number}: {e}")
-        return {"state": None, "headRefOid": None, "reviewDecision": None, "statusCheckRollup": None}
+        return {"state": None, "headRefOid": None, "reviewDecision": None, "statusCheckRollup": None, "isDraft": False}

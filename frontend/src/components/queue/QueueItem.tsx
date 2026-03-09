@@ -119,6 +119,7 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
                 #{item.number} {item.title}
               </a>
               {getStateBadge()}
+              {item.isDraft && <Badge variant="warning">Draft</Badge>}
               {getReviewStatusBadge()}
               {getCIStatusBadge()}
             </div>

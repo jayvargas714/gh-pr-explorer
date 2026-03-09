@@ -324,6 +324,7 @@ export interface MergeQueueItem {
   isFollowup: boolean
   reviewDecision: string | null
   ciStatus: string | null
+  isDraft: boolean
 }
 
 export interface QueueNote {
