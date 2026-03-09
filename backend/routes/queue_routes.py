@@ -235,10 +235,14 @@ def get_queue_notes(pr_number):
 
         formatted_notes = []
         for note in notes:
+            # Append Z to mark SQLite CURRENT_TIMESTAMP as UTC
+            created_at = note["created_at"]
+            if created_at and not created_at.endswith("Z"):
+                created_at += "Z"
             formatted_notes.append({
                 "id": note["id"],
                 "content": note["content"],
-                "createdAt": note["created_at"]
+                "createdAt": created_at
             })
 
         return jsonify({"notes": formatted_notes})
@@ -270,12 +274,16 @@ def add_queue_note(pr_number):
 
         note = queue_db.add_note(queue_item_id, content)
 
+        created_at = note["created_at"]
+        if created_at and not created_at.endswith("Z"):
+            created_at += "Z"
+
         return jsonify({
             "message": "Note added",
             "note": {
                 "id": note["id"],
                 "content": note["content"],
-                "createdAt": note["created_at"]
+                "createdAt": created_at
             }
         }), 201
 
