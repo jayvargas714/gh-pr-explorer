@@ -45,6 +45,19 @@ export function AdvancedFilters() {
     <div className="mx-filter-section">
       <div className="mx-filter-group">
         <Input
+          label="PR Number"
+          type="text"
+          placeholder="e.g., 945"
+          value={filters.prNumber}
+          onChange={(e) => {
+            const val = e.target.value.replace(/[^0-9]/g, '')
+            filters.setFilter('prNumber', val)
+          }}
+        />
+      </div>
+
+      <div className="mx-filter-group">
+        <Input
           label="Text Search"
           type="text"
           placeholder="Search keywords..."

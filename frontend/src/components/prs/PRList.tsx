@@ -159,6 +159,15 @@ export function PRList() {
     )
   }
 
+  // Client-side PR number filter
+  const prNumberFilter = filterState.prNumber
+  const filteredPRs = useMemo(() => {
+    if (!prNumberFilter) return prs
+    const num = parseInt(prNumberFilter, 10)
+    if (isNaN(num)) return prs
+    return prs.filter((pr) => pr.number === num)
+  }, [prs, prNumberFilter])
+
   if (prs.length === 0) {
     return (
       <div className="mx-pr-list mx-pr-list--empty">
@@ -168,13 +177,19 @@ export function PRList() {
     )
   }
 
-  const paginatedPRs = getPaginatedPRs()
-  const totalPages = getTotalPages()
+  const pageSize = 20
+  const displayPRs = prNumberFilter
+    ? filteredPRs
+    : getPaginatedPRs()
+  const totalPages = prNumberFilter
+    ? Math.ceil(filteredPRs.length / pageSize)
+    : getTotalPages()
+  const displayCount = prNumberFilter ? filteredPRs.length : prs.length
 
   return (
     <div className="mx-pr-list">
       <div className="mx-pr-list__header">
-        <h2>{prs.length} Pull Requests</h2>
+        <h2>{displayCount} Pull Requests</h2>
         <Button
           variant="ghost"
           size="sm"
@@ -187,12 +202,12 @@ export function PRList() {
       </div>
 
       <div className="mx-pr-list__items">
-        {paginatedPRs.map((pr) => (
+        {displayPRs.map((pr) => (
           <PRCard key={pr.number} pr={pr} />
         ))}
       </div>
 
-      {totalPages > 1 && (
+      {!prNumberFilter && totalPages > 1 && (
         <Pagination
           currentPage={currentPage}
           totalPages={totalPages}

@@ -37,6 +37,7 @@ interface FilterState {
   closedBefore: string
 
   // Advanced filters
+  prNumber: string
   search: string
   searchIn: string[]
   comments: string
@@ -67,7 +68,7 @@ const FILTER_KEYS = [
   'reviewRequested', 'status', 'involves', 'mentions', 'commenter',
   'createdAfter', 'createdBefore', 'updatedAfter', 'updatedBefore',
   'mergedAfter', 'mergedBefore', 'closedAfter', 'closedBefore',
-  'search', 'searchIn', 'comments', 'reactions', 'interactions',
+  'prNumber', 'search', 'searchIn', 'comments', 'reactions', 'interactions',
   'teamReviewRequested', 'excludeLabels', 'excludeAuthor', 'excludeMilestone',
   'sortBy', 'sortDirection', 'limit',
 ] as const
@@ -99,6 +100,7 @@ const DEFAULT_FILTERS: Omit<FilterState, 'setFilter' | 'resetFilters' | 'getActi
   mergedBefore: '',
   closedAfter: '',
   closedBefore: '',
+  prNumber: '',
   search: '',
   searchIn: [],
   comments: '',
@@ -127,11 +129,16 @@ export function debouncedSaveSettings(filters: Record<string, any>, accountLogin
   }, 1000)
 }
 
-/** Extract only API-relevant filter parameters from the store (excludes functions and internal state) */
+// Keys that are client-side only filters (not sent to API)
+const CLIENT_ONLY_KEYS = new Set(['prNumber'])
+
+/** Extract only API-relevant filter parameters from the store (excludes functions, internal state, and client-only filters) */
 export function getFilterParams(state: FilterState): Record<string, any> {
   const params: Record<string, any> = {}
   for (const key of FILTER_KEYS) {
-    params[key] = state[key]
+    if (!CLIENT_ONLY_KEYS.has(key)) {
+      params[key] = state[key]
+    }
   }
   return params
 }
@@ -187,6 +194,7 @@ export const useFilterStore = create<FilterState>((set, get) => ({
     if (state.mergedBefore) count++
     if (state.closedAfter) count++
     if (state.closedBefore) count++
+    if (state.prNumber) count++
     if (state.search) count++
     if (state.searchIn.length > 0) count++
     if (state.comments) count++
