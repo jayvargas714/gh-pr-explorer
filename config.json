@@ -11,9 +11,17 @@
   "reviews_dir": "reviews",
   "default_repo": "scala-computing/scala",
   "agents": {
-    "claude": {
+    "claude-opus": {
       "type": "claude_cli",
-      "model": "opus"
+      "model": "claude-opus-4-6"
+    },
+    "claude-sonnet": {
+      "type": "claude_cli",
+      "model": "claude-sonnet-4-6"
+    },
+    "claude-haiku": {
+      "type": "claude_cli",
+      "model": "claude-haiku-4-5-20251001"
     },
     "openai": {
       "type": "openai_api",

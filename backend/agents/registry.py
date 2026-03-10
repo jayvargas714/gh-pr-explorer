@@ -35,10 +35,26 @@ def get_agent(name: str, agent_config: Optional[dict] = None) -> AgentBackend:
         agent_config = agents_cfg.get(name)
 
     if agent_config is None:
-        if name == "claude":
-            agent_config = {"type": "claude_cli", "model": "opus"}
-        else:
-            raise ValueError(f"Unknown agent '{name}' and no config provided")
+        try:
+            import json as _json
+            from backend.database import get_workflow_db
+            db = get_workflow_db()
+            for row in db.list_agents():
+                if row["name"] == name:
+                    extra = row.get("config_json") or "{}"
+                    if isinstance(extra, str):
+                        extra = _json.loads(extra)
+                    agent_config = {
+                        "type": row["type"],
+                        "model": row.get("model", ""),
+                        **extra,
+                    }
+                    break
+        except Exception:
+            pass
+
+    if agent_config is None:
+        raise ValueError(f"Unknown agent '{name}' and no config provided")
 
     agent_type = agent_config.get("type", "claude_cli")
     cls = _AGENT_TYPES.get(agent_type)

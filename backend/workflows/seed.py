@@ -128,10 +128,11 @@ BUILTIN_TEMPLATES = [
 
 BUILTIN_AGENTS = [
     ("claude-opus", "claude_cli", "claude-opus-4-6", {}),
+    ("claude-sonnet", "claude_cli", "claude-sonnet-4-6", {}),
+    ("claude-haiku", "claude_cli", "claude-haiku-4-5-20251001", {}),
     ("cursor-codex", "cursor_cli", "gpt-5.3-codex-high", {"sandbox": "disabled"}),
     ("cursor-codex-xh", "cursor_cli", "gpt-5.4-xhigh", {"sandbox": "disabled"}),
     ("openai", "openai_api", "gpt-4o", {"api_key_env": "OPENAI_API_KEY"}),
-    ("claude", "claude_cli", "claude-opus-4-6", {}),
 ]
 
 CODE_OWNERS = [
