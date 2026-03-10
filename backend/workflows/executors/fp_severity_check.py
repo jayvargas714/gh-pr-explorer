@@ -187,12 +187,23 @@ class FPSeverityCheckExecutor(StepExecutor):
         )
 
         pr_numbers = [p.get("number") for p in prs if p.get("number")]
+        base_branch = prs[0].get("base", "main") if prs else "main"
         for pr_num in pr_numbers:
             sections.append(
                 "## Context Commands\n\n"
                 "```bash\n"
                 f"gh pr diff {pr_num} --repo {owner}/{repo}\n"
                 f"gh api repos/{owner}/{repo}/pulls/{pr_num}/files --paginate --jq '.[].filename'\n"
+                "```\n\n"
+                "### Base-Branch Verification Commands\n"
+                "Use these to verify 'missing X' claims against the base branch:\n"
+                "```bash\n"
+                f"# Check if a file/symbol exists on the base branch (before this PR)\n"
+                f"gh api repos/{owner}/{repo}/contents/{{FILE_PATH}}?ref={base_branch} --jq '.name' 2>/dev/null\n"
+                f"# Search for a symbol/attribute on the base branch\n"
+                f"gh api -X GET 'search/code?q={{SEARCH_TERM}}+repo:{owner}/{repo}' --jq '.items[].path'\n"
+                f"# View a specific file on the base branch\n"
+                f"gh api repos/{owner}/{repo}/contents/{{FILE_PATH}}?ref={base_branch} --jq '.content' | base64 -d\n"
                 "```\n"
             )
 
@@ -244,6 +255,22 @@ class FPSeverityCheckExecutor(StepExecutor):
             "- If the file is NEW (not modified in the PR diff), verify the finding isn't "
             "claiming something was 'changed' or 'removed'\n"
             "- Check git blame context: is this code new in the PR or pre-existing?\n\n"
+            "#### MANDATORY: Base-Branch Verification for 'Missing X' Claims\n"
+            "Before confirming ANY finding that claims something is 'missing', 'not defined', "
+            "'not present', or 'removed':\n"
+            "1. **Search the base branch** for the allegedly missing item using the commands above\n"
+            "2. If a test references a selector/attribute/component not in the diff, "
+            "search the base branch — it may already exist in the codebase\n"
+            "3. If a finding claims a function/variable/import is 'not defined', grep the "
+            "full codebase — it may be defined in a file not touched by the PR\n"
+            "4. If a finding claims something was 'removed' or 'deleted', verify the file "
+            "existed before the PR and that the removal actually happened in this diff\n"
+            "5. Mark as FALSE_POSITIVE any finding where the 'missing' item exists on the "
+            "base branch and was not removed by this PR\n\n"
+            "**Checklist** (confirm for each 'missing X' finding):\n"
+            "- [ ] Confirmed X does not exist on the base branch\n"
+            "- [ ] Confirmed X was not imported/defined in a file outside the PR diff\n"
+            "- [ ] If X exists elsewhere, verified this PR actually breaks the reference\n\n"
             "### 2. Intentionality Check\n"
             "Is the pattern used deliberately elsewhere in the codebase?\n"
             "- Use the related scan results above as a starting point\n"
@@ -275,6 +302,8 @@ class FPSeverityCheckExecutor(StepExecutor):
             '      "calibrated_severity": "major",\n'
             '      "fp_status": "CONFIRMED|FALSE_POSITIVE|DOWNGRADED|UNCERTAIN",\n'
             '      "correctness_check": "The code at line 123 does/does not...",\n'
+            '      "base_branch_verified": true,\n'
+            '      "base_branch_note": "Checked base branch: X exists/does not exist at ...",\n'
             '      "intentionality_check": "Pattern found in N other files...",\n'
             '      "impact_assessment": "Production scenario: ... / No production impact because...",\n'
             '      "evidence": "code snippet or reference"\n'
@@ -302,6 +331,19 @@ class FPSeverityCheckExecutor(StepExecutor):
         if parsed is None:
             return {"verified_findings": [], "raw_content": content, "parse_failed": True}
 
+        # Normalize common AI key variations
+        parsed = self._normalize_keys(parsed)
+
+        expected_keys = {"verified_findings", "false_positives_removed", "severity_changes", "final_counts"}
+        if not expected_keys.intersection(parsed.keys()):
+            logger.warning(f"FP check: parsed JSON has no expected keys. Got: {list(parsed.keys())[:10]}")
+            return {
+                "verified_findings": [],
+                "raw_content": content,
+                "parse_failed": True,
+                "actual_keys": list(parsed.keys()),
+            }
+
         return {
             "verified_findings": parsed.get("verified_findings", []),
             "false_positives_removed": parsed.get("false_positives_removed", []),
@@ -311,6 +353,28 @@ class FPSeverityCheckExecutor(StepExecutor):
             "fp_removed_count": len(parsed.get("false_positives_removed", [])),
             "severity_changed_count": len(parsed.get("severity_changes", [])),
         }
+
+    @staticmethod
+    def _normalize_keys(parsed: dict) -> dict:
+        """Map common AI key variations to expected schema keys."""
+        key_aliases = {
+            "findings": "verified_findings",
+            "verified": "verified_findings",
+            "results": "verified_findings",
+            "verification_results": "verified_findings",
+            "false_positives": "false_positives_removed",
+            "fp_removed": "false_positives_removed",
+            "removed_findings": "false_positives_removed",
+            "severity_adjustments": "severity_changes",
+            "calibrations": "severity_changes",
+            "counts": "final_counts",
+            "summary_counts": "final_counts",
+        }
+        normalized = dict(parsed)
+        for alias, canonical in key_aliases.items():
+            if alias in normalized and canonical not in normalized:
+                normalized[canonical] = normalized.pop(alias)
+        return normalized
 
     @staticmethod
     def _apply_calibration(synthesis: dict, check_result: dict) -> dict:

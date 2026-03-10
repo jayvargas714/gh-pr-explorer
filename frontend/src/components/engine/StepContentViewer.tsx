@@ -1177,19 +1177,51 @@ function RelatedIssueScanView({ content }: { content: ParsedContent }) {
   const wider = (content.wider_issues ?? []) as Array<{
     finding?: string; additional_files?: string[]; description?: string
   }>
+  const duplicates = (content.duplicates ?? []) as Array<{
+    dropped_title?: string; kept_title?: string; file?: string; reason?: string
+  }>
+  const duplicatesRemoved = content.duplicates_removed as number | undefined
   const skipped = content.skipped as string | undefined
+  const [showDuplicates, setShowDuplicates] = useState(false)
 
   if (skipped) return <p className="mx-step-content__empty">Skipped: {skipped}</p>
-  if (!scanned.length) return <p className="mx-step-content__empty">No findings scanned.</p>
+  if (!scanned.length && !duplicates.length) return <p className="mx-step-content__empty">No findings scanned.</p>
 
   return (
     <div className="mx-step-content__related-scan">
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
         <Badge variant="info" size="sm">{scanned.length} scanned</Badge>
+        {(duplicatesRemoved ?? duplicates.length) > 0 && (
+          <Badge variant="neutral" size="sm">{duplicatesRemoved ?? duplicates.length} duplicates removed</Badge>
+        )}
         {fps.length > 0 && <Badge variant="warning" size="sm">{fps.length} likely FP</Badge>}
         {confirmed.length > 0 && <Badge variant="success" size="sm">{confirmed.length} confirmed</Badge>}
         {wider.length > 0 && <Badge variant="error" size="sm">{wider.length} wider issues</Badge>}
       </div>
+
+      {duplicates.length > 0 && (
+        <div className="mx-step-content__class-section" style={{ marginBottom: 12 }}>
+          <h5
+            style={{ cursor: 'pointer' }}
+            onClick={() => setShowDuplicates(!showDuplicates)}
+          >
+            {showDuplicates ? '▼' : '▶'} Duplicates Removed ({duplicates.length})
+          </h5>
+          {showDuplicates && duplicates.map((dup, i) => (
+            <div key={i} className="mx-step-content__pr-item" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Badge variant="neutral" size="sm">DROPPED</Badge>
+                <strong style={{ textDecoration: 'line-through', opacity: 0.7 }}>{dup.dropped_title}</strong>
+              </div>
+              <div style={{ fontSize: 13 }}>
+                <span style={{ opacity: 0.6 }}>Kept:</span> {dup.kept_title}
+              </div>
+              {dup.file && <code style={{ fontSize: 12, opacity: 0.6 }}>{dup.file}</code>}
+              {dup.reason && <p style={{ margin: '2px 0 0', fontSize: 13, opacity: 0.85 }}>{dup.reason}</p>}
+            </div>
+          ))}
+        </div>
+      )}
 
       {scanned.map((sf, i) => (
         <div key={i} className="mx-step-content__pr-item" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
@@ -1234,6 +1266,7 @@ function FPSeverityCheckView({ content }: { content: ParsedContent }) {
     title?: string; original_severity?: string; calibrated_severity?: string
     fp_status?: string; correctness_check?: string; intentionality_check?: string
     impact_assessment?: string; evidence?: string
+    base_branch_verified?: boolean; base_branch_note?: string
   }>
   const removed = (content.false_positives_removed ?? []) as Array<{ title?: string; reason?: string }>
   const changes = (content.severity_changes ?? []) as Array<{ title?: string; from?: string; to?: string; reason?: string }>
@@ -1241,12 +1274,18 @@ function FPSeverityCheckView({ content }: { content: ParsedContent }) {
   const skipped = content.skipped as string | undefined
   const parseFailed = content.parse_failed as boolean | undefined
   const rawContent = content.raw_content as string | undefined
+  const actualKeys = content.actual_keys as string[] | undefined
 
   if (skipped) return <p className="mx-step-content__empty">Skipped: {skipped}</p>
   if (parseFailed) {
     return (
       <div className="mx-step-content__fp-check">
         <Badge variant="warning" size="sm">Parse Failed</Badge>
+        {actualKeys && (
+          <p style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+            AI returned keys: {actualKeys.join(', ')}
+          </p>
+        )}
         {rawContent && (
           <pre style={{ marginTop: 8, fontSize: 12, whiteSpace: 'pre-wrap', maxHeight: 400, overflow: 'auto', opacity: 0.8 }}>
             {rawContent.slice(0, 3000)}
@@ -1322,6 +1361,15 @@ function FPSeverityCheckView({ content }: { content: ParsedContent }) {
               {vf.correctness_check && <p style={{ margin: 0, fontSize: 13 }}><strong>Correctness:</strong> {vf.correctness_check}</p>}
               {vf.intentionality_check && <p style={{ margin: 0, fontSize: 13 }}><strong>Intentionality:</strong> {vf.intentionality_check}</p>}
               {vf.impact_assessment && <p style={{ margin: 0, fontSize: 13 }}><strong>Impact:</strong> {vf.impact_assessment}</p>}
+              {vf.base_branch_verified !== undefined && (
+                <p style={{ margin: 0, fontSize: 13 }}>
+                  <strong>Base Branch:</strong>{' '}
+                  <Badge variant={vf.base_branch_verified ? 'success' : 'warning'} size="sm">
+                    {vf.base_branch_verified ? 'Verified' : 'Not Verified'}
+                  </Badge>
+                  {vf.base_branch_note && <span style={{ marginLeft: 6, opacity: 0.85 }}>{vf.base_branch_note}</span>}
+                </p>
+              )}
             </div>
           ))}
         </div>

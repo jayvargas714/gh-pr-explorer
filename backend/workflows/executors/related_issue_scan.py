@@ -1,10 +1,14 @@
 from __future__ import annotations
 """Related Issue Scan step — scans codebase for patterns similar to findings.
 
-Serves dual purpose:
-1. Catches more instances of real issues beyond the PR diff
-2. Naturally exposes false positives by revealing that the "problem" pattern
-   is standard/intentional across the codebase
+Serves three purposes:
+1. **Dedup**: Identifies findings that describe the same defect (same file,
+   overlapping lines, same issue) and merges them — using codebase context
+   to confirm whether two differently-worded findings are truly the same bug
+2. **False positive detection**: Reveals that a "problem" pattern is actually
+   standard/intentional across the codebase
+3. **Wider issue detection**: Catches more instances of real issues beyond
+   the PR diff
 
 Runs after synthesis, before fp_severity_check.
 """
@@ -92,7 +96,12 @@ class RelatedIssueScanExecutor(StepExecutor):
                 artifact = agent.get_output(handle)
                 agent.cleanup(handle)
                 scan_result = self._parse_scan_output(artifact.content_md)
-                outputs = {"related_scan": scan_result}
+                # Apply dedup: remove duplicate findings from synthesis
+                deduped_synthesis = self._apply_dedup(synthesis, scan_result)
+                outputs = {
+                    "related_scan": scan_result,
+                    "synthesis": deduped_synthesis,
+                }
                 if artifact.usage:
                     outputs["usage"] = artifact.usage
                 return StepResult(
@@ -113,22 +122,26 @@ class RelatedIssueScanExecutor(StepExecutor):
 
     @staticmethod
     def _collect_findings(synthesis: dict) -> list[dict]:
-        """Gather all findings from synthesis for scanning."""
+        """Gather all findings from synthesis for scanning, tagged with source."""
         findings = []
         for entry in synthesis.get("agreed", []):
             inner = entry.get("finding_a", {})
             if inner.get("title"):
-                findings.append(inner)
+                findings.append({**inner, "_source": "BOTH"})
             for extra in entry.get("additional_failure_modes", []):
                 if extra.get("title"):
-                    findings.append(extra)
-        for entry in synthesis.get("a_only", []) + synthesis.get("b_only", []):
+                    findings.append({**extra, "_source": "BOTH"})
+        for entry in synthesis.get("a_only", []):
             inner = entry.get("finding", {})
             if inner.get("title"):
-                findings.append(inner)
+                findings.append({**inner, "_source": "A_ONLY"})
+        for entry in synthesis.get("b_only", []):
+            inner = entry.get("finding", {})
+            if inner.get("title"):
+                findings.append({**inner, "_source": "B_ONLY"})
         for sf in synthesis.get("synth_findings", []):
             if sf.get("title"):
-                findings.append(sf)
+                findings.append({**sf, "_source": "SYNTH"})
         return findings
 
     def _build_scan_prompt(self, findings: list[dict], owner: str, repo: str,
@@ -136,9 +149,20 @@ class RelatedIssueScanExecutor(StepExecutor):
         sections = []
 
         sections.append(
-            "You are a codebase analyst performing a RELATED ISSUE SCAN.\n\n"
-            "For each finding from a code review, search the repository for **structurally similar "
-            "patterns** — not just textual matches. This means:\n"
+            "You are a codebase analyst performing a RELATED ISSUE SCAN with DEDUPLICATION.\n\n"
+            "You have two jobs:\n\n"
+            "**Job 1 — Deduplication**: Compare all findings against each other to identify "
+            "duplicates. Two findings are duplicates when they describe the **same defect** at "
+            "the **same code location** (same file, overlapping line ranges). Use the codebase "
+            "to verify: read the actual code and confirm whether two findings that look similar "
+            "are truly the same bug or distinct issues.\n"
+            "- Word-for-word identical findings at the same location → always a duplicate\n"
+            "- Same file + overlapping lines + same root cause → duplicate even if worded differently\n"
+            "- Same file but different functions/concerns → NOT a duplicate\n"
+            "- Findings at different files that share a root cause → NOT duplicates (report as wider_issues)\n\n"
+            "**Job 2 — Related Issue Scan**: For each *unique* finding (after dedup), search "
+            "the repository for **structurally similar patterns** — not just textual matches. "
+            "This means:\n"
             "- Same error handling approach (e.g., missing error check, swallowed errors)\n"
             "- Same architectural pattern (e.g., unbounded collect, lock-free shared state)\n"
             "- Same API usage shape (e.g., unchecked unwrap after fallible call)\n"
@@ -165,17 +189,30 @@ class RelatedIssueScanExecutor(StepExecutor):
             title = f.get("title", "Untitled")
             loc = f.get("location", {})
             file_ref = loc.get("file", loc.get("raw", "unknown"))
+            line = loc.get("start_line", "?")
             problem = f.get("problem", "")[:300]
             severity = f.get("severity", "unknown")
+            source = f.get("_source", "?")
             sections.append(
                 f"### Finding {i}: [{severity}] {title}\n"
-                f"- File: `{file_ref}`\n"
+                f"- Source: {source}\n"
+                f"- File: `{file_ref}:{line}`\n"
                 f"- Problem: {problem}\n"
             )
 
         sections.append(
             "## Your Task\n\n"
-            "For EACH finding above:\n"
+            "### Step 1 — Deduplication\n"
+            "Compare all findings above against each other:\n"
+            "- For each pair of findings at the **same file** with overlapping line ranges, "
+            "read the actual code to determine if they describe the same defect\n"
+            "- If two findings are duplicates, keep the one with more detail/better evidence "
+            "and list the other in `duplicates`\n"
+            "- If a finding from A_ONLY or B_ONLY duplicates an AGREED/BOTH finding, "
+            "the AGREED version takes priority\n"
+            "- When merging, note both sources found the issue (increases confidence)\n\n"
+            "### Step 2 — Related Issue Scan\n"
+            "For each *unique* finding (not dropped as duplicate):\n"
             "1. **Decompose the finding into searchable signals:**\n"
             "   - The specific function/method/API call involved\n"
             "   - The *structural* pattern (e.g., 'error return ignored', 'mutex not held across "
@@ -207,6 +244,14 @@ class RelatedIssueScanExecutor(StepExecutor):
             "## Output Format — valid JSON only:\n"
             "```json\n"
             "{\n"
+            '  "duplicates": [\n'
+            '    {\n'
+            '      "dropped_title": "title of the finding being removed",\n'
+            '      "kept_title": "title of the finding being kept",\n'
+            '      "file": "path/to/file",\n'
+            '      "reason": "Same defect at same location — both describe X"\n'
+            '    }\n'
+            '  ],\n'
             '  "scanned_findings": [\n'
             '    {\n'
             '      "title": "original finding title",\n'
@@ -238,14 +283,70 @@ class RelatedIssueScanExecutor(StepExecutor):
             return {"scanned_findings": [], "raw_content": content, "parse_failed": True}
 
         return {
+            "duplicates": parsed.get("duplicates", []),
             "scanned_findings": parsed.get("scanned_findings", []),
             "likely_false_positives": parsed.get("likely_false_positives", []),
             "confirmed_findings": parsed.get("confirmed_findings", []),
             "wider_issues": parsed.get("wider_issues", []),
             "total_scanned": len(parsed.get("scanned_findings", [])),
+            "duplicates_removed": len(parsed.get("duplicates", [])),
             "fp_count": len(parsed.get("likely_false_positives", [])),
             "wider_count": len(parsed.get("wider_issues", [])),
         }
+
+    @staticmethod
+    def _apply_dedup(synthesis: dict, scan_result: dict) -> dict:
+        """Remove duplicate findings from synthesis based on scan dedup results.
+
+        The AI scanner identifies findings that describe the same defect.
+        This method removes the dropped findings from the synthesis so
+        downstream steps (FP check, publish) operate on a clean set.
+        """
+        duplicates = scan_result.get("duplicates", [])
+        if not duplicates:
+            return synthesis
+
+        dropped_titles = {
+            d.get("dropped_title", "").lower()
+            for d in duplicates
+            if d.get("dropped_title")
+        }
+        if not dropped_titles:
+            return synthesis
+
+        deduped = dict(synthesis)
+
+        for key in ("agreed", "a_only", "b_only"):
+            entries = deduped.get(key, [])
+            filtered = []
+            for entry in entries:
+                inner = entry.get("finding_a", entry.get("finding", {}))
+                if inner.get("title", "").lower() in dropped_titles:
+                    continue
+                # Also filter additional_failure_modes within agreed entries
+                extras = entry.get("additional_failure_modes", [])
+                if extras:
+                    entry["additional_failure_modes"] = [
+                        e for e in extras
+                        if e.get("title", "").lower() not in dropped_titles
+                    ]
+                filtered.append(entry)
+            deduped[key] = filtered
+
+        # Update counts
+        deduped["total_findings"] = (
+            len(deduped.get("agreed", [])) +
+            len(deduped.get("a_only", [])) +
+            len(deduped.get("b_only", []))
+        )
+        deduped["agreed_count"] = len(deduped.get("agreed", []))
+        deduped["disputed_count"] = (
+            len(deduped.get("a_only", [])) + len(deduped.get("b_only", []))
+        )
+        deduped["dedup_applied"] = True
+        deduped["dedup_log"] = duplicates
+
+        return deduped
 
     @staticmethod
     def _passthrough(synthesis: dict, reason: str) -> StepResult:
