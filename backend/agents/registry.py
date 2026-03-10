@@ -41,6 +41,9 @@ def get_agent(name: str, agent_config: Optional[dict] = None) -> AgentBackend:
             db = get_workflow_db()
             for row in db.list_agents():
                 if row["name"] == name:
+                    if not row.get("is_active", True):
+                        logger.debug(f"Agent '{name}' found in DB but is_active=False, skipping")
+                        continue
                     extra = row.get("config_json") or "{}"
                     if isinstance(extra, str):
                         extra = _json.loads(extra)
@@ -50,8 +53,8 @@ def get_agent(name: str, agent_config: Optional[dict] = None) -> AgentBackend:
                         **extra,
                     }
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"DB fallback lookup for agent '{name}' failed: {e}")
 
     if agent_config is None:
         raise ValueError(f"Unknown agent '{name}' and no config provided")

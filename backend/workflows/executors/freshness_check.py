@@ -12,11 +12,11 @@ configured or when the PR is CURRENT (SHA unchanged).
 
 import json
 import logging
-import re
 import subprocess
 import time
 
 from backend.workflows.executor import StepExecutor, StepResult
+from backend.workflows.json_parser import extract_json
 from backend.workflows.step_types import register_step
 
 logger = logging.getLogger(__name__)
@@ -81,8 +81,10 @@ class FreshnessCheckExecutor(StepExecutor):
                 synthesis,
             )
 
-            # Collect all findings from synthesis + holistic
-            all_findings = self._collect_findings(pr_synthesis, holistic)
+            # Collect findings; only include holistic for the first PR to
+            # avoid attributing global findings to every PR in multi-PR runs
+            pr_holistic = holistic if len(prs_checked) == 1 else {}
+            all_findings = self._collect_findings(pr_synthesis, pr_holistic)
 
             # Try AI-powered freshness verification if agent configured and PR is not current
             ai_result = None
@@ -144,15 +146,22 @@ class FreshnessCheckExecutor(StepExecutor):
         any_major = any(r["classification"] in ("STALE-MAJOR", "SUPERSEDED")
                         for r in freshness_results)
 
+        outputs = {
+            "freshness": freshness_results,
+            "all_fresh": all_current,
+            "any_stale_major": any_major,
+            "synthesis": synthesis,
+            "reviews": reviews,
+        }
+        # Propagate usage from AI freshness results
+        for r in freshness_results:
+            if r.get("usage"):
+                outputs["usage"] = r.pop("usage")
+                break
+
         return StepResult(
             success=True,
-            outputs={
-                "freshness": freshness_results,
-                "all_fresh": all_current,
-                "any_stale_major": any_major,
-                "synthesis": synthesis,
-                "reviews": reviews,
-            },
+            outputs=outputs,
             artifacts=[{
                 "type": "freshness",
                 "data": {
@@ -181,16 +190,22 @@ class FreshnessCheckExecutor(StepExecutor):
         state["pr_status"] = self._fetch_pr_metadata(owner, repo, pr_number)
 
         # New commits since review SHA
+        review_cutoff = None
         if review_sha:
             state["new_commits"] = self._fetch_commits_since(
                 owner, repo, pr_number, review_sha
             )
+            # Derive temporal cutoff from the first new commit's date
+            if state["new_commits"]:
+                review_cutoff = state["new_commits"][0].get("date")
 
-        # Recent reviews from other reviewers
-        state["new_reviews"] = self._fetch_recent_reviews(owner, repo, pr_number)
-
-        # Recent comments (issue comments + review comments)
-        state["new_comments"] = self._fetch_recent_comments(owner, repo, pr_number)
+        # Reviews and comments since the review was created
+        state["new_reviews"] = self._fetch_recent_reviews(
+            owner, repo, pr_number, since=review_cutoff
+        )
+        state["new_comments"] = self._fetch_recent_comments(
+            owner, repo, pr_number, since=review_cutoff
+        )
 
         return state
 
@@ -244,8 +259,8 @@ class FreshnessCheckExecutor(StepExecutor):
         return []
 
     def _fetch_recent_reviews(self, owner: str, repo: str,
-                              pr_number: int) -> list[dict]:
-        """Fetch PR reviews (approvals, change requests, comments)."""
+                              pr_number: int, since: str | None = None) -> list[dict]:
+        """Fetch PR reviews, optionally filtered to those after `since` timestamp."""
         cmd = [
             "gh", "api",
             f"repos/{owner}/{repo}/pulls/{pr_number}/reviews",
@@ -255,14 +270,17 @@ class FreshnessCheckExecutor(StepExecutor):
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0 and result.stdout.strip():
-                return json.loads(result.stdout)
+                reviews = json.loads(result.stdout)
+                if since:
+                    reviews = [r for r in reviews if (r.get("submitted_at") or "") >= since]
+                return reviews
         except Exception as e:
             logger.warning(f"Failed to fetch reviews for PR #{pr_number}: {e}")
         return []
 
     def _fetch_recent_comments(self, owner: str, repo: str,
-                               pr_number: int) -> list[dict]:
-        """Fetch issue comments and review comments on the PR."""
+                               pr_number: int, since: str | None = None) -> list[dict]:
+        """Fetch issue comments and review comments, optionally filtered by `since`."""
         comments = []
 
         # Issue comments (general discussion)
@@ -272,6 +290,9 @@ class FreshnessCheckExecutor(StepExecutor):
             "--paginate",
             "--jq", '[.[] | {user: .user.login, body: (.body // "")[0:500], created_at: .created_at}]',
         ]
+        if since:
+            # GitHub API supports ?since= for issue comments
+            cmd[2] = f"repos/{owner}/{repo}/issues/{pr_number}/comments?since={since}"
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0 and result.stdout.strip():
@@ -288,6 +309,8 @@ class FreshnessCheckExecutor(StepExecutor):
             "--paginate",
             "--jq", '[.[] | {user: .user.login, body: (.body // "")[0:300], path: .path, line: .line, created_at: .created_at}]',
         ]
+        if since:
+            cmd2[2] = f"repos/{owner}/{repo}/pulls/{pr_number}/comments?since={since}"
         try:
             result = subprocess.run(cmd2, capture_output=True, text=True, timeout=30)
             if result.returncode == 0 and result.stdout.strip():
@@ -366,7 +389,10 @@ class FreshnessCheckExecutor(StepExecutor):
             if status == AgentStatus.COMPLETED:
                 artifact = agent.get_output(handle)
                 agent.cleanup(handle)
-                return self._parse_ai_freshness_output(artifact.content_md, classification)
+                result = self._parse_ai_freshness_output(artifact.content_md, classification)
+                if result is not None and artifact.usage:
+                    result["usage"] = artifact.usage
+                return result
             else:
                 agent.cleanup(handle)
                 logger.warning("Freshness AI failed, falling back to mechanical")
@@ -503,33 +529,7 @@ class FreshnessCheckExecutor(StepExecutor):
 
     def _parse_ai_freshness_output(self, content: str, fallback_classification: str) -> dict | None:
         """Parse AI freshness output JSON."""
-        parsed = None
-
-        fenced = re.findall(r"```(?:json)?\s*\n(.*?)```", content, re.DOTALL)
-        text = fenced[0].strip() if fenced else content
-
-        try:
-            parsed = json.loads(text.strip())
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        if parsed is None:
-            depth = 0
-            start_idx = -1
-            for i, ch in enumerate(text):
-                if ch == '{':
-                    if depth == 0:
-                        start_idx = i
-                    depth += 1
-                elif ch == '}':
-                    depth -= 1
-                    if depth == 0 and start_idx >= 0:
-                        try:
-                            parsed = json.loads(text[start_idx:i + 1])
-                            break
-                        except json.JSONDecodeError:
-                            start_idx = -1
-
+        parsed = extract_json(content)
         if parsed is None:
             logger.warning("Could not parse AI freshness JSON")
             return None

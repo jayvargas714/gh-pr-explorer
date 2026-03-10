@@ -294,7 +294,6 @@ class CursorCLIAgent(AgentBackend):
             search_dirs = [
                 review_path.parent,
                 Path(get_reviews_dir()) / "phase-b",
-                Path.cwd(),
             ]
             for d in search_dirs:
                 if not d.exists():

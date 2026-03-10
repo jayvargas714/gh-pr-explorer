@@ -464,20 +464,6 @@ class WorkflowDB:
     def get_usage_stats(self) -> list[dict]:
         """Return average token usage per template (only runs with usage data)."""
         with self.db.connection() as conn:
-            rows = conn.execute("""
-                SELECT wt.name AS template_name,
-                       COUNT(*) AS run_count,
-                       SUM(wi.pr_count) AS total_prs,
-                       wi.usage_json
-                FROM workflow_instances wi
-                JOIN workflow_templates wt ON wi.template_id = wt.id
-                WHERE wi.usage_json IS NOT NULL
-                  AND wi.status IN ('completed', 'awaiting_gate')
-                GROUP BY wt.name
-            """).fetchall()
-
-            # We need to aggregate JSON usage across rows per template.
-            # SQLite can't sum inside JSON, so fetch all and aggregate in Python.
             rows_all = conn.execute("""
                 SELECT wt.name AS template_name,
                        wi.usage_json,

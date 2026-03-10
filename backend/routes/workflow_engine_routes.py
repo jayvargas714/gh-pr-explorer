@@ -588,8 +588,12 @@ def _persist_usage(db, instance_id: int):
             except (json.JSONDecodeError, TypeError):
                 continue
 
-            # Count PRs from pr_select step
-            if s["step_type"] == "pr_select":
+            # Count PRs from prioritize step (actual reviewed count) or pr_select
+            if s["step_type"] == "prioritize":
+                selected = outputs.get("selected", outputs.get("prs", []))
+                if isinstance(selected, list) and selected:
+                    pr_count = len(selected)
+            elif s["step_type"] == "pr_select" and pr_count == 0:
                 prs = outputs.get("prs", outputs.get("selected", []))
                 pr_count = len(prs) if isinstance(prs, list) else 0
 

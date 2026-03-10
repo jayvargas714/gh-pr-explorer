@@ -9,14 +9,13 @@ Uses an AI agent for holistic analysis, with a heuristic fallback if the
 agent is unavailable or fails.
 """
 
-import json
 import logging
-import re
 import time
 
 from backend.agents import get_agent, AgentStatus
 from backend.workflows.executor import StepExecutor, StepResult
 from backend.workflows.executors.agent_review import _set_live_output, _clear_live_output
+from backend.workflows.json_parser import extract_json
 from backend.workflows.step_types import register_step
 
 logger = logging.getLogger(__name__)
@@ -91,9 +90,12 @@ class HolisticReviewExecutor(StepExecutor):
                 artifact = agent.get_output(handle)
                 agent.cleanup(handle)
                 holistic = self._parse_holistic_output(artifact.content_md, synthesis)
+                outputs = {"holistic": holistic}
+                if artifact.usage:
+                    outputs["usage"] = artifact.usage
                 return StepResult(
                     success=True,
-                    outputs={"holistic": holistic},
+                    outputs=outputs,
                 )
             else:
                 agent.cleanup(handle)
@@ -303,34 +305,8 @@ class HolisticReviewExecutor(StepExecutor):
     # ------------------------------------------------------------------
 
     def _parse_holistic_output(self, content: str, synthesis: dict) -> dict:
-        """Parse AI holistic review output using brace-depth counting."""
-        parsed = None
-
-        fenced = re.findall(r"```(?:json)?\s*\n(.*?)```", content, re.DOTALL)
-        text = fenced[0].strip() if fenced else content
-
-        try:
-            parsed = json.loads(text.strip())
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        if parsed is None:
-            depth = 0
-            start_idx = -1
-            for i, ch in enumerate(text):
-                if ch == '{':
-                    if depth == 0:
-                        start_idx = i
-                    depth += 1
-                elif ch == '}':
-                    depth -= 1
-                    if depth == 0 and start_idx >= 0:
-                        try:
-                            parsed = json.loads(text[start_idx:i + 1])
-                            break
-                        except json.JSONDecodeError:
-                            start_idx = -1
-
+        """Parse AI holistic review output."""
+        parsed = extract_json(content)
         if parsed is None:
             logger.warning("Could not parse AI holistic JSON, falling back")
             return {

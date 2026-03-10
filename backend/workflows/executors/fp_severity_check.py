@@ -11,17 +11,43 @@ Runs after related_issue_scan, before holistic_review or freshness_check.
 Outputs calibrated findings that replace raw synthesis downstream.
 """
 
-import json
 import logging
-import re
 import time
 
 from backend.agents import get_agent, AgentStatus
 from backend.workflows.executor import StepExecutor, StepResult
 from backend.workflows.executors.agent_review import _set_live_output, _clear_live_output
+from backend.workflows.json_parser import extract_json
 from backend.workflows.step_types import register_step
 
 logger = logging.getLogger(__name__)
+
+
+def _recalculate_verdict(synthesis: dict) -> str:
+    """Recalculate verdict from remaining findings after FP calibration.
+
+    Uses the same severity-based logic as synthesis._compute_verdict:
+    - agreed critical/major → CHANGES_REQUESTED
+    - single-agent critical → NEEDS_DISCUSSION
+    - any findings remain → COMMENT
+    - nothing left → APPROVE
+    """
+    agreed = synthesis.get("agreed", [])
+    a_only = synthesis.get("a_only", [])
+    b_only = synthesis.get("b_only", [])
+
+    if any(f.get("finding_a", {}).get("severity") in ("critical", "major")
+           for f in agreed):
+        return "CHANGES_REQUESTED"
+
+    if any(f.get("finding", {}).get("severity") == "critical"
+           for f in a_only + b_only):
+        return "NEEDS_DISCUSSION"
+
+    if agreed or a_only or b_only:
+        return "COMMENT"
+
+    return "APPROVE"
 
 
 @register_step("fp_severity_check")
@@ -97,12 +123,15 @@ class FPSeverityCheckExecutor(StepExecutor):
                 agent.cleanup(handle)
                 check_result = self._parse_check_output(artifact.content_md)
                 calibrated_synthesis = self._apply_calibration(synthesis, check_result)
+                outputs = {
+                    "fp_check": check_result,
+                    "synthesis": calibrated_synthesis,
+                }
+                if artifact.usage:
+                    outputs["usage"] = artifact.usage
                 return StepResult(
                     success=True,
-                    outputs={
-                        "fp_check": check_result,
-                        "synthesis": calibrated_synthesis,
-                    },
+                    outputs=outputs,
                     artifacts=[{
                         "type": "fp_severity_check",
                         "pr_number": prs[0].get("number") if prs else 0,
@@ -135,6 +164,9 @@ class FPSeverityCheckExecutor(StepExecutor):
             inner = entry.get("finding", {})
             if inner.get("title"):
                 findings.append({**inner, "_source": "B_ONLY", "_severity_original": inner.get("severity", "minor")})
+        for sf in synthesis.get("synth_findings", []):
+            if sf.get("title"):
+                findings.append({**sf, "_source": "SYNTH", "_severity_original": sf.get("severity", "minor")})
         return findings
 
     def _build_check_prompt(self, findings: list[dict], related_scan: dict,
@@ -266,31 +298,7 @@ class FPSeverityCheckExecutor(StepExecutor):
         if not content:
             return {"verified_findings": [], "parse_failed": True}
 
-        text = content.strip()
-        fenced = re.findall(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
-        if fenced:
-            text = fenced[0].strip()
-
-        parsed = None
-        try:
-            parsed = json.loads(text)
-        except (json.JSONDecodeError, ValueError):
-            depth = 0
-            start_idx = -1
-            for i, ch in enumerate(text):
-                if ch == '{':
-                    if depth == 0:
-                        start_idx = i
-                    depth += 1
-                elif ch == '}':
-                    depth -= 1
-                    if depth == 0 and start_idx >= 0:
-                        try:
-                            parsed = json.loads(text[start_idx:i + 1])
-                            break
-                        except json.JSONDecodeError:
-                            start_idx = -1
-
+        parsed = extract_json(content)
         if parsed is None:
             return {"verified_findings": [], "raw_content": content, "parse_failed": True}
 
@@ -334,6 +342,20 @@ class FPSeverityCheckExecutor(StepExecutor):
                     inner["_original_severity"] = inner.get("severity", "minor")
                     inner["severity"] = sev_map[title_lower]
 
+                # Also calibrate additional_failure_modes within the entry
+                extras = entry.get("additional_failure_modes", [])
+                if extras:
+                    calibrated_extras = []
+                    for extra in extras:
+                        extra_title = extra.get("title", "").lower()
+                        if extra_title in fp_titles:
+                            continue
+                        if extra_title in sev_map:
+                            extra["_original_severity"] = extra.get("severity", "minor")
+                            extra["severity"] = sev_map[extra_title]
+                        calibrated_extras.append(extra)
+                    entry["additional_failure_modes"] = calibrated_extras
+
                 filtered.append(entry)
             calibrated[key] = filtered
 
@@ -348,6 +370,10 @@ class FPSeverityCheckExecutor(StepExecutor):
             len(calibrated.get("a_only", [])) + len(calibrated.get("b_only", []))
         )
         calibrated["fp_calibrated"] = True
+
+        # Recalculate verdict based on remaining findings to prevent stale
+        # CHANGES_REQUESTED from reaching publish after FP removal.
+        calibrated["verdict"] = _recalculate_verdict(calibrated)
 
         return calibrated
 

@@ -241,12 +241,16 @@ class ExpertSelectExecutor(StepExecutor):
                 + ", ".join(e["domain_id"] for e in experts)
             )
 
+            outputs = {
+                "experts": experts,
+                "pr_domains": pr_domains,
+            }
+            if getattr(self, "_last_ai_usage", None):
+                outputs["usage"] = self._last_ai_usage
+
             return StepResult(
                 success=True,
-                outputs={
-                    "experts": experts,
-                    "pr_domains": pr_domains,
-                },
+                outputs=outputs,
                 artifacts=[{
                     "type": "expert_selection",
                     "data": {
@@ -357,6 +361,10 @@ class ExpertSelectExecutor(StepExecutor):
         if not raw:
             logger.error("Expert generation agent returned empty content_md")
             return None
+
+        # Store usage for propagation into StepResult
+        if artifact.usage:
+            self._last_ai_usage = artifact.usage
 
         logger.info(f"Expert generation raw output length: {len(raw)}")
         logger.debug(f"Expert generation raw output (first 500): {raw[:500]}")

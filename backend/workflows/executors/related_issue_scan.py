@@ -9,14 +9,13 @@ Serves dual purpose:
 Runs after synthesis, before fp_severity_check.
 """
 
-import json
 import logging
-import re
 import time
 
 from backend.agents import get_agent, AgentStatus
 from backend.workflows.executor import StepExecutor, StepResult
 from backend.workflows.executors.agent_review import _set_live_output, _clear_live_output
+from backend.workflows.json_parser import extract_json
 from backend.workflows.step_types import register_step
 
 logger = logging.getLogger(__name__)
@@ -93,9 +92,12 @@ class RelatedIssueScanExecutor(StepExecutor):
                 artifact = agent.get_output(handle)
                 agent.cleanup(handle)
                 scan_result = self._parse_scan_output(artifact.content_md)
+                outputs = {"related_scan": scan_result}
+                if artifact.usage:
+                    outputs["usage"] = artifact.usage
                 return StepResult(
                     success=True,
-                    outputs={"related_scan": scan_result},
+                    outputs=outputs,
                     artifacts=[{
                         "type": "related_issue_scan",
                         "pr_number": prs[0].get("number") if prs else 0,
@@ -124,6 +126,9 @@ class RelatedIssueScanExecutor(StepExecutor):
             inner = entry.get("finding", {})
             if inner.get("title"):
                 findings.append(inner)
+        for sf in synthesis.get("synth_findings", []):
+            if sf.get("title"):
+                findings.append(sf)
         return findings
 
     def _build_scan_prompt(self, findings: list[dict], owner: str, repo: str,
@@ -228,31 +233,7 @@ class RelatedIssueScanExecutor(StepExecutor):
         if not content:
             return {"scanned_findings": [], "parse_failed": True}
 
-        text = content.strip()
-        fenced = re.findall(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
-        if fenced:
-            text = fenced[0].strip()
-
-        parsed = None
-        try:
-            parsed = json.loads(text)
-        except (json.JSONDecodeError, ValueError):
-            depth = 0
-            start_idx = -1
-            for i, ch in enumerate(text):
-                if ch == '{':
-                    if depth == 0:
-                        start_idx = i
-                    depth += 1
-                elif ch == '}':
-                    depth -= 1
-                    if depth == 0 and start_idx >= 0:
-                        try:
-                            parsed = json.loads(text[start_idx:i + 1])
-                            break
-                        except json.JSONDecodeError:
-                            start_idx = -1
-
+        parsed = extract_json(content)
         if parsed is None:
             return {"scanned_findings": [], "raw_content": content, "parse_failed": True}
 
