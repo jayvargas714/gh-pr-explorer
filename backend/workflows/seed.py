@@ -57,7 +57,8 @@ SELF_REVIEW_TEMPLATE = {
         {"id": "review_b", "type": "agent_review", "config": {"agent": "cursor-codex-xhigh", "phase": "b"}, "position": {"x": 600, "y": 300}},
         {"id": "synth", "type": "synthesis", "config": {"ai_verify": True, "agent": "claude-sonnet"}, "position": {"x": 750, "y": 200}},
         {"id": "holistic", "type": "holistic_review", "config": {"agent": "claude-opus"}, "position": {"x": 900, "y": 200}},
-        {"id": "gate", "type": "human_gate", "config": {"retry_target": "synth"}, "position": {"x": 1050, "y": 200}},
+        {"id": "fresh", "type": "freshness_check", "config": {}, "position": {"x": 1050, "y": 200}},
+        {"id": "gate", "type": "human_gate", "config": {"retry_target": "synth"}, "position": {"x": 1200, "y": 200}},
     ],
     "edges": [
         {"from": "select", "to": "experts", "condition": None},
@@ -68,7 +69,8 @@ SELF_REVIEW_TEMPLATE = {
         {"from": "review_a", "to": "synth", "condition": None},
         {"from": "review_b", "to": "synth", "condition": None},
         {"from": "synth", "to": "holistic", "condition": None},
-        {"from": "holistic", "to": "gate", "condition": None},
+        {"from": "holistic", "to": "fresh", "condition": None},
+        {"from": "fresh", "to": "gate", "condition": None},
     ],
     "fan_out_groups": [
         {"source": "experts", "targets": ["prompt"], "key": "domain"},
@@ -85,8 +87,9 @@ DEEP_REVIEW_TEMPLATE = {
         {"id": "review_b", "type": "agent_review", "config": {"agent": "cursor-codex-xhigh", "phase": "b"}, "position": {"x": 600, "y": 300}},
         {"id": "synth", "type": "synthesis", "config": {"ai_verify": True, "agent": "claude-sonnet"}, "position": {"x": 750, "y": 200}},
         {"id": "holistic", "type": "holistic_review", "config": {"agent": "claude-opus"}, "position": {"x": 900, "y": 200}},
-        {"id": "gate", "type": "human_gate", "config": {"retry_target": "synth"}, "position": {"x": 1050, "y": 200}},
-        {"id": "pub", "type": "publish", "config": {}, "position": {"x": 1200, "y": 200}},
+        {"id": "fresh", "type": "freshness_check", "config": {}, "position": {"x": 1050, "y": 200}},
+        {"id": "gate", "type": "human_gate", "config": {"retry_target": "synth"}, "position": {"x": 1200, "y": 200}},
+        {"id": "pub", "type": "publish", "config": {}, "position": {"x": 1350, "y": 200}},
     ],
     "edges": [
         {"from": "select", "to": "experts", "condition": None},
@@ -97,7 +100,8 @@ DEEP_REVIEW_TEMPLATE = {
         {"from": "review_a", "to": "synth", "condition": None},
         {"from": "review_b", "to": "synth", "condition": None},
         {"from": "synth", "to": "holistic", "condition": None},
-        {"from": "holistic", "to": "gate", "condition": None},
+        {"from": "holistic", "to": "fresh", "condition": None},
+        {"from": "fresh", "to": "gate", "condition": None},
         {"from": "gate", "to": "pub", "condition": None},
     ],
     "fan_out_groups": [
