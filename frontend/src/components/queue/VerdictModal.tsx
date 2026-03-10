@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import { Modal } from '../common/Modal'
 import { Button } from '../common/Button'
 import { Alert } from '../common/Alert'
 import { Spinner } from '../common/Spinner'
@@ -20,6 +19,7 @@ interface VerdictModalProps {
   prNumber: number
   repo: string
   onClose: () => void
+  onRefresh?: () => void
 }
 
 const EVENT_OPTIONS: { value: VerdictEvent; label: string }[] = [
@@ -43,7 +43,11 @@ const MIN_PANEL_WIDTH = 300
 const MIN_PANEL_HEIGHT = 250
 const MIN_PANEL_TOP = 60
 
-export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModalProps) {
+// Verdict modal default size and constraints
+const VERDICT_MIN_WIDTH = 420
+const VERDICT_MIN_HEIGHT = 350
+
+export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: VerdictModalProps) {
   const [event, setEvent] = useState<VerdictEvent>('COMMENT')
   const [customText, setCustomText] = useState('')
   const [sections, setSections] = useState<ReviewSection[]>([])
@@ -59,20 +63,41 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
   const [reviewDetail, setReviewDetail] = useState<ReviewDetail | null>(null)
   const [showReviewPanel, setShowReviewPanel] = useState(false)
 
-  // Drag state
+  // Drag state for the review panel
   const [panelPos, setPanelPos] = useState({ x: 40, y: 80 })
   const [panelSize, setPanelSize] = useState({ w: 520, h: 600 })
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null)
   const resizeRef = useRef<{ startX: number; startY: number; origW: number; origH: number } | null>(null)
   const panelNodeRef = useRef<HTMLDivElement>(null)
 
+  // Drag state for the verdict modal itself
+  const [verdictPos, setVerdictPos] = useState<{ x: number; y: number } | null>(null)
+  const [verdictSize, setVerdictSize] = useState<{ w: number; h: number } | null>(null)
+  const verdictDragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null)
+  const verdictResizeRef = useRef<{ startX: number; startY: number; origW: number; origH: number } | null>(null)
+  const verdictNodeRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => {
     loadReviewContent()
   }, [reviewId])
 
-  // Global mousemove/mouseup for drag and resize
+  // Close on Escape
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', handleEscape)
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', handleEscape)
+      document.body.style.overflow = ''
+    }
+  }, [onClose])
+
+  // Global mousemove/mouseup for drag and resize (both panels)
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
+      // Review panel drag
       if (dragRef.current) {
         e.preventDefault()
         const dx = e.clientX - dragRef.current.startX
@@ -82,6 +107,7 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
           y: Math.max(MIN_PANEL_TOP, dragRef.current.origY + dy),
         })
       }
+      // Review panel resize
       if (resizeRef.current) {
         e.preventDefault()
         const dx = e.clientX - resizeRef.current.startX
@@ -91,10 +117,32 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
           h: Math.max(MIN_PANEL_HEIGHT, resizeRef.current.origH + dy),
         })
       }
+      // Verdict modal drag
+      if (verdictDragRef.current) {
+        e.preventDefault()
+        const dx = e.clientX - verdictDragRef.current.startX
+        const dy = e.clientY - verdictDragRef.current.startY
+        setVerdictPos({
+          x: Math.max(0, verdictDragRef.current.origX + dx),
+          y: Math.max(0, verdictDragRef.current.origY + dy),
+        })
+      }
+      // Verdict modal resize
+      if (verdictResizeRef.current) {
+        e.preventDefault()
+        const dx = e.clientX - verdictResizeRef.current.startX
+        const dy = e.clientY - verdictResizeRef.current.startY
+        setVerdictSize({
+          w: Math.max(VERDICT_MIN_WIDTH, verdictResizeRef.current.origW + dx),
+          h: Math.max(VERDICT_MIN_HEIGHT, verdictResizeRef.current.origH + dy),
+        })
+      }
     }
     const handleMouseUp = () => {
       dragRef.current = null
       resizeRef.current = null
+      verdictDragRef.current = null
+      verdictResizeRef.current = null
     }
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseup', handleMouseUp)
@@ -104,7 +152,8 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
     }
   }, [])
 
-  const onDragStart = useCallback((e: React.MouseEvent) => {
+  // Review panel drag/resize handlers
+  const onPanelDragStart = useCallback((e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('button')) return
     dragRef.current = {
       startX: e.clientX,
@@ -114,7 +163,7 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
     }
   }, [panelPos])
 
-  const onResizeStart = useCallback((e: React.MouseEvent) => {
+  const onPanelResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
     resizeRef.current = {
@@ -124,6 +173,38 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
       origH: panelSize.h,
     }
   }, [panelSize])
+
+  // Verdict modal drag/resize handlers
+  const onVerdictDragStart = useCallback((e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return
+    const node = verdictNodeRef.current
+    if (!node) return
+    const rect = node.getBoundingClientRect()
+    const currentX = verdictPos?.x ?? rect.left
+    const currentY = verdictPos?.y ?? rect.top
+    verdictDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: currentX,
+      origY: currentY,
+    }
+  }, [verdictPos])
+
+  const onVerdictResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const node = verdictNodeRef.current
+    if (!node) return
+    const rect = node.getBoundingClientRect()
+    const currentW = verdictSize?.w ?? rect.width
+    const currentH = verdictSize?.h ?? rect.height
+    verdictResizeRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origW: currentW,
+      origH: currentH,
+    }
+  }, [verdictSize])
 
   const loadReviewContent = async () => {
     try {
@@ -224,6 +305,14 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
     return parts.join('\n\n---\n\n')
   }
 
+  /** Map section keys to backend section types. */
+  const sectionKeyToType = (key: string): string | undefined => {
+    if (key === 'critical-issues') return 'critical'
+    if (key === 'major-concerns') return 'major'
+    if (key === 'minor-issues') return 'minor'
+    return undefined
+  }
+
   /** Build inline comment payloads from inline-marked sections. */
   const buildInlineComments = (): VerdictInlineComment[] => {
     const comments: VerdictInlineComment[] = []
@@ -231,6 +320,8 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
       if (!enabledSections.has(section.key) || !inlineSections.has(section.key)) continue
       const issues = structuredIssues[section.key]
       if (!issues) continue
+
+      const sectionType = sectionKeyToType(section.key)
 
       for (const issue of issues) {
         const bodyParts = [`**${issue.title}**`]
@@ -242,11 +333,15 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
           body: bodyParts.join('\n'),
           start_line: issue.location.start_line,
           end_line: issue.location.end_line,
+          title: issue.title,
+          section: sectionType,
         })
       }
     }
     return comments
   }
+
+  const [inlineWarning, setInlineWarning] = useState<string | null>(null)
 
   const handleSubmit = async () => {
     const body = composeBody()
@@ -268,14 +363,49 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
     try {
       setSubmitting(true)
       setError(null)
+      setInlineWarning(null)
       const [owner, repoName] = repo.split('/')
       const result = await postVerdict(owner, repoName, prNumber, {
         event,
         body: body || '',
         inline_comments: inlineComments.length > 0 ? inlineComments : undefined,
+        review_id: reviewId,
       })
-      setSuccess(result.message)
-      setTimeout(onClose, 1500)
+
+      // Build detailed success/warning message
+      const successParts: string[] = [`${event === 'APPROVE' ? 'Approved' : event === 'REQUEST_CHANGES' ? 'Changes requested' : 'Comment posted'} on PR #${prNumber}`]
+
+      if (result.inline_posted > 0) {
+        const total = (result.inline_posted || 0) + (result.inline_errors?.length || 0)
+        successParts.push(`${result.inline_posted}/${total} inline comments posted`)
+      }
+
+      setSuccess(successParts.join(' — '))
+
+      // Show warning about failed inline comments
+      if (result.inline_errors && result.inline_errors.length > 0) {
+        const failedDetails: string[] = []
+        if (result.section_details) {
+          for (const [section, details] of Object.entries(result.section_details)) {
+            if (details.failed_titles.length > 0) {
+              failedDetails.push(
+                `${section}: ${details.failed_titles.join(', ')}`
+              )
+            }
+          }
+        }
+        const warningMsg = failedDetails.length > 0
+          ? `${result.inline_errors.length} inline comment(s) could not be posted (line numbers not in diff):\n${failedDetails.join('\n')}`
+          : `${result.inline_errors.length} inline comment(s) could not be posted: ${result.inline_errors.join(', ')}`
+        setInlineWarning(warningMsg)
+      }
+
+      // Refresh queue to update badges
+      onRefresh?.()
+
+      // Auto-close after delay (longer if there are warnings)
+      const delay = result.inline_errors?.length ? 4000 : 1500
+      setTimeout(onClose, delay)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to post verdict')
     } finally {
@@ -362,126 +492,163 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
     )
   }
 
+  // Compute inline styles for draggable verdict modal
+  const verdictStyle: React.CSSProperties = {
+    ...(verdictPos ? { left: verdictPos.x, top: verdictPos.y } : {}),
+    ...(verdictSize ? { width: verdictSize.w, height: verdictSize.h } : {}),
+  }
+
   return (
     <>
-      <Modal title={`Submit Verdict - PR #${prNumber}`} onClose={onClose} size="lg">
-        {loading ? (
-          <div className="mx-verdict-modal__loading">
-            <Spinner size="md" />
-            <p>Loading review content...</p>
+      <div className="mx-modal-overlay mx-verdict-modal-overlay" onClick={onClose}>
+        <div
+          ref={verdictNodeRef}
+          className={`mx-verdict-modal-draggable${verdictPos ? ' mx-verdict-modal-draggable--positioned' : ''}`}
+          style={verdictStyle}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            className="mx-verdict-modal-draggable__header"
+            onMouseDown={onVerdictDragStart}
+          >
+            <h2>Submit Verdict - PR #{prNumber}</h2>
+            <button
+              className="mx-verdict-modal-draggable__close"
+              onClick={onClose}
+              aria-label="Close modal"
+            >
+              ×
+            </button>
           </div>
-        ) : (
-          <>
-            {error && <Alert variant="error">{error}</Alert>}
-            {success && <Alert variant="success">{success}</Alert>}
-
-            {reviewDetail && (
-              <div className="mx-verdict-modal__review-toggle">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => setShowReviewPanel(!showReviewPanel)}
-                >
-                  {showReviewPanel ? 'Hide Review' : 'View Review'}
-                </Button>
-                {reviewDetail.score !== null && reviewDetail.score !== undefined && (
-                  <span className="mx-verdict-modal__score">
-                    Score: {reviewDetail.score}/10
-                  </span>
+          <div className="mx-verdict-modal-draggable__body">
+            {loading ? (
+              <div className="mx-verdict-modal__loading">
+                <Spinner size="md" />
+                <p>Loading review content...</p>
+              </div>
+            ) : (
+              <>
+                {error && <Alert variant="error">{error}</Alert>}
+                {success && <Alert variant="success">{success}</Alert>}
+                {inlineWarning && (
+                  <Alert variant="warning">
+                    <div style={{ whiteSpace: 'pre-wrap' }}>{inlineWarning}</div>
+                  </Alert>
                 )}
-              </div>
-            )}
 
-            <div className="mx-verdict-modal__event-selector">
-              <label className="mx-verdict-modal__label">Review Action</label>
-              <div className="mx-verdict-modal__event-buttons">
-                {EVENT_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    className={`mx-verdict-modal__event-btn mx-verdict-modal__event-btn--${opt.value.toLowerCase().replace('_', '-')}${
-                      event === opt.value ? ' mx-verdict-modal__event-btn--active' : ''
-                    }`}
-                    onClick={() => setEvent(opt.value)}
+                {reviewDetail && (
+                  <div className="mx-verdict-modal__review-toggle">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setShowReviewPanel(!showReviewPanel)}
+                    >
+                      {showReviewPanel ? 'Hide Review' : 'View Review'}
+                    </Button>
+                    {reviewDetail.score !== null && reviewDetail.score !== undefined && (
+                      <span className="mx-verdict-modal__score">
+                        Score: {reviewDetail.score}/10
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                <div className="mx-verdict-modal__event-selector">
+                  <label className="mx-verdict-modal__label">Review Action</label>
+                  <div className="mx-verdict-modal__event-buttons">
+                    {EVENT_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        className={`mx-verdict-modal__event-btn mx-verdict-modal__event-btn--${opt.value.toLowerCase().replace('_', '-')}${
+                          event === opt.value ? ' mx-verdict-modal__event-btn--active' : ''
+                        }`}
+                        onClick={() => setEvent(opt.value)}
+                        disabled={submitting}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mx-verdict-modal__custom-text">
+                  <label className="mx-verdict-modal__label">Custom Text</label>
+                  <textarea
+                    className="mx-verdict-modal__textarea"
+                    placeholder="Add your review comments..."
+                    value={customText}
+                    onChange={(e) => setCustomText(e.target.value)}
+                    rows={4}
                     disabled={submitting}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+                  />
+                </div>
 
-            <div className="mx-verdict-modal__custom-text">
-              <label className="mx-verdict-modal__label">Custom Text</label>
-              <textarea
-                className="mx-verdict-modal__textarea"
-                placeholder="Add your review comments..."
-                value={customText}
-                onChange={(e) => setCustomText(e.target.value)}
-                rows={4}
-                disabled={submitting}
-              />
-            </div>
-
-            {sections.length > 0 && (
-              <div className="mx-verdict-modal__sections">
-                <label className="mx-verdict-modal__label">Include Review Sections</label>
-                {sections.map((section) => (
-                  <div key={section.key} className="mx-verdict-modal__section-toggle">
-                    <div className="mx-verdict-modal__section-header">
-                      <label className="mx-verdict-modal__checkbox-label">
-                        <input
-                          type="checkbox"
-                          checked={enabledSections.has(section.key)}
-                          onChange={() => toggleSection(section.key)}
-                          disabled={submitting}
-                        />
-                        {section.heading}
-                      </label>
-                      <div className="mx-verdict-modal__section-controls">
-                        {isInlineEligible(section.key) && enabledSections.has(section.key) && (
-                          <label
-                            className={`mx-verdict-modal__inline-toggle${
-                              inlineSections.has(section.key) ? ' mx-verdict-modal__inline-toggle--active' : ''
-                            }`}
-                          >
+                {sections.length > 0 && (
+                  <div className="mx-verdict-modal__sections">
+                    <label className="mx-verdict-modal__label">Include Review Sections</label>
+                    {sections.map((section) => (
+                      <div key={section.key} className="mx-verdict-modal__section-toggle">
+                        <div className="mx-verdict-modal__section-header">
+                          <label className="mx-verdict-modal__checkbox-label">
                             <input
                               type="checkbox"
-                              checked={inlineSections.has(section.key)}
-                              onChange={() => toggleInline(section.key)}
+                              checked={enabledSections.has(section.key)}
+                              onChange={() => toggleSection(section.key)}
                               disabled={submitting}
                             />
-                            Inline
+                            {section.heading}
                           </label>
-                        )}
-                        <button
-                          className="mx-verdict-modal__expand-btn"
-                          onClick={() => toggleExpanded(section.key)}
-                        >
-                          {expandedSections.has(section.key) ? 'Hide' : 'Edit'}
-                        </button>
+                          <div className="mx-verdict-modal__section-controls">
+                            {isInlineEligible(section.key) && enabledSections.has(section.key) && (
+                              <label
+                                className={`mx-verdict-modal__inline-toggle${
+                                  inlineSections.has(section.key) ? ' mx-verdict-modal__inline-toggle--active' : ''
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={inlineSections.has(section.key)}
+                                  onChange={() => toggleInline(section.key)}
+                                  disabled={submitting}
+                                />
+                                Inline
+                              </label>
+                            )}
+                            <button
+                              className="mx-verdict-modal__expand-btn"
+                              onClick={() => toggleExpanded(section.key)}
+                            >
+                              {expandedSections.has(section.key) ? 'Hide' : 'Edit'}
+                            </button>
+                          </div>
+                        </div>
+                        {expandedSections.has(section.key) && renderSectionContent(section)}
                       </div>
-                    </div>
-                    {expandedSections.has(section.key) && renderSectionContent(section)}
+                    ))}
                   </div>
-                ))}
-              </div>
-            )}
+                )}
 
-            <div className="mx-verdict-modal__actions">
-              <Button variant="ghost" onClick={onClose} disabled={submitting}>
-                Cancel
-              </Button>
-              <Button
-                variant={getSubmitVariant()}
-                onClick={handleSubmit}
-                disabled={submitting || !hasContent}
-              >
-                {submitting ? 'Submitting...' : `Submit ${EVENT_OPTIONS.find((o) => o.value === event)?.label}`}
-              </Button>
-            </div>
-          </>
-        )}
-      </Modal>
+                <div className="mx-verdict-modal__actions">
+                  <Button variant="ghost" onClick={onClose} disabled={submitting}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant={getSubmitVariant()}
+                    onClick={handleSubmit}
+                    disabled={submitting || !hasContent}
+                  >
+                    {submitting ? 'Submitting...' : `Submit ${EVENT_OPTIONS.find((o) => o.value === event)?.label}`}
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+          <div
+            className="mx-verdict-modal-draggable__resize-handle"
+            onMouseDown={onVerdictResizeStart}
+          />
+        </div>
+      </div>
 
       {showReviewPanel && reviewDetail && (
         <div
@@ -496,7 +663,7 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
         >
           <div
             className="mx-verdict-review-panel__header"
-            onMouseDown={onDragStart}
+            onMouseDown={onPanelDragStart}
           >
             <h3>Code Review - PR #{prNumber}</h3>
             <button
@@ -517,7 +684,7 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose }: VerdictModal
           </div>
           <div
             className="mx-verdict-review-panel__resize-handle"
-            onMouseDown={onResizeStart}
+            onMouseDown={onPanelResizeStart}
           />
         </div>
       )}

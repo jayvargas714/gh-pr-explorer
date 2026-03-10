@@ -596,6 +596,108 @@
   border-top: 1px solid var(--mx-color-border);
 }
 
+/* Draggable Verdict Modal — replaces standard centered modal for flexibility */
+.mx-verdict-modal-overlay {
+  cursor: default;
+}
+
+.mx-verdict-modal-draggable {
+  position: relative;
+  background: var(--mx-color-bg-elevated);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-lg);
+  box-shadow: var(--mx-shadow-xl);
+  width: 100%;
+  max-width: 800px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: fadeIn 0.15s ease-out;
+}
+
+/* Once dragged, switch to fixed positioning */
+.mx-verdict-modal-draggable--positioned {
+  position: fixed;
+  max-width: none;
+  max-height: none;
+  z-index: var(--mx-z-modal);
+}
+
+.mx-verdict-modal-draggable__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--mx-space-4) var(--mx-space-6);
+  border-bottom: 1px solid var(--mx-color-border);
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.mx-verdict-modal-draggable__header:active {
+  cursor: grabbing;
+}
+
+.mx-verdict-modal-draggable__header h2 {
+  margin: 0;
+  font-size: var(--mx-font-size-xl);
+  pointer-events: none;
+}
+
+.mx-verdict-modal-draggable__close {
+  background: none;
+  border: none;
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-3xl);
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  width: var(--mx-space-8);
+  height: var(--mx-space-8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--mx-radius-sm);
+  transition: all var(--mx-transition-fast);
+}
+
+.mx-verdict-modal-draggable__close:hover {
+  background-color: var(--mx-color-surface-hover);
+  color: var(--mx-color-text-primary);
+}
+
+.mx-verdict-modal-draggable__body {
+  padding: var(--mx-space-6);
+  overflow-y: auto;
+  flex: 1;
+}
+
+.mx-verdict-modal-draggable__resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  background: linear-gradient(
+    135deg,
+    transparent 40%,
+    var(--mx-color-text-tertiary) 40%,
+    var(--mx-color-text-tertiary) 45%,
+    transparent 45%,
+    transparent 55%,
+    var(--mx-color-text-tertiary) 55%,
+    var(--mx-color-text-tertiary) 60%,
+    transparent 60%,
+    transparent 70%,
+    var(--mx-color-text-tertiary) 70%,
+    var(--mx-color-text-tertiary) 75%,
+    transparent 75%
+  );
+  border-radius: 0 0 var(--mx-radius-lg) 0;
+}
+
 /* Floating Review Panel — draggable + resizable, visible alongside verdict modal */
 .mx-verdict-review-panel {
   position: fixed;

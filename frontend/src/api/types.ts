@@ -321,6 +321,9 @@ export interface MergeQueueItem {
   majorFoundCount: number | null
   minorPostedCount: number | null
   minorFoundCount: number | null
+  criticalIssueTitles: string[] | null
+  majorIssueTitles: string[] | null
+  minorIssueTitles: string[] | null
   isFollowup: boolean
   reviewDecision: string | null
   ciStatus: string | null
@@ -623,16 +626,27 @@ export interface VerdictInlineComment {
   body: string
   start_line: number | null
   end_line: number | null
+  title?: string
+  section?: string
 }
 
 export interface VerdictRequest {
   event: VerdictEvent
   body: string
   inline_comments?: VerdictInlineComment[]
+  review_id?: number
 }
 
 export interface VerdictResponse {
   message: string
   event: string
   pr_number: number
+  inline_posted: number
+  inline_errors: string[] | null
+  fallback_used: boolean
+  section_details?: {
+    critical?: { posted: number; found: number; failed_titles: string[] }
+    major?: { posted: number; found: number; failed_titles: string[] }
+    minor?: { posted: number; found: number; failed_titles: string[] }
+  }
 }

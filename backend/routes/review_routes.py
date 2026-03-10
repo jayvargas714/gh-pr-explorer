@@ -266,11 +266,15 @@ def post_verdict_endpoint(owner, repo, pr_number):
         event = data.get("event")
         body = data.get("body")
         inline_comments = data.get("inline_comments")
+        review_id = data.get("review_id")
 
         if not event:
             return jsonify({"error": "Missing required field: event"}), 400
 
-        result, status_code = post_verdict(owner, repo, pr_number, event, body, inline_comments=inline_comments)
+        result, status_code = post_verdict(
+            owner, repo, pr_number, event, body,
+            inline_comments=inline_comments, review_id=review_id,
+        )
         return jsonify(result), status_code
     except Exception as e:
         return error_response("Internal server error", 500, f"Error posting verdict for PR #{pr_number}: {e}")

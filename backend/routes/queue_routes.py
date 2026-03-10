@@ -1,5 +1,6 @@
 """Merge queue routes: CRUD, reorder, notes."""
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, jsonify, request
@@ -42,6 +43,9 @@ def get_merge_queue():
             major_found_count = None
             minor_posted_count = None
             minor_found_count = None
+            critical_issue_titles = None
+            major_issue_titles = None
+            minor_issue_titles = None
             is_followup = False
             review_decision = None
             ci_status = None
@@ -75,6 +79,10 @@ def get_merge_queue():
                         last_reviewed_sha = latest_review["head_commit_sha"]
                         if current_sha and last_reviewed_sha:
                             has_new_commits = current_sha != last_reviewed_sha
+
+                    # Extract issue titles from content_json for tooltip display
+                    critical_issue_titles, major_issue_titles, minor_issue_titles = \
+                        _extract_issue_titles(latest_review.get("content_json"))
             else:
                 pr_state = item.get("pr_state")
 
@@ -105,6 +113,9 @@ def get_merge_queue():
                 "majorFoundCount": major_found_count,
                 "minorPostedCount": minor_posted_count,
                 "minorFoundCount": minor_found_count,
+                "criticalIssueTitles": critical_issue_titles,
+                "majorIssueTitles": major_issue_titles,
+                "minorIssueTitles": minor_issue_titles,
                 "isFollowup": is_followup,
                 "reviewDecision": review_decision,
                 "ciStatus": ci_status,
@@ -117,6 +128,32 @@ def get_merge_queue():
         return jsonify({"queue": queue})
     except Exception as e:
         return error_response("Internal server error", 500, f"Error getting merge queue: {e}")
+
+
+def _extract_issue_titles(content_json_raw):
+    """Extract issue titles per section from review content_json.
+
+    Returns (critical_titles, major_titles, minor_titles) — each a list of strings or None.
+    """
+    if not content_json_raw:
+        return None, None, None
+    try:
+        data = content_json_raw if isinstance(content_json_raw, dict) else json.loads(content_json_raw)
+        section_map = {"critical": [], "major": [], "minor": []}
+        for section in data.get("sections", []):
+            stype = section.get("type", "")
+            if stype in section_map:
+                for issue in section.get("issues", []):
+                    title = issue.get("title", "").strip()
+                    if title:
+                        section_map[stype].append(title)
+        return (
+            section_map["critical"] or None,
+            section_map["major"] or None,
+            section_map["minor"] or None,
+        )
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return None, None, None
 
 
 @queue_bp.route("/api/merge-queue", methods=["POST"])

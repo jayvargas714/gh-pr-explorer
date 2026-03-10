@@ -17,6 +17,23 @@ interface QueueItemProps {
   onRefresh: () => void
 }
 
+function buildInlineTooltip(
+  label: string,
+  titles: string[] | null,
+  posted: number | null,
+  found: number | null
+): string {
+  const parts: string[] = []
+  parts.push(`${label}: ${posted ?? '?'}/${found ?? '?'} posted`)
+  if (titles && titles.length > 0) {
+    titles.forEach((t, i) => parts.push(`${i + 1}. ${t}`))
+  }
+  if (posted !== null && found !== null && posted < found) {
+    parts.push(`⚠ ${found - posted} not posted (lines not in diff)`)
+  }
+  return parts.join('\n')
+}
+
 export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
   const [showNotes, setShowNotes] = useState(false)
   const [showVerdict, setShowVerdict] = useState(false)
@@ -141,19 +158,25 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
             {item.isFollowup && <Badge variant="info">Follow-up</Badge>}
             {item.hasNewCommits && <Badge variant="warning">New Commits</Badge>}
             {item.inlineCommentsPosted && (
-              <Badge variant={item.criticalPostedCount !== null && item.criticalPostedCount < (item.criticalFoundCount ?? 0) ? 'warning' : 'info'}>
-                Critical {item.criticalPostedCount ?? '?'}/{item.criticalFoundCount ?? '?'}
-              </Badge>
+              <span data-tooltip={buildInlineTooltip('Critical', item.criticalIssueTitles, item.criticalPostedCount, item.criticalFoundCount)}>
+                <Badge variant={item.criticalPostedCount !== null && item.criticalPostedCount < (item.criticalFoundCount ?? 0) ? 'warning' : 'info'}>
+                  Critical {item.criticalPostedCount ?? '?'}/{item.criticalFoundCount ?? '?'}
+                </Badge>
+              </span>
             )}
             {item.majorConcernsPosted && (
-              <Badge variant={item.majorPostedCount !== null && item.majorPostedCount < (item.majorFoundCount ?? 0) ? 'warning' : 'info'}>
-                Major {item.majorPostedCount ?? '?'}/{item.majorFoundCount ?? '?'}
-              </Badge>
+              <span data-tooltip={buildInlineTooltip('Major', item.majorIssueTitles, item.majorPostedCount, item.majorFoundCount)}>
+                <Badge variant={item.majorPostedCount !== null && item.majorPostedCount < (item.majorFoundCount ?? 0) ? 'warning' : 'info'}>
+                  Major {item.majorPostedCount ?? '?'}/{item.majorFoundCount ?? '?'}
+                </Badge>
+              </span>
             )}
             {item.minorIssuesPosted && (
-              <Badge variant={item.minorPostedCount !== null && item.minorPostedCount < (item.minorFoundCount ?? 0) ? 'warning' : 'info'}>
-                Minor {item.minorPostedCount ?? '?'}/{item.minorFoundCount ?? '?'}
-              </Badge>
+              <span data-tooltip={buildInlineTooltip('Minor', item.minorIssueTitles, item.minorPostedCount, item.minorFoundCount)}>
+                <Badge variant={item.minorPostedCount !== null && item.minorPostedCount < (item.minorFoundCount ?? 0) ? 'warning' : 'info'}>
+                  Minor {item.minorPostedCount ?? '?'}/{item.minorFoundCount ?? '?'}
+                </Badge>
+              </span>
             )}
           </div>
         )}
@@ -211,6 +234,7 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
           prNumber={item.number}
           repo={item.repo}
           onClose={() => setShowVerdict(false)}
+          onRefresh={onRefresh}
         />
       )}
     </>

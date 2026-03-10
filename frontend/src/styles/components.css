@@ -740,10 +740,9 @@
   font-size: var(--mx-font-size-xs);
   font-weight: var(--mx-font-weight-normal);
   color: var(--mx-color-text-secondary);
-  white-space: nowrap;
   pointer-events: none;
   max-width: 350px;
-  white-space: normal;
-  text-align: center;
+  white-space: pre-line;
+  text-align: left;
   line-height: 1.4;
 }
