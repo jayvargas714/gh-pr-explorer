@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from backend.agents.base import AgentBackend, AgentHandle, AgentStatus, ReviewArtifact
+from backend.agents.base import AgentBackend, AgentHandle, AgentStatus, ReviewArtifact, normalize_usage
 from backend.agents.pid_tracker import register_pid, unregister_pid
 from backend.config import get_reviews_dir
 from backend.services.review_schema import (
@@ -322,7 +322,7 @@ class CursorCLIAgent(AgentBackend):
         usage = None
         with state._lock:
             if state._usage:
-                usage = dict(state._usage)
+                usage = normalize_usage(state._usage)
                 if state._cost_usd is not None:
                     usage["cost_usd"] = state._cost_usd
                 if state._duration_ms is not None:

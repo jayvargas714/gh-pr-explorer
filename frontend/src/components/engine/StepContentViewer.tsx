@@ -331,6 +331,7 @@ function DomainReviewList({ reviews }: { reviews: Array<Record<string, unknown>>
           const domain = (r.domain ?? `PR #${r.pr_number ?? i + 1}`) as string
           const md = r.content_md as string | undefined
           const score = r.score as number | undefined
+          const usage = r.usage as TokenUsage | undefined
           const isOpen = expandedIdx === i
           const status = (r.status ?? 'unknown') as string
 
@@ -354,6 +355,7 @@ function DomainReviewList({ reviews }: { reviews: Array<Record<string, unknown>>
                 {r.agent_name ? (
                   <span style={{ fontSize: 12, opacity: 0.5, marginLeft: 'auto' }}>{String(r.agent_name)}</span>
                 ) : null}
+                {usage && <TokenUsageBadge usage={usage} />}
               </div>
               {isOpen && status === 'completed' && md && (
                 <div className="mx-step-content__review-markdown">
@@ -818,8 +820,8 @@ function PublishView({ content }: { content: ParsedContent }) {
   const prNumber = content.pr_number as number | undefined
   const verdict = content.verdict as string | undefined
   const commentUrl = content.comment_url as string | undefined
-  const commentBody = content.comment_body as string | undefined
-  const eventType = content.event_type as string | undefined
+  const commentBody = (content.comment_body ?? content.body) as string | undefined
+  const eventType = (content.event_type ?? content.event) as string | undefined
 
   if (reason) {
     return (
@@ -875,9 +877,11 @@ function PublishView({ content }: { content: ParsedContent }) {
         </a>
       )}
       {commentBody && (
-        <details style={{ marginTop: '8px' }}>
-          <summary style={{ cursor: 'pointer', fontSize: '13px' }}>Comment Preview</summary>
-          <pre className="mx-step-content__prompt" style={{ maxHeight: '400px', overflow: 'auto' }}>{commentBody}</pre>
+        <details style={{ marginTop: '8px' }} open>
+          <summary style={{ cursor: 'pointer', fontSize: '13px' }}>Published Comment</summary>
+          <div className="mx-step-content__review-markdown" style={{ maxHeight: '600px', overflow: 'auto' }}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{commentBody}</ReactMarkdown>
+          </div>
         </details>
       )}
     </div>
@@ -1570,9 +1574,17 @@ export function StepContentViewer({ step, artifacts, instanceId }: StepContentVi
     return <Viewer content={{}} step={step} instanceId={instanceId} />
   }
 
+  // Parse outputs_json once — used for token usage and as fallback content
+  const outputsRaw = step.outputs_json
+  const parsedOutputs: ParsedContent | null = outputsRaw ? parseOutputs(outputsRaw) as ParsedContent | null : null
+  const stepUsage = parsedOutputs?.usage as TokenUsage | undefined
+
   if (stepArtifacts.length > 0) {
     return (
       <div className="mx-step-content">
+        {stepUsage && (stepUsage.input_tokens || stepUsage.output_tokens || stepUsage.cache_read_input_tokens) && (
+          <TokenUsageBreakdown usage={stepUsage} label="Token Usage" />
+        )}
         {stepArtifacts.map((a, i) => {
           const content = parseContent(a)
           if (!content) return <div key={i} className="mx-step-content__empty">Artifact has no content.</div>
@@ -1582,28 +1594,24 @@ export function StepContentViewer({ step, artifacts, instanceId }: StepContentVi
     )
   }
 
-  const outputsRaw = step.outputs_json
-  if (outputsRaw) {
-    let parsed: ParsedContent | null = parseOutputs(outputsRaw) as ParsedContent | null
-    if (parsed) {
-      const usage = parsed.usage as TokenUsage | undefined
-      const WRAPPER_KEYS: Record<string, string> = {
-        synthesis: 'synthesis',
-        holistic_review: 'holistic',
-      }
-      const wrapperKey = WRAPPER_KEYS[step.step_type]
-      if (wrapperKey && parsed[wrapperKey] && typeof parsed[wrapperKey] === 'object') {
-        parsed = parsed[wrapperKey] as ParsedContent
-      }
-      return (
-        <div className="mx-step-content">
-          {usage && (usage.input_tokens || usage.output_tokens || usage.cache_read_input_tokens) && (
-            <TokenUsageBreakdown usage={usage} label="Token Usage" />
-          )}
-          <Viewer content={parsed} step={step} />
-        </div>
-      )
+  if (parsedOutputs) {
+    let parsed = parsedOutputs
+    const WRAPPER_KEYS: Record<string, string> = {
+      synthesis: 'synthesis',
+      holistic_review: 'holistic',
     }
+    const wrapperKey = WRAPPER_KEYS[step.step_type]
+    if (wrapperKey && parsed[wrapperKey] && typeof parsed[wrapperKey] === 'object') {
+      parsed = parsed[wrapperKey] as ParsedContent
+    }
+    return (
+      <div className="mx-step-content">
+        {stepUsage && (stepUsage.input_tokens || stepUsage.output_tokens || stepUsage.cache_read_input_tokens) && (
+          <TokenUsageBreakdown usage={stepUsage} label="Token Usage" />
+        )}
+        <Viewer content={parsed} step={step} />
+      </div>
+    )
   }
 
   return <div className="mx-step-content__empty">No output available yet.</div>

@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
 import { FindingCard } from './FindingCard'
+import { TokenUsageBreakdown, type TokenUsage, formatTokenCount } from './StepContentViewer'
 import { useWorkflowEngineStore } from '../../stores/useWorkflowEngineStore'
 import { parseContent } from '../../api/workflow-engine'
 import type { WorkflowInstance } from '../../api/workflow-engine'
 
-type GateTab = 'overview' | 'comparison' | 'publish' | 'freshness' | 'synthesis_log' | 'questions' | 'domains'
+type GateTab = 'overview' | 'comparison' | 'reviews' | 'publish' | 'freshness' | 'synthesis_log' | 'questions' | 'domains'
 
 interface GateViewProps {
   instance: WorkflowInstance
@@ -330,10 +333,52 @@ function PublishPreviewFromGate({ holisticData, synthData, reviews }: {
         <p style={{ fontSize: '12px', opacity: 0.7, marginBottom: '8px' }}>
           This is approximately what will be posted to the PR when you approve. The publish step may further deduplicate against existing comments.
         </p>
-        <pre style={{ whiteSpace: 'pre-wrap', fontSize: '12px', lineHeight: '1.5', padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.1)', maxHeight: '600px', overflow: 'auto' }}>
-          {markdown}
-        </pre>
+        <div className="mx-step-content__review-markdown" style={{ maxHeight: '600px', overflow: 'auto', padding: '12px', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px' }}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+        </div>
       </div>
+    </div>
+  )
+}
+
+function FullReviewsView({ reviews }: {
+  reviews: Array<{ pr_number?: number; domain?: string; agent_name?: string; score?: number; content_md?: string }>
+}) {
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(reviews.length === 1 ? 0 : null)
+
+  if (!reviews.length) return <p className="mx-gate-view__empty">No reviews available.</p>
+
+  return (
+    <div className="mx-gate-view__overview">
+      {reviews.map((r, i) => {
+        const label = r.domain ? `${r.agent_name ?? 'Agent'} — ${r.domain}` : (r.agent_name ?? `Review ${i + 1}`)
+        const isOpen = expandedIdx === i
+        return (
+          <div key={i} className="mx-gate-view__section" style={{ padding: 0 }}>
+            <div
+              onClick={() => setExpandedIdx(isOpen ? null : i)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px',
+                cursor: 'pointer', background: 'rgba(255,255,255,0.03)',
+                borderBottom: isOpen ? '1px solid rgba(255,255,255,0.1)' : 'none',
+              }}
+            >
+              <span>{isOpen ? '\u25BC' : '\u25B6'}</span>
+              <strong style={{ fontSize: 14 }}>{label}</strong>
+              {r.score != null && (
+                <Badge variant={r.score >= 7 ? 'success' : r.score >= 4 ? 'warning' : 'error'} size="sm">
+                  {r.score}/10
+                </Badge>
+              )}
+            </div>
+            {isOpen && r.content_md && (
+              <div className="mx-step-content__review-markdown" style={{ padding: '12px 14px' }}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{r.content_md}</ReactMarkdown>
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -519,6 +564,24 @@ export function GateView({ instance, onBack }: GateViewProps) {
   const feedbackHistory = (gatePayload.feedback_history ?? []) as Array<{ feedback?: string; iteration?: number }>
   const iteration = (gatePayload.iteration ?? 1) as number
 
+  // Aggregate token usage from all steps in this run
+  const runUsage: TokenUsage = (() => {
+    const total: TokenUsage = { input_tokens: 0, output_tokens: 0 }
+    for (const s of steps) {
+      if (!s.outputs_json) continue
+      const parsed = parseContent(s.outputs_json) as Record<string, unknown> | null
+      const u = parsed?.usage as TokenUsage | undefined
+      if (!u) continue
+      total.input_tokens = (total.input_tokens ?? 0) + (u.input_tokens ?? 0)
+      total.output_tokens = (total.output_tokens ?? 0) + (u.output_tokens ?? 0)
+      if (u.cache_read_input_tokens) total.cache_read_input_tokens = (total.cache_read_input_tokens ?? 0) + u.cache_read_input_tokens
+      if (u.cache_creation_input_tokens) total.cache_creation_input_tokens = (total.cache_creation_input_tokens ?? 0) + u.cache_creation_input_tokens
+      if (u.cost_usd != null) total.cost_usd = (total.cost_usd ?? 0) + u.cost_usd
+      if (u.duration_ms != null) total.duration_ms = (total.duration_ms ?? 0) + u.duration_ms
+    }
+    return total
+  })()
+
   const handleApprove = async () => {
     setSubmitting(true)
     await approveGate(inst.id)
@@ -545,6 +608,7 @@ export function GateView({ instance, onBack }: GateViewProps) {
   const tabs: { id: GateTab; label: string; show: boolean }[] = [
     { id: 'overview', label: 'Overview', show: true },
     { id: 'domains', label: `Domains (${perDomainSynthesis.length})`, show: perDomainSynthesis.length > 0 },
+    { id: 'reviews', label: `Full Reviews (${gateReviews.length})`, show: gateReviews.length > 0 },
     { id: 'comparison', label: 'Comparison', show: true },
     { id: 'synthesis_log', label: `Synthesis Log (${synthesisLog.length})`, show: synthesisLog.length > 0 },
     { id: 'questions', label: `Questions (${questions.length})`, show: questions.length > 0 },
@@ -611,7 +675,17 @@ export function GateView({ instance, onBack }: GateViewProps) {
           <span className="mx-gate-view__stat-value">{agreementRate}%</span>
           <span className="mx-gate-view__stat-label">Agreement</span>
         </div>
+        {(runUsage.input_tokens || runUsage.output_tokens) ? (
+          <div className="mx-gate-view__stat">
+            <span className="mx-gate-view__stat-value">{formatTokenCount((runUsage.input_tokens ?? 0) + (runUsage.output_tokens ?? 0))}</span>
+            <span className="mx-gate-view__stat-label">Tokens Used</span>
+          </div>
+        ) : null}
       </div>
+
+      {(runUsage.input_tokens || runUsage.output_tokens) ? (
+        <TokenUsageBreakdown usage={runUsage} label="Run Token Usage" />
+      ) : null}
 
       <div className="mx-gate-view__tabs">
         {tabs.filter(t => t.show).map((t) => (
@@ -725,6 +799,10 @@ export function GateView({ instance, onBack }: GateViewProps) {
               <p className="mx-gate-view__empty">No synthesis data available yet.</p>
             )}
           </div>
+        )}
+
+        {tab === 'reviews' && (
+          <FullReviewsView reviews={gateReviews} />
         )}
 
         {tab === 'comparison' && (

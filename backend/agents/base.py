@@ -33,6 +33,22 @@ class ReviewArtifact:
     usage: Optional[dict] = None  # {input_tokens, output_tokens, cost_usd, ...}
 
 
+_USAGE_KEY_MAP = {
+    "inputTokens": "input_tokens",
+    "outputTokens": "output_tokens",
+    "cacheReadTokens": "cache_read_input_tokens",
+    "cacheWriteTokens": "cache_creation_input_tokens",
+}
+
+
+def normalize_usage(raw: dict) -> dict:
+    """Normalize camelCase usage keys (Cursor) to snake_case (Claude convention)."""
+    out = {}
+    for k, v in raw.items():
+        out[_USAGE_KEY_MAP.get(k, k)] = v
+    return out
+
+
 class AgentBackend(ABC):
     """Base class for all AI agent backends.
 
