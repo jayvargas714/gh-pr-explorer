@@ -94,7 +94,7 @@ export function RunConfigPanel({ repo, onClose, onStarted }: RunConfigPanelProps
     ? (templateDetail.steps as TemplateStepDef[]) ?? []
     : []
 
-  const AGENT_STEP_TYPES = new Set(['agent_review', 'synthesis', 'holistic_review', 'expert_select'])
+  const AGENT_STEP_TYPES = new Set(['agent_review', 'synthesis', 'holistic_review', 'expert_select', 'freshness_check'])
   const agentSteps = steps.filter((s) => AGENT_STEP_TYPES.has(s.type) && (s.type === 'agent_review' || s.config?.agent || s.config?.ai_verify))
 
   const getMissingTypes = (templateId: number): string[] => {
@@ -264,6 +264,7 @@ export function RunConfigPanel({ repo, onClose, onStarted }: RunConfigPanelProps
                 synthesis: 'Synthesis',
                 holistic_review: 'Holistic',
                 expert_select: 'Expert Select',
+                freshness_check: 'Freshness',
               }
               const label = `${stepLabel[s.type] ?? s.type}: ${s.id}`
               return (

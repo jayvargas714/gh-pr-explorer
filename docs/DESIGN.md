@@ -483,7 +483,7 @@ The Review Workflows tab provides a UI for composable code review pipelines impl
 | Module | Step Type | Description |
 |--------|-----------|-------------|
 | `pr_select.py` | `pr_select` | Fetches PRs via `gh` CLI |
-| `prioritize.py` | `prioritize` | P0-P3 scoring, code owner boost, repo-scoped skip list |
+| `prioritize.py` | `prioritize` | P0-P3 scoring, code owner boost, repo-scoped skip list. Preflight check auto-skips PRs the authenticated user has already reviewed on GitHub (parallel API checks via ThreadPoolExecutor) and persists them to skip list |
 | `expert_select.py` | `expert_select` | DB-backed domain matching with file/keyword triggers, relevance thresholds, expert count caps |
 | `prompt_generate.py` | `prompt_generate` | Structured prompt builder: header, context commands, GitHub API dedup, persona, checklist, anti-patterns, cross-cutting concerns, depth expectations, cross-file analysis, diff ingestion strategy, output format. Per-expert fan-out for self/deep review |
 | `agent_review.py` | `agent_review` | Dispatches prompt to `AgentBackend`, Review B isolation, live output streaming, domain propagation |

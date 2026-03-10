@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
-import { StepContentViewer, TokenUsageBadge, type TokenUsage } from './StepContentViewer'
+import { StepContentViewer, TokenUsageBreakdown, formatTokenCount, type TokenUsage } from './StepContentViewer'
 import { useWorkflowEngineStore } from '../../stores/useWorkflowEngineStore'
 import { retryStep, getStepDownloadUrl, getInstanceFeedback, clearInstanceFeedback, parseContent } from '../../api/workflow-engine'
 import type { WorkflowInstance } from '../../api/workflow-engine'
@@ -80,8 +80,9 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
   const hasGate = steps.some((s) => s.step_type === 'human_gate' && s.status === 'awaiting_gate')
   const selectedStep = steps.find((s) => s.step_id === selectedStepId) ?? null
 
-  const runUsage = useMemo<TokenUsage | null>(() => {
+  const { runUsage, stepUsageMap } = useMemo(() => {
     const total: TokenUsage = { input_tokens: 0, output_tokens: 0 }
+    const perStep: Record<string, TokenUsage> = {}
     let hasAny = false
     for (const s of steps) {
       if (!s.outputs_json) continue
@@ -89,10 +90,14 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
       const u = parsed?.usage as TokenUsage | undefined
       if (!u) continue
       hasAny = true
+      perStep[s.step_id] = u
       total.input_tokens = (total.input_tokens ?? 0) + (u.input_tokens ?? 0)
       total.output_tokens = (total.output_tokens ?? 0) + (u.output_tokens ?? 0)
       if (u.cache_read_input_tokens) {
         total.cache_read_input_tokens = (total.cache_read_input_tokens ?? 0) + u.cache_read_input_tokens
+      }
+      if (u.cache_creation_input_tokens) {
+        total.cache_creation_input_tokens = (total.cache_creation_input_tokens ?? 0) + u.cache_creation_input_tokens
       }
       if (u.cost_usd != null) {
         total.cost_usd = (total.cost_usd ?? 0) + u.cost_usd
@@ -100,8 +105,11 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
       if (u.num_turns) {
         total.num_turns = (total.num_turns ?? 0) + u.num_turns
       }
+      if (u.duration_ms) {
+        total.duration_ms = (total.duration_ms ?? 0) + u.duration_ms
+      }
     }
-    return hasAny ? total : null
+    return { runUsage: hasAny ? total : null, stepUsageMap: perStep }
   }, [steps])
 
   const prevSelectedRef = useRef<{ stepId: string | null; status: string | null }>({ stepId: null, status: null })
@@ -140,7 +148,7 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
         <div className="mx-run-detail__meta">
           <span>{inst.repo}</span>
           <span>{new Date(inst.created_at).toLocaleString()}</span>
-          {runUsage && <TokenUsageBadge usage={runUsage} />}
+          {runUsage && <TokenUsageBreakdown usage={runUsage} label="Run Total" />}
         </div>
         {hasGate && (
           <Button variant="primary" size="sm" onClick={onOpenGate}>
@@ -190,6 +198,11 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
                   </div>
                   <div className="mx-run-detail__step-bottom">
                     <span className="mx-run-detail__step-id">{step.step_id}</span>
+                    {stepUsageMap[step.step_id] && (
+                      <span className="mx-run-detail__step-tokens" title={`${formatTokenCount((stepUsageMap[step.step_id].input_tokens ?? 0) + (stepUsageMap[step.step_id].output_tokens ?? 0))} tokens · ${stepUsageMap[step.step_id].num_turns ?? 0} turns`}>
+                        {formatTokenCount((stepUsageMap[step.step_id].input_tokens ?? 0) + (stepUsageMap[step.step_id].output_tokens ?? 0))}
+                      </span>
+                    )}
                     <span className="mx-run-detail__step-duration">
                       {formatDuration(step.started_at, step.completed_at)}
                     </span>

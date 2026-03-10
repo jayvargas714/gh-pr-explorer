@@ -640,6 +640,54 @@
   opacity: 0.75;
 }
 
+/* Token usage breakdown (expanded view for step content & run summary) */
+.mx-token-breakdown {
+  padding: 8px 12px;
+  background: var(--mx-color-bg-tertiary, rgba(128, 128, 128, 0.08));
+  border-radius: var(--mx-radius-sm);
+  border: 1px solid var(--mx-color-border-muted, rgba(128, 128, 128, 0.15));
+  margin-bottom: var(--mx-space-3, 12px);
+}
+.mx-token-breakdown__label {
+  display: block;
+  font-size: var(--mx-font-size-xs, 11px);
+  font-weight: 600;
+  color: var(--mx-color-text-muted, #999);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+.mx-token-breakdown__grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.mx-token-breakdown__item {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: var(--mx-font-size-sm, 12px);
+}
+.mx-token-breakdown__key {
+  color: var(--mx-color-text-muted, #999);
+}
+.mx-token-breakdown__val {
+  font-weight: 600;
+  color: var(--mx-color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.mx-token-breakdown__item--cost .mx-token-breakdown__val {
+  color: var(--mx-color-success, #22c55e);
+}
+
+/* Token count in step timeline */
+.mx-run-detail__step-tokens {
+  font-size: 10px;
+  color: var(--mx-color-text-muted, #999);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+
 .mx-step-content__pr-list {
   display: flex;
   flex-direction: column;

@@ -33,33 +33,96 @@ function formatTokenCount(n: number): string {
   return String(n)
 }
 
-export { type TokenUsage }
+function formatDurationMs(ms: number): string {
+  const secs = Math.floor(ms / 1000)
+  if (secs < 60) return `${secs}s`
+  const mins = Math.floor(secs / 60)
+  const remainSecs = secs % 60
+  if (mins < 60) return `${mins}m ${remainSecs}s`
+  const hrs = Math.floor(mins / 60)
+  const remainMins = mins % 60
+  return `${hrs}h ${remainMins}m`
+}
 
+export { type TokenUsage, formatTokenCount }
+
+/** Compact inline badge for step timeline — just shows total tokens */
 export function TokenUsageBadge({ usage }: { usage: TokenUsage }) {
   const input = usage.input_tokens ?? 0
   const output = usage.output_tokens ?? 0
-  if (!input && !output) return null
+  const cacheRead = usage.cache_read_input_tokens ?? 0
+  if (!input && !output && !cacheRead) return null
 
-  const parts: string[] = []
-  parts.push(`In: ${formatTokenCount(input)}`)
-  parts.push(`Out: ${formatTokenCount(output)}`)
-  if (usage.cache_read_input_tokens) {
-    parts.push(`Cache read: ${formatTokenCount(usage.cache_read_input_tokens)}`)
-  }
-  if (usage.num_turns) {
-    parts.push(`${usage.num_turns} turns`)
-  }
-  if (usage.cost_usd != null) {
-    parts.push(`$${usage.cost_usd.toFixed(4)}`)
-  }
+  const tooltip = [
+    `In: ${formatTokenCount(input)}`,
+    `Out: ${formatTokenCount(output)}`,
+    cacheRead ? `Cache read: ${formatTokenCount(cacheRead)}` : '',
+    usage.num_turns ? `${usage.num_turns} turns` : '',
+    usage.cost_usd != null ? `$${usage.cost_usd.toFixed(4)}` : '',
+  ].filter(Boolean).join(' · ')
 
   return (
-    <div className="mx-token-usage" title={parts.join(' · ')}>
+    <div className="mx-token-usage" title={tooltip}>
       <span className="mx-token-usage__icon">T</span>
       <span className="mx-token-usage__summary">
         {formatTokenCount(input + output)} tokens
         {usage.cost_usd != null && <span className="mx-token-usage__cost"> · ${usage.cost_usd.toFixed(4)}</span>}
       </span>
+    </div>
+  )
+}
+
+/** Expanded breakdown for step content and run summary */
+export function TokenUsageBreakdown({ usage, label }: { usage: TokenUsage; label?: string }) {
+  const input = usage.input_tokens ?? 0
+  const output = usage.output_tokens ?? 0
+  const cacheRead = usage.cache_read_input_tokens ?? 0
+  const cacheCreate = usage.cache_creation_input_tokens ?? 0
+  if (!input && !output && !cacheRead) return null
+
+  return (
+    <div className="mx-token-breakdown">
+      {label && <span className="mx-token-breakdown__label">{label}</span>}
+      <div className="mx-token-breakdown__grid">
+        <div className="mx-token-breakdown__item">
+          <span className="mx-token-breakdown__key">Input</span>
+          <span className="mx-token-breakdown__val">{formatTokenCount(input)}</span>
+        </div>
+        <div className="mx-token-breakdown__item">
+          <span className="mx-token-breakdown__key">Output</span>
+          <span className="mx-token-breakdown__val">{formatTokenCount(output)}</span>
+        </div>
+        {cacheRead > 0 && (
+          <div className="mx-token-breakdown__item">
+            <span className="mx-token-breakdown__key">Cache read</span>
+            <span className="mx-token-breakdown__val">{formatTokenCount(cacheRead)}</span>
+          </div>
+        )}
+        {cacheCreate > 0 && (
+          <div className="mx-token-breakdown__item">
+            <span className="mx-token-breakdown__key">Cache write</span>
+            <span className="mx-token-breakdown__val">{formatTokenCount(cacheCreate)}</span>
+          </div>
+        )}
+        {(usage.num_turns ?? 0) > 0 && (
+          <div className="mx-token-breakdown__item">
+            <span className="mx-token-breakdown__key">Turns</span>
+            <span className="mx-token-breakdown__val">{usage.num_turns}</span>
+          </div>
+        )}
+        {usage.duration_ms != null && (
+          <div className="mx-token-breakdown__item">
+            <span className="mx-token-breakdown__key">Duration</span>
+            <span className="mx-token-breakdown__val">{formatDurationMs(usage.duration_ms)}</span>
+          </div>
+        )}
+        {usage.cost_usd != null && (
+          <div className="mx-token-breakdown__item mx-token-breakdown__item--cost">
+            <span className="mx-token-breakdown__key">Cost</span>
+            <span className="mx-token-breakdown__val">${usage.cost_usd.toFixed(4)}</span>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -1534,7 +1597,9 @@ export function StepContentViewer({ step, artifacts, instanceId }: StepContentVi
       }
       return (
         <div className="mx-step-content">
-          {usage && (usage.input_tokens || usage.output_tokens) && <TokenUsageBadge usage={usage} />}
+          {usage && (usage.input_tokens || usage.output_tokens || usage.cache_read_input_tokens) && (
+            <TokenUsageBreakdown usage={usage} label="Token Usage" />
+          )}
           <Viewer content={parsed} step={step} />
         </div>
       )
