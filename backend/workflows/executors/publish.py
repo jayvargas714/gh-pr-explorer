@@ -322,7 +322,9 @@ class PublishExecutor(StepExecutor):
                 "type": "gh_comment",
                 "pr_number": result["pr_number"],
                 "data": {"body": result["body"], "event": result["gh_event"],
-                         "posted": result["posted"]},
+                         "posted": result["posted"], "published": result["published"],
+                         "verdict": result.get("verdict"), "pr_number": result["pr_number"],
+                         "comment_url": result.get("comment_url")},
             }],
         )
 
