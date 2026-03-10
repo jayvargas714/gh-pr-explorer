@@ -249,7 +249,7 @@ class SynthesisExecutor(StepExecutor):
         inst_id = self.instance_config.get("_instance_id", 0)
         step_id = self.step_config.get("_step_id", "")
 
-        agent_name = self.step_config.get("agent", "cursor-opus")
+        agent_name = self.step_config.get("agent", "claude-opus")
         try:
             agent = get_agent(agent_name)
         except Exception as e:

@@ -27,7 +27,7 @@ TEAM_REVIEW_TEMPLATE = {
         {"id": "prompt_gate", "type": "human_gate", "config": {"gate_type": "prompt_review", "retry_target": "prompt"}, "position": {"x": 400, "y": 200}},
         {"id": "review_a", "type": "agent_review", "config": {"agent": "claude-opus", "phase": "a"}, "position": {"x": 600, "y": 100}},
         {"id": "review_b", "type": "agent_review", "config": {"agent": "cursor-codex-xhigh", "phase": "b"}, "position": {"x": 600, "y": 300}},
-        {"id": "synth", "type": "synthesis", "config": {"ai_verify": True}, "position": {"x": 750, "y": 200}},
+        {"id": "synth", "type": "synthesis", "config": {"ai_verify": True, "agent": "claude-sonnet"}, "position": {"x": 750, "y": 200}},
         {"id": "fresh", "type": "freshness_check", "config": {}, "position": {"x": 900, "y": 200}},
         {"id": "gate", "type": "human_gate", "config": {"retry_target": "synth"}, "position": {"x": 1050, "y": 200}},
         {"id": "pub", "type": "publish", "config": {}, "position": {"x": 1200, "y": 200}},
@@ -50,12 +50,12 @@ TEAM_REVIEW_TEMPLATE = {
 SELF_REVIEW_TEMPLATE = {
     "steps": [
         {"id": "select", "type": "pr_select", "config": {"mode": "self-review"}, "position": {"x": 50, "y": 200}},
-        {"id": "experts", "type": "expert_select", "config": {}, "position": {"x": 200, "y": 200}},
+        {"id": "experts", "type": "expert_select", "config": {"agent": "claude-sonnet"}, "position": {"x": 200, "y": 200}},
         {"id": "prompt", "type": "prompt_generate", "config": {"per_expert": True}, "position": {"x": 350, "y": 200}},
         {"id": "prompt_gate", "type": "human_gate", "config": {"gate_type": "prompt_review", "retry_target": "experts"}, "position": {"x": 400, "y": 200}},
         {"id": "review_a", "type": "agent_review", "config": {"agent": "claude-opus", "phase": "a"}, "position": {"x": 600, "y": 100}},
         {"id": "review_b", "type": "agent_review", "config": {"agent": "cursor-codex-xhigh", "phase": "b"}, "position": {"x": 600, "y": 300}},
-        {"id": "synth", "type": "synthesis", "config": {"ai_verify": True}, "position": {"x": 750, "y": 200}},
+        {"id": "synth", "type": "synthesis", "config": {"ai_verify": True, "agent": "claude-sonnet"}, "position": {"x": 750, "y": 200}},
         {"id": "holistic", "type": "holistic_review", "config": {"agent": "claude-opus"}, "position": {"x": 900, "y": 200}},
         {"id": "gate", "type": "human_gate", "config": {"retry_target": "synth"}, "position": {"x": 1050, "y": 200}},
     ],
@@ -78,12 +78,12 @@ SELF_REVIEW_TEMPLATE = {
 DEEP_REVIEW_TEMPLATE = {
     "steps": [
         {"id": "select", "type": "pr_select", "config": {"mode": "deep-review"}, "position": {"x": 50, "y": 200}},
-        {"id": "experts", "type": "expert_select", "config": {}, "position": {"x": 200, "y": 200}},
+        {"id": "experts", "type": "expert_select", "config": {"agent": "claude-sonnet"}, "position": {"x": 200, "y": 200}},
         {"id": "prompt", "type": "prompt_generate", "config": {"per_expert": True}, "position": {"x": 350, "y": 200}},
         {"id": "prompt_gate", "type": "human_gate", "config": {"gate_type": "prompt_review", "retry_target": "experts"}, "position": {"x": 400, "y": 200}},
         {"id": "review_a", "type": "agent_review", "config": {"agent": "claude-opus", "phase": "a"}, "position": {"x": 600, "y": 100}},
         {"id": "review_b", "type": "agent_review", "config": {"agent": "cursor-codex-xhigh", "phase": "b"}, "position": {"x": 600, "y": 300}},
-        {"id": "synth", "type": "synthesis", "config": {"ai_verify": True}, "position": {"x": 750, "y": 200}},
+        {"id": "synth", "type": "synthesis", "config": {"ai_verify": True, "agent": "claude-sonnet"}, "position": {"x": 750, "y": 200}},
         {"id": "holistic", "type": "holistic_review", "config": {"agent": "claude-opus"}, "position": {"x": 900, "y": 200}},
         {"id": "gate", "type": "human_gate", "config": {"retry_target": "synth"}, "position": {"x": 1050, "y": 200}},
         {"id": "pub", "type": "publish", "config": {}, "position": {"x": 1200, "y": 200}},

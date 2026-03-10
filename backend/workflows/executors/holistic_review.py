@@ -40,7 +40,7 @@ class HolisticReviewExecutor(StepExecutor):
 
         prompt = self._build_holistic_prompt(synthesis, reviews, experts, prs, owner, repo)
 
-        agent_name = self.step_config.get("agent", "cursor-opus")
+        agent_name = self.step_config.get("agent", "claude-opus")
         try:
             agent = get_agent(agent_name)
         except Exception as e:

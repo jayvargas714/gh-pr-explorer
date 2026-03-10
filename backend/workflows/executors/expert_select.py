@@ -251,7 +251,7 @@ class ExpertSelectExecutor(StepExecutor):
         from backend.workflows.cancellation import (
             is_cancelled, register_agent, unregister_agent, AGENT_POLL_TIMEOUT,
         )
-        agent_name = self.step_config.get("agent", "cursor-opus")
+        agent_name = self.step_config.get("agent", "claude-opus")
         inst_id = self.instance_config.get("_instance_id", 0)
         step_id = self.step_config.get("_step_id", "")
 

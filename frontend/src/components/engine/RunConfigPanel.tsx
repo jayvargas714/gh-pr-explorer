@@ -94,7 +94,8 @@ export function RunConfigPanel({ repo, onClose, onStarted }: RunConfigPanelProps
     ? (templateDetail.steps as TemplateStepDef[]) ?? []
     : []
 
-  const agentSteps = steps.filter((s) => s.type === 'agent_review')
+  const AGENT_STEP_TYPES = new Set(['agent_review', 'synthesis', 'holistic_review', 'expert_select'])
+  const agentSteps = steps.filter((s) => AGENT_STEP_TYPES.has(s.type) && (s.type === 'agent_review' || s.config?.agent || s.config?.ai_verify))
 
   const getMissingTypes = (templateId: number): string[] => {
     const types = templateStepTypes[templateId] ?? []
@@ -258,9 +259,16 @@ export function RunConfigPanel({ repo, onClose, onStarted }: RunConfigPanelProps
           <div className="mx-run-config__agents">
             {agentSteps.map((s) => {
               const defaultAgent = (s.config?.agent as string) ?? ''
+              const stepLabel: Record<string, string> = {
+                agent_review: 'Review',
+                synthesis: 'Synthesis',
+                holistic_review: 'Holistic',
+                expert_select: 'Expert Select',
+              }
+              const label = `${stepLabel[s.type] ?? s.type}: ${s.id}`
               return (
                 <div key={s.id} className="mx-run-config__agent-row">
-                  <label>{s.id}</label>
+                  <label>{label}</label>
                   <select
                     className="mx-select"
                     value={agentOverrides[s.id] ?? defaultAgent}
