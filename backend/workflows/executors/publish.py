@@ -316,13 +316,14 @@ class PublishExecutor(StepExecutor):
         success = post_result.get("ok", False)
         comment_url = post_result.get("url")
 
+        followup_error = None
         instance_id = self.instance_config.get("_instance_id", 0)
         if success and verdict in ("CHANGES_REQUESTED", "NEEDS_DISCUSSION"):
-            self._create_followup_entries(
+            followup_error = self._create_followup_entries(
                 owner, repo, pr_number, synthesis, instance_id
             )
 
-        return {
+        result = {
             "published": success,
             "pr_number": pr_number,
             "verdict": verdict,
@@ -331,6 +332,9 @@ class PublishExecutor(StepExecutor):
             "posted": success,
             "comment_url": comment_url,
         }
+        if followup_error:
+            result["followup_error"] = followup_error
+        return result
 
     def _publish_single_pr_result(self, synthesis: dict, owner: str, repo: str,
                                   mode: str, freshness: list) -> StepResult:
@@ -537,7 +541,8 @@ class PublishExecutor(StepExecutor):
 
     @staticmethod
     def _create_followup_entries(owner: str, repo: str, pr_number: int,
-                                  synthesis: dict, instance_id: int):
+                                  synthesis: dict, instance_id: int) -> str | None:
+        """Create follow-up tracking entries. Returns error string on failure, None on success."""
         try:
             from backend.database import get_workflow_db
             db = get_workflow_db()
@@ -581,5 +586,7 @@ class PublishExecutor(StepExecutor):
                 f"Created follow-up entry {followup_id} for PR {pr_number} "
                 f"with {len(blocking)} blocking findings"
             )
+            return None
         except Exception as e:
             logger.error(f"Failed to create follow-up entries: {e}")
+            return str(e)

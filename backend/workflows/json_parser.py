@@ -33,10 +33,23 @@ def extract_json(content: str) -> Optional[dict]:
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Brace-depth fallback
+    # Brace-depth fallback — string-aware to handle } inside JSON values
     depth = 0
     start_idx = -1
+    in_string = False
+    escape = False
     for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if ch == '\\' and in_string:
+            escape = True
+            continue
+        if ch == '"' and not escape:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
         if ch == '{':
             if depth == 0:
                 start_idx = i

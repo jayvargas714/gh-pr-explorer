@@ -821,7 +821,7 @@ class SynthesisExecutor(StepExecutor):
         agreed = []
         a_only = []
         b_matched: dict[int, list[dict]] = {}  # b_idx -> list of matched a-findings
-        a_matched = set()
+        a_matched: dict[int, list[dict]] = {}  # a_idx -> list of matched b-findings
         agent_a = review_a.get("agent_name", "Agent A")
         agent_b = review_b.get("agent_name", "Agent B")
 
@@ -830,7 +830,10 @@ class SynthesisExecutor(StepExecutor):
             for b_idx, fb in enumerate(findings_b):
                 if self._findings_match(fa, fb):
                     b_matched.setdefault(b_idx, []).append(fa)
-                    a_matched.add(a_idx)
+                    a_matched.setdefault(a_idx, []).append(fb)
+
+        # Track which b-indices are consumed by the primary agreed loop
+        b_consumed = set()
 
         # Build agreed entries, preserving additional failure modes when multiple
         # A-findings match the same B-finding (prevents synthesis loss)
@@ -843,13 +846,29 @@ class SynthesisExecutor(StepExecutor):
                 "finding_b": fb,
                 "resolution": "Both agents identified this issue independently",
             }
+            extras = []
             if len(matched_a_findings) > 1:
-                entry["additional_failure_modes"] = matched_a_findings[1:]
+                extras.extend(matched_a_findings[1:])
+            # Reciprocal: if this A-finding matched multiple B-findings,
+            # preserve the extra B-findings as additional failure modes too
+            primary_a_idx = next(
+                (i for i, fa in enumerate(findings_a) if fa is primary), None
+            )
+            if primary_a_idx is not None:
+                extra_b = [fb2 for fb2 in a_matched.get(primary_a_idx, []) if fb2 is not fb]
+                for eb in extra_b:
+                    eb_idx = next((i for i, f in enumerate(findings_b) if f is eb), None)
+                    if eb_idx is not None:
+                        b_consumed.add(eb_idx)
+                        extras.append(eb)
+            if extras:
+                entry["additional_failure_modes"] = extras
                 entry["resolution"] = (
                     f"Both agents identified this issue independently. "
-                    f"{len(matched_a_findings)} distinct failure modes from {agent_a} "
+                    f"{1 + len(extras)} distinct failure modes "
                     f"matched this finding — each must be preserved in published output."
                 )
+            b_consumed.add(b_idx)
             agreed.append(entry)
 
         # A-findings that didn't match any B-finding
@@ -870,7 +889,7 @@ class SynthesisExecutor(StepExecutor):
                 "resolution": f"Only {agent_b} flagged this; {agent_a} did not identify this pattern",
             }
             for idx, fb in enumerate(findings_b)
-            if idx not in b_matched
+            if idx not in b_consumed
         ]
 
         return {"agreed": agreed, "a_only": a_only, "b_only": b_only}
