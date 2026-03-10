@@ -292,6 +292,17 @@
   max-width: 320px;
 }
 
+.mx-run-config__agent-row--set-all {
+  padding-bottom: var(--mx-space-2);
+  margin-bottom: var(--mx-space-2);
+  border-bottom: 1px solid var(--mx-color-border);
+}
+
+.mx-run-config__agent-row--set-all label {
+  font-weight: 600;
+  color: var(--mx-color-text-primary);
+}
+
 .mx-run-config__pr-mode {
   display: flex;
   gap: var(--mx-space-4);

@@ -256,6 +256,35 @@ export function RunConfigPanel({ repo, onClose, onStarted }: RunConfigPanelProps
       {selected && agentSteps.length > 0 && agents.length > 0 && !selectedMissing.length && (
         <div className="mx-run-config__section">
           <h4>Agent Assignment</h4>
+          {agentSteps.length > 1 && (
+            <div className="mx-run-config__agent-row mx-run-config__agent-row--set-all">
+              <label>Set All</label>
+              <select
+                className="mx-select"
+                value=""
+                onChange={(e) => {
+                  if (!e.target.value) return
+                  const overrides: Record<string, string> = {}
+                  for (const s of agentSteps) {
+                    overrides[s.id] = e.target.value
+                  }
+                  setAgentOverrides((prev) => ({ ...prev, ...overrides }))
+                  e.target.value = ''
+                }}
+              >
+                <option value="">— select to apply —</option>
+                {agents.filter((a) => a.is_active).map((a) => {
+                  const cfg = a.config_json ? (() => { try { return JSON.parse(a.config_json) } catch { return {} } })() : {}
+                  const effort = cfg.effort ? ` [${cfg.effort}]` : ''
+                  return (
+                    <option key={a.name} value={a.name}>
+                      {a.name} ({a.model}){effort}
+                    </option>
+                  )
+                })}
+              </select>
+            </div>
+          )}
           <div className="mx-run-config__agents">
             {agentSteps.map((s) => {
               const defaultAgent = (s.config?.agent as string) ?? ''
@@ -265,6 +294,8 @@ export function RunConfigPanel({ repo, onClose, onStarted }: RunConfigPanelProps
                 holistic_review: 'Holistic',
                 expert_select: 'Expert Select',
                 freshness_check: 'Freshness',
+                related_issue_scan: 'Related Scan',
+                fp_severity_check: 'FP Check',
               }
               const label = `${stepLabel[s.type] ?? s.type}: ${s.id}`
               return (
