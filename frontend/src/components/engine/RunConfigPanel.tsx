@@ -18,6 +18,8 @@ const STEP_TYPE_LABELS: Record<string, string> = {
   publish: 'Publish',
   expert_select: 'Expert Select',
   holistic_review: 'Holistic Review',
+  related_issue_scan: 'Related Scan',
+  fp_severity_check: 'FP Check',
   followup_check: 'Follow-Up Check',
   followup_action: 'Follow-Up Action',
 }

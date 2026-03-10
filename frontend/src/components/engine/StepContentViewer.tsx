@@ -416,16 +416,35 @@ function SynthesisView({ content }: { content: ParsedContent }) {
   const questions = (content.questions ?? []) as string[]
   const [showLog, setShowLog] = useState(false)
 
+  const totalFindings = agreed.length + aOnly.length + bOnly.length
+  const agreementRate = totalFindings > 0 ? Math.round((agreed.length / totalFindings) * 100) : 0
+  const fpCalibrated = content.fp_calibrated as boolean | undefined
+  const preCalVerdict = content._pre_calibration_verdict as string | undefined
+
   return (
     <div className="mx-step-content__synthesis">
       {verdict && (
         <div className="mx-step-content__verdict">
           <strong>Final Verdict:</strong>
-          <Badge variant={verdict === 'APPROVE' ? 'success' : 'warning'}>{verdict}</Badge>
+          <Badge variant={verdict === 'APPROVE' ? 'success' : verdict === 'CHANGES_REQUESTED' ? 'error' : 'warning'}>{verdict}</Badge>
           {aiVerified && <Badge variant="info" size="sm">AI Verified</Badge>}
+          {fpCalibrated && <Badge variant="info" size="sm">FP Calibrated</Badge>}
+          {preCalVerdict && preCalVerdict !== verdict && (
+            <span style={{ fontSize: 12, opacity: 0.5 }}>was {preCalVerdict}</span>
+          )}
         </div>
       )}
       {summary && <p className="mx-step-content__summary">{summary}</p>}
+
+      {totalFindings > 0 && (
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12, fontSize: 13 }}>
+          <span><strong>{totalFindings}</strong> findings</span>
+          <span><strong>{agreed.length}</strong> agreed ({agreementRate}%)</span>
+          <span><strong>{aOnly.length}</strong> A-only</span>
+          <span><strong>{bOnly.length}</strong> B-only</span>
+          {synthFindings.length > 0 && <span><strong>{synthFindings.length}</strong> synth</span>}
+        </div>
+      )}
 
       <div className="mx-step-content__classification-grid">
         <Section label="Agreed" variant="success" items={agreed} classification="AGREED" />
@@ -1220,12 +1239,26 @@ function FPSeverityCheckView({ content }: { content: ParsedContent }) {
   const changes = (content.severity_changes ?? []) as Array<{ title?: string; from?: string; to?: string; reason?: string }>
   const counts = content.final_counts as { blocking?: number; non_blocking?: number; removed?: number } | undefined
   const skipped = content.skipped as string | undefined
+  const parseFailed = content.parse_failed as boolean | undefined
+  const rawContent = content.raw_content as string | undefined
 
   if (skipped) return <p className="mx-step-content__empty">Skipped: {skipped}</p>
+  if (parseFailed) {
+    return (
+      <div className="mx-step-content__fp-check">
+        <Badge variant="warning" size="sm">Parse Failed</Badge>
+        {rawContent && (
+          <pre style={{ marginTop: 8, fontSize: 12, whiteSpace: 'pre-wrap', maxHeight: 400, overflow: 'auto', opacity: 0.8 }}>
+            {rawContent.slice(0, 3000)}
+          </pre>
+        )}
+      </div>
+    )
+  }
   if (!verified.length && !removed.length) return <p className="mx-step-content__empty">No verification results.</p>
 
   const FP_VARIANT: Record<string, 'success' | 'warning' | 'error' | 'info' | 'neutral'> = {
-    CONFIRMED: 'error', FALSE_POSITIVE: 'neutral', DOWNGRADED: 'warning', UNCERTAIN: 'info',
+    CONFIRMED: 'success', FALSE_POSITIVE: 'neutral', DOWNGRADED: 'warning', UNCERTAIN: 'info',
   }
 
   const SEV_VARIANT: Record<string, 'error' | 'warning' | 'info' | 'neutral'> = {

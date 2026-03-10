@@ -27,6 +27,10 @@ const STEP_TYPE_LABELS: Record<string, string> = {
   publish: 'Publish',
   expert_select: 'Expert Select',
   holistic_review: 'Holistic Review',
+  related_issue_scan: 'Related Issue Scan',
+  fp_severity_check: 'FP Severity Check',
+  followup_check: 'Follow-Up Check',
+  followup_action: 'Follow-Up Action',
 }
 
 const STEP_ICONS: Record<string, string> = {
@@ -40,6 +44,10 @@ const STEP_ICONS: Record<string, string> = {
   publish: '📤',
   expert_select: '🧠',
   holistic_review: '🔭',
+  related_issue_scan: '🔍',
+  fp_severity_check: '🛡️',
+  followup_check: '🔄',
+  followup_action: '💬',
 }
 
 interface WorkflowRunDetailProps {
