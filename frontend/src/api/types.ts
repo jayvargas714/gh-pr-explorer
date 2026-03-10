@@ -62,6 +62,7 @@ export interface PullRequest {
   reviewDecision: string | null
   reviewStatus: string
   ciStatus: string | null
+  currentReviewers: Reviewer[]
   statusCheckRollup: StatusCheck[]
   mergeable: string
   additions: number
@@ -78,6 +79,12 @@ export interface Label {
 export interface Assignee {
   login: string
   avatarUrl?: string
+}
+
+export interface Reviewer {
+  login: string
+  avatarUrl: string
+  state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED' | 'PENDING'
 }
 
 export interface ReviewRequest {
@@ -328,6 +335,7 @@ export interface MergeQueueItem {
   reviewDecision: string | null
   ciStatus: string | null
   isDraft: boolean
+  currentReviewers: Reviewer[]
 }
 
 export interface QueueNote {

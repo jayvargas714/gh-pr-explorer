@@ -115,6 +115,72 @@
 }
 
 /* ============================================================================
+   Reviewers (shared by PRCard badges and QueueItem title row)
+   ============================================================================ */
+
+.mx-pr-card__reviewers {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  cursor: default;
+}
+
+.mx-pr-card__reviewer {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+  border-radius: 50%;
+  border: 2px solid transparent;
+}
+
+.mx-pr-card__reviewer--approved {
+  border-color: var(--mx-color-success);
+}
+
+.mx-pr-card__reviewer--changes-requested {
+  border-color: var(--mx-color-error);
+}
+
+.mx-pr-card__reviewer--commented {
+  border-color: var(--mx-color-text-tertiary);
+}
+
+.mx-pr-card__reviewer--dismissed {
+  border-color: var(--mx-color-text-tertiary);
+  opacity: 0.6;
+}
+
+.mx-pr-card__reviewer-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: block;
+}
+
+.mx-pr-card__reviewer-icon {
+  position: absolute;
+  bottom: -3px;
+  right: -3px;
+  font-size: 10px;
+  line-height: 1;
+  background: var(--mx-color-bg-elevated);
+  border-radius: 50%;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mx-pr-card__reviewer--approved .mx-pr-card__reviewer-icon {
+  color: var(--mx-color-success);
+}
+
+.mx-pr-card__reviewer--changes-requested .mx-pr-card__reviewer-icon {
+  color: var(--mx-color-error);
+}
+
+/* ============================================================================
    PR Stats
    ============================================================================ */
 

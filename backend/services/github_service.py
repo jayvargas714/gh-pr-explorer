@@ -152,19 +152,23 @@ def fetch_pr_state_and_sha(owner, repo, pr_number):
 
 
 def fetch_pr_queue_data(owner, repo, pr_number):
-    """Fetch PR state, head SHA, review decision, and CI status in a single gh call.
+    """Fetch PR state, head SHA, review decision, CI status, and latest reviews in a single gh call.
 
     Used by merge queue enrichment to avoid multiple API calls per item.
 
     Returns:
-        dict with keys: state, headRefOid, reviewDecision, statusCheckRollup.
+        dict with keys: state, headRefOid, reviewDecision, statusCheckRollup, latestReviews.
         All values may be None on error.
     """
+    empty = {
+        "state": None, "headRefOid": None, "reviewDecision": None,
+        "statusCheckRollup": None, "isDraft": False, "latestReviews": None,
+    }
     try:
         output = run_gh_command([
             "pr", "view", str(pr_number),
             "-R", f"{owner}/{repo}",
-            "--json", "state,headRefOid,reviewDecision,statusCheckRollup,isDraft",
+            "--json", "state,headRefOid,reviewDecision,statusCheckRollup,isDraft,latestReviews",
         ])
         data = parse_json_output(output)
         if isinstance(data, dict):
@@ -174,8 +178,9 @@ def fetch_pr_queue_data(owner, repo, pr_number):
                 "reviewDecision": data.get("reviewDecision") or None,
                 "statusCheckRollup": data.get("statusCheckRollup") or None,
                 "isDraft": data.get("isDraft", False),
+                "latestReviews": data.get("latestReviews") or None,
             }
-        return {"state": None, "headRefOid": None, "reviewDecision": None, "statusCheckRollup": None, "isDraft": False}
+        return empty
     except RuntimeError as e:
         logger.warning(f"Failed to fetch PR queue data for {owner}/{repo}#{pr_number}: {e}")
-        return {"state": None, "headRefOid": None, "reviewDecision": None, "statusCheckRollup": None, "isDraft": False}
+        return empty

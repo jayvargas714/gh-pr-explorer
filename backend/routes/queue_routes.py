@@ -8,7 +8,7 @@ from flask import Blueprint, jsonify, request
 from backend.extensions import logger
 from backend.database import get_queue_db, get_reviews_db
 from backend.services.github_service import fetch_pr_state_and_sha, fetch_pr_queue_data
-from backend.services.pr_service import get_ci_status
+from backend.services.pr_service import get_ci_status, get_current_reviewers
 from backend.routes import error_response
 
 queue_bp = Blueprint("queue", __name__)
@@ -50,6 +50,7 @@ def get_merge_queue():
             review_decision = None
             ci_status = None
             is_draft = False
+            current_reviewers = []
 
             if len(repo_parts) == 2:
                 owner, repo = repo_parts
@@ -59,6 +60,7 @@ def get_merge_queue():
                 review_decision = queue_data["reviewDecision"]
                 ci_status = get_ci_status(queue_data["statusCheckRollup"])
                 is_draft = queue_data.get("isDraft", False)
+                current_reviewers = get_current_reviewers(queue_data.get("latestReviews"))
 
                 latest_review = reviews_db.get_latest_review_for_pr(item["repo"], item["pr_number"])
                 if latest_review:
@@ -119,7 +121,8 @@ def get_merge_queue():
                 "isFollowup": is_followup,
                 "reviewDecision": review_decision,
                 "ciStatus": ci_status,
-                "isDraft": is_draft
+                "isDraft": is_draft,
+                "currentReviewers": current_reviewers
             }
 
         with ThreadPoolExecutor(max_workers=5) as executor:

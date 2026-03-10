@@ -9,7 +9,7 @@ import { QueueReviewButton } from '../reviews/QueueReviewButton'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
 import { formatNumber, formatRelativeTime } from '../../utils/formatters'
-import type { MergeQueueItem } from '../../api/types'
+import type { MergeQueueItem, Reviewer } from '../../api/types'
 
 interface QueueItemProps {
   item: MergeQueueItem
@@ -138,6 +138,31 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
               {getStateBadge()}
               {item.isDraft && <Badge variant="warning">Draft</Badge>}
               {getReviewStatusBadge()}
+              {item.currentReviewers?.length > 0 && (
+                <span
+                  className="mx-pr-card__reviewers"
+                  data-tooltip={item.currentReviewers
+                    .map((r: Reviewer) => {
+                      const icon = r.state === 'APPROVED' ? '✓' : r.state === 'CHANGES_REQUESTED' ? '✗' : r.state === 'COMMENTED' ? '💬' : '—'
+                      return `${icon} ${r.login} — ${r.state.replace('_', ' ').toLowerCase()}`
+                    })
+                    .join('\n')}
+                >
+                  {item.currentReviewers.map((r: Reviewer) => (
+                    <span
+                      key={r.login}
+                      className={`mx-pr-card__reviewer mx-pr-card__reviewer--${r.state.toLowerCase().replace('_', '-')}`}
+                    >
+                      {r.avatarUrl ? (
+                        <img src={r.avatarUrl} alt={r.login} className="mx-pr-card__reviewer-avatar" />
+                      ) : null}
+                      <span className="mx-pr-card__reviewer-icon">
+                        {r.state === 'APPROVED' ? '✓' : r.state === 'CHANGES_REQUESTED' ? '✗' : r.state === 'COMMENTED' ? '💬' : '—'}
+                      </span>
+                    </span>
+                  ))}
+                </span>
+              )}
               {getCIStatusBadge()}
             </div>
             <div className="mx-queue-item__meta">

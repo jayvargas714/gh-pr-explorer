@@ -21,6 +21,33 @@ def get_review_status(review_decision):
     return "pending"
 
 
+def get_current_reviewers(latest_reviews):
+    """Extract per-reviewer state from the latestReviews field.
+
+    GitHub's latestReviews returns each reviewer's most recent review action,
+    so the list already reflects the current state (e.g. if someone changed
+    from APPROVED to CHANGES_REQUESTED, only the latter appears).
+
+    Returns a list of dicts: [{login, avatarUrl, state}, ...]
+    where state is one of: APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED, PENDING.
+    """
+    if not latest_reviews:
+        return []
+
+    reviewers = []
+    for review in latest_reviews:
+        author = review.get("author") or {}
+        login = author.get("login")
+        if not login:
+            continue
+        reviewers.append({
+            "login": login,
+            "avatarUrl": author.get("avatarUrl", ""),
+            "state": (review.get("state") or "").upper(),
+        })
+    return reviewers
+
+
 def _dedupe_checks(contexts):
     """Keep only the most recent run per check name.
 

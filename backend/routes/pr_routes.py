@@ -9,14 +9,15 @@ from backend.extensions import logger
 from backend.filters.pr_filter_builder import PRFilterParams, PRFilterBuilder
 from backend.routes import error_response
 from backend.services.github_service import run_gh_command, parse_json_output
-from backend.services.pr_service import get_review_status, get_ci_status
+from backend.services.pr_service import get_review_status, get_ci_status, get_current_reviewers
 
 pr_bp = Blueprint("pr", __name__)
 
 PR_JSON_FIELDS = (
     "number,title,author,state,isDraft,createdAt,updatedAt,closedAt,"
     "mergedAt,url,body,headRefName,baseRefName,labels,assignees,"
-    "reviewRequests,reviewDecision,mergeable,additions,deletions,changedFiles,"
+    "reviewRequests,reviewDecision,latestReviews,"
+    "mergeable,additions,deletions,changedFiles,"
     "milestone,statusCheckRollup"
 )
 
@@ -41,6 +42,7 @@ def _get_pr_by_number(owner, repo, pr_number):
 
         pr["reviewStatus"] = get_review_status(pr.get("reviewDecision"))
         pr["ciStatus"] = get_ci_status(pr.get("statusCheckRollup"))
+        pr["currentReviewers"] = get_current_reviewers(pr.get("latestReviews"))
         return jsonify({"prs": [pr]})
     except RuntimeError:
         return jsonify({"prs": []})
@@ -73,6 +75,7 @@ def get_prs(owner, repo):
         for pr in prs:
             pr["reviewStatus"] = get_review_status(pr.get("reviewDecision"))
             pr["ciStatus"] = get_ci_status(pr.get("statusCheckRollup"))
+            pr["currentReviewers"] = get_current_reviewers(pr.get("latestReviews"))
 
         # Post-filter by CI status (gh search doesn't support status: qualifier for CI checks)
         if params.status:

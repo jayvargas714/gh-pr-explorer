@@ -124,7 +124,8 @@ class PRFilterBuilder:
             "--json",
             "number,title,author,state,isDraft,createdAt,updatedAt,closedAt,"
             "mergedAt,url,body,headRefName,baseRefName,labels,assignees,"
-            "reviewRequests,reviewDecision,mergeable,additions,deletions,changedFiles,"
+            "reviewRequests,reviewDecision,latestReviews,"
+            "mergeable,additions,deletions,changedFiles,"
             "milestone,statusCheckRollup"
         ])
 

@@ -77,6 +77,7 @@ export function PRCard({ pr }: PRCardProps) {
           reviewDecision: pr.reviewDecision,
           ciStatus: pr.ciStatus,
           isDraft: pr.isDraft,
+          currentReviewers: pr.currentReviewers || [],
         })
         await apiAddToQueue({
           number: pr.number,
