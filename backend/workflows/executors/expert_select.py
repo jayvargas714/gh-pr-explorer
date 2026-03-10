@@ -194,33 +194,81 @@ class ExpertSelectExecutor(StepExecutor):
 
         all_files, diff_sample, total_lines = self._collect_pr_content(prs, owner, repo)
 
-        if not feedback:
-            cached = db.list_expert_domains(active_only=True, repo=full_repo)
-            if cached:
-                scored = self._score_cached_domains(cached, prs, owner, repo,
-                                                    all_files, diff_sample, total_lines)
-                if scored is not None:
-                    return scored
-                logger.info(f"Cached domains not relevant to current PR(s), regenerating for {full_repo}")
-        else:
+        if feedback:
             logger.info(f"Human feedback present (iteration {feedback[-1].get('iteration', '?')}), "
-                        f"bypassing expert cache for {full_repo}")
+                        f"regenerating experts for {full_repo}")
 
+        # Always generate fresh experts per run — each PR has different files,
+        # diff content, and domain needs.  Cached repo-level domains are only
+        # used as a fallback when AI generation fails.
         prompt = self._build_expert_generation_prompt(all_files, diff_sample, feedback)
 
         ai_experts = self._dispatch_ai_agent(prompt, owner, repo)
 
         if ai_experts:
-            db.insert_ai_expert_domains(full_repo, ai_experts)
-            logger.info(f"Cached {len(ai_experts)} AI-generated domains for {full_repo}")
-            fresh = db.list_expert_domains(active_only=True, repo=full_repo)
-            if fresh:
-                scored = self._score_cached_domains(fresh, prs, owner, repo,
-                                                    all_files, diff_sample, total_lines)
-                if scored is not None:
-                    return scored
+            # Build result directly from AI output instead of round-tripping
+            # through the repo-level DB cache.
+            max_experts = self._expert_count_cap(total_lines)
+            experts = []
+            for e in ai_experts[:max_experts]:
+                experts.append({
+                    "domain_id": e["domain_id"],
+                    "display_name": e["display_name"],
+                    "persona": e["persona"],
+                    "scope": e["scope"],
+                    "checklist": e.get("checklist", []),
+                    "anti_patterns": e.get("anti_patterns", []),
+                    "matched_files": [f for f in all_files
+                                      if self._file_matches_domain(f, e)],
+                    "relevance_pct": 100.0,
+                })
 
-        logger.warning(f"AI expert generation failed for {full_repo}, falling back to static matching")
+            pr_domains: list[dict] = []
+            for pr in prs:
+                pr_files = self._fetch_changed_files(owner, repo, pr.get("number", 0))
+                pr_matched = []
+                for e in experts:
+                    if any(self._file_matches_domain(f, e) for f in pr_files):
+                        pr_matched.append(e["domain_id"])
+                pr_domains.append({
+                    "pr_number": pr.get("number", 0),
+                    "domains": pr_matched or [e["domain_id"] for e in experts],
+                    "file_count": len(pr_files),
+                })
+
+            logger.info(
+                f"Generated {len(experts)} fresh experts for {full_repo}: "
+                + ", ".join(e["domain_id"] for e in experts)
+            )
+
+            return StepResult(
+                success=True,
+                outputs={
+                    "experts": experts,
+                    "pr_domains": pr_domains,
+                },
+                artifacts=[{
+                    "type": "expert_selection",
+                    "data": {
+                        "experts": experts,
+                        "pr_domains": pr_domains,
+                        "total_domains": len(experts),
+                        "total_lines_analyzed": total_lines,
+                        "max_experts_cap": max_experts,
+                        "source": "ai_generated_fresh",
+                    },
+                }],
+            )
+
+        # Fallback: try cached repo-level domains, then static matching
+        logger.warning(f"AI expert generation failed for {full_repo}, trying cached fallback")
+        cached = db.list_expert_domains(active_only=True, repo=full_repo)
+        if cached:
+            scored = self._score_cached_domains(cached, prs, owner, repo,
+                                                all_files, diff_sample, total_lines)
+            if scored is not None:
+                return scored
+
         return self._fallback_static_match(prs, owner, repo, total_lines)
 
     def _collect_pr_content(self, prs: list, owner: str, repo: str
