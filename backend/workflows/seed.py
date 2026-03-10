@@ -26,7 +26,7 @@ TEAM_REVIEW_TEMPLATE = {
         {"id": "prompt", "type": "prompt_generate", "config": {}, "position": {"x": 350, "y": 200}},
         {"id": "prompt_gate", "type": "human_gate", "config": {"gate_type": "prompt_review", "retry_target": "prompt"}, "position": {"x": 400, "y": 200}},
         {"id": "review_a", "type": "agent_review", "config": {"agent": "claude-opus", "phase": "a"}, "position": {"x": 600, "y": 100}},
-        {"id": "review_b", "type": "agent_review", "config": {"agent": "cursor-codex-xh", "phase": "b"}, "position": {"x": 600, "y": 300}},
+        {"id": "review_b", "type": "agent_review", "config": {"agent": "cursor-codex-xhigh", "phase": "b"}, "position": {"x": 600, "y": 300}},
         {"id": "synth", "type": "synthesis", "config": {"ai_verify": True}, "position": {"x": 750, "y": 200}},
         {"id": "fresh", "type": "freshness_check", "config": {}, "position": {"x": 900, "y": 200}},
         {"id": "gate", "type": "human_gate", "config": {"retry_target": "synth"}, "position": {"x": 1050, "y": 200}},
@@ -54,7 +54,7 @@ SELF_REVIEW_TEMPLATE = {
         {"id": "prompt", "type": "prompt_generate", "config": {"per_expert": True}, "position": {"x": 350, "y": 200}},
         {"id": "prompt_gate", "type": "human_gate", "config": {"gate_type": "prompt_review", "retry_target": "experts"}, "position": {"x": 400, "y": 200}},
         {"id": "review_a", "type": "agent_review", "config": {"agent": "claude-opus", "phase": "a"}, "position": {"x": 600, "y": 100}},
-        {"id": "review_b", "type": "agent_review", "config": {"agent": "cursor-codex-xh", "phase": "b"}, "position": {"x": 600, "y": 300}},
+        {"id": "review_b", "type": "agent_review", "config": {"agent": "cursor-codex-xhigh", "phase": "b"}, "position": {"x": 600, "y": 300}},
         {"id": "synth", "type": "synthesis", "config": {"ai_verify": True}, "position": {"x": 750, "y": 200}},
         {"id": "holistic", "type": "holistic_review", "config": {"agent": "claude-opus"}, "position": {"x": 900, "y": 200}},
         {"id": "gate", "type": "human_gate", "config": {"retry_target": "synth"}, "position": {"x": 1050, "y": 200}},
@@ -82,7 +82,7 @@ DEEP_REVIEW_TEMPLATE = {
         {"id": "prompt", "type": "prompt_generate", "config": {"per_expert": True}, "position": {"x": 350, "y": 200}},
         {"id": "prompt_gate", "type": "human_gate", "config": {"gate_type": "prompt_review", "retry_target": "experts"}, "position": {"x": 400, "y": 200}},
         {"id": "review_a", "type": "agent_review", "config": {"agent": "claude-opus", "phase": "a"}, "position": {"x": 600, "y": 100}},
-        {"id": "review_b", "type": "agent_review", "config": {"agent": "cursor-codex-xh", "phase": "b"}, "position": {"x": 600, "y": 300}},
+        {"id": "review_b", "type": "agent_review", "config": {"agent": "cursor-codex-xhigh", "phase": "b"}, "position": {"x": 600, "y": 300}},
         {"id": "synth", "type": "synthesis", "config": {"ai_verify": True}, "position": {"x": 750, "y": 200}},
         {"id": "holistic", "type": "holistic_review", "config": {"agent": "claude-opus"}, "position": {"x": 900, "y": 200}},
         {"id": "gate", "type": "human_gate", "config": {"retry_target": "synth"}, "position": {"x": 1050, "y": 200}},
@@ -127,12 +127,16 @@ BUILTIN_TEMPLATES = [
 ]
 
 BUILTIN_AGENTS = [
+    # Claude CLI agents (direct Anthropic API)
     ("claude-opus", "claude_cli", "claude-opus-4-6", {}),
     ("claude-sonnet", "claude_cli", "claude-sonnet-4-6", {}),
     ("claude-haiku", "claude_cli", "claude-haiku-4-5-20251001", {}),
-    ("cursor-codex", "cursor_cli", "gpt-5.3-codex-high", {"sandbox": "disabled"}),
-    ("cursor-codex-xh", "cursor_cli", "gpt-5.4-xhigh", {"sandbox": "disabled"}),
-    ("openai", "openai_api", "gpt-4o", {"api_key_env": "OPENAI_API_KEY"}),
+    # Cursor CLI agents (via Cursor's agent runtime)
+    ("cursor-opus-thinking", "cursor_cli", "opus-4.6-thinking", {"sandbox": "disabled"}),
+    ("cursor-codex-high", "cursor_cli", "gpt-5.3-codex-high", {"sandbox": "disabled"}),
+    ("cursor-codex-xhigh", "cursor_cli", "gpt-5.4-xhigh", {"sandbox": "disabled"}),
+    # OpenAI API
+    ("openai-gpt4o", "openai_api", "gpt-4o", {"api_key_env": "OPENAI_API_KEY"}),
 ]
 
 CODE_OWNERS = [

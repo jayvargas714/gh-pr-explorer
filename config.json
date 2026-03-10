@@ -23,22 +23,22 @@
       "type": "claude_cli",
       "model": "claude-haiku-4-5-20251001"
     },
-    "openai": {
+    "openai-gpt4o": {
       "type": "openai_api",
       "model": "gpt-4o",
       "api_key_env": "OPENAI_API_KEY"
     },
-    "cursor-opus": {
+    "cursor-opus-thinking": {
       "type": "cursor_cli",
       "model": "opus-4.6-thinking",
       "sandbox": "disabled"
     },
-    "cursor-codex": {
+    "cursor-codex-high": {
       "type": "cursor_cli",
       "model": "gpt-5.3-codex-high",
       "sandbox": "disabled"
     },
-    "cursor-codex-xh": {
+    "cursor-codex-xhigh": {
       "type": "cursor_cli",
       "model": "gpt-5.4-xhigh",
       "sandbox": "disabled"
