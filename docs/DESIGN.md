@@ -488,8 +488,10 @@ The Review Workflows tab provides a UI for composable code review pipelines impl
 | `prompt_generate.py` | `prompt_generate` | Structured prompt builder: header, context commands, GitHub API dedup, persona, checklist, anti-patterns, cross-cutting concerns, depth expectations, cross-file analysis, diff ingestion strategy, severity guide, output format. Per-expert fan-out for self/deep review. Severity guide enforces concrete production failure scenarios for blocking/critical findings and caps total findings on large PRs (50+ files) |
 | `agent_review.py` | `agent_review` | Dispatches prompt to `AgentBackend`, Review B isolation, live output streaming, domain propagation |
 | `synthesis.py` | `synthesis` | Source attribution (A/B/BOTH), synthesis log, NEEDS_DISCUSSION verdict, two-tier synthesis for self/deep review. Multi-path finding preservation: when multiple A-findings match the same B-finding, all are retained as `additional_failure_modes` to prevent synthesis loss. Single-agent critical findings produce NEEDS_DISCUSSION (not CHANGES_REQUESTED); only both-agents-agree critical findings trigger CHANGES_REQUESTED. AI verification prompt includes severity calibration and multi-path preservation instructions |
+| `related_issue_scan.py` | `related_issue_scan` | Scans codebase for structurally similar patterns to review findings. Multi-strategy search: keyword grep, structural pattern grep, file role matching. Distinguishes textual vs structural matches to identify false positives (standard patterns) and wider issues (same bug in other files). Outputs `scanned_findings`, `likely_false_positives`, `confirmed_findings`, `wider_issues` |
+| `fp_severity_check.py` | `fp_severity_check` | Expert verification per finding with three checks: correctness (trace execution path, check upstream guards), intentionality (codebase-wide pattern analysis using related scan results), impact (concrete production failure scenario required). Outputs calibrated synthesis with false positives removed and severity adjustments. Preserves `_original_severity` for audit trail |
 | `freshness_check.py` | `freshness_check` | SUPERSEDED detection (force-push/rebase), per-finding staleness tagging, justification summaries |
-| `human_gate.py` | `human_gate` | Enriched gate payload: synthesis log, questions, checklists, per-domain synthesis, holistic review, staleness |
+| `human_gate.py` | `human_gate` | Enriched gate payload: synthesis log, questions, checklists, per-domain synthesis, holistic review, related scan, FP check, staleness |
 | `publish.py` | `publish` | Rich GitHub comments with blocking findings (file:line, evidence, fix), questions, staleness notes, silent-pass test warnings, auto-creates follow-up entries. Multi-PR iteration via `per_pr` list. Publication dedup: fetches existing reviews/comments and filters already-raised findings before posting. Holistic enrichment: overlays holistic blocking/non-blocking/cross-cutting/silent-pass findings and verdict onto synthesis when available. Multi-path finding expansion: `additional_failure_modes` emitted as separate numbered line items. Fallback for `pr_number` from `prs` list when two-tier synthesis omits top-level PR number. Owner/repo fallback from `full_repo`. Returns `StepResult(success=False)` on GitHub post failure |
 | `holistic_review.py` | `holistic_review` | Tier 2 analysis: cross-domain interactions, severity calibration, silent-pass test detection, domain verdict summary, tone enforcement. Minor-to-blocking promotion removed (severity inflation fix). Communication standards enforce professional, goal-oriented language. Silent-pass findings emitted as `silent_pass_findings` in output |
 | `followup_check.py` | `followup_check` | Checks PR state, new commits, author responses; classifies follow-up status |
@@ -590,9 +592,9 @@ State management via `useWorkflowEngineStore` (Zustand). API client at `api/work
 | Template | Steps | Description |
 |----------|-------|-------------|
 | Quick Review | PR Select → Prompt Gen → Agent Review | Single-agent, single-pass review |
-| Team Review | PR Select → Prioritize → Prompt Gen → Agent A + Agent B → Synthesis → Freshness → Human Gate → Publish | Dual-agent adversarial review |
-| Self-Review | PR Select → Expert Select → Prompt Gen → Agent A + Agent B → Synthesis → Holistic → Human Gate | Multi-expert deep-dive (local only) |
-| Deep Review | PR Select → Expert Select → Prompt Gen → Agent A + Agent B → Synthesis → Holistic → Human Gate → Publish | Multi-expert deep-dive with publication |
+| Team Review | PR Select → Prioritize → Prompt Gen → Agent A + Agent B → Synthesis → Related Scan → FP Check → Freshness → Human Gate → Publish | Dual-agent adversarial review with FP filtering |
+| Self-Review | PR Select → Expert Select → Prompt Gen → Agent A + Agent B → Synthesis → Related Scan → FP Check → Holistic → Freshness → Human Gate | Multi-expert deep-dive with FP filtering (local only) |
+| Deep Review | PR Select → Expert Select → Prompt Gen → Agent A + Agent B → Synthesis → Related Scan → FP Check → Holistic → Freshness → Human Gate → Publish | Multi-expert deep-dive with FP filtering and publication |
 
 ### Styling
 
@@ -2876,13 +2878,15 @@ gh-pr-explorer/
 │   │   ├── executor.py             # StepExecutor ABC, StepResult dataclass
 │   │   ├── runtime.py              # WorkflowRuntime — topo-sort, fan-out, gate pausing
 │   │   ├── seed.py                 # Built-in templates + agents seeded on startup
-│   │   └── executors/              # Step executor implementations (8 executors)
+│   │   └── executors/              # Step executor implementations (10 executors)
 │   │       ├── __init__.py
 │   │       ├── pr_select.py
 │   │       ├── prioritize.py
 │   │       ├── prompt_generate.py
 │   │       ├── agent_review.py
 │   │       ├── synthesis.py
+│   │       ├── related_issue_scan.py
+│   │       ├── fp_severity_check.py
 │   │       ├── freshness_check.py
 │   │       ├── human_gate.py
 │   │       └── publish.py

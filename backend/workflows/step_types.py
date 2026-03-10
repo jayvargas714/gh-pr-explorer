@@ -14,6 +14,8 @@ class StepType(str, Enum):
     FRESHNESS_CHECK = "freshness_check"
     HUMAN_GATE = "human_gate"
     PUBLISH = "publish"
+    RELATED_ISSUE_SCAN = "related_issue_scan"
+    FP_SEVERITY_CHECK = "fp_severity_check"
     FOLLOWUP_CHECK = "followup_check"
     FOLLOWUP_ACTION = "followup_action"
 

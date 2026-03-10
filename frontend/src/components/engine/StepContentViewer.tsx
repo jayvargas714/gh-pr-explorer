@@ -1148,6 +1148,155 @@ function FollowupActionView({ content }: { content: ParsedContent }) {
   )
 }
 
+function RelatedIssueScanView({ content }: { content: ParsedContent }) {
+  const scanned = (content.scanned_findings ?? []) as Array<{
+    title?: string; pattern_searched?: string; related_count?: number
+    pattern_is_standard?: boolean; related_files?: string[]; assessment?: string
+  }>
+  const fps = (content.likely_false_positives ?? []) as string[]
+  const confirmed = (content.confirmed_findings ?? []) as string[]
+  const wider = (content.wider_issues ?? []) as Array<{
+    finding?: string; additional_files?: string[]; description?: string
+  }>
+  const skipped = content.skipped as string | undefined
+
+  if (skipped) return <p className="mx-step-content__empty">Skipped: {skipped}</p>
+  if (!scanned.length) return <p className="mx-step-content__empty">No findings scanned.</p>
+
+  return (
+    <div className="mx-step-content__related-scan">
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <Badge variant="info" size="sm">{scanned.length} scanned</Badge>
+        {fps.length > 0 && <Badge variant="warning" size="sm">{fps.length} likely FP</Badge>}
+        {confirmed.length > 0 && <Badge variant="success" size="sm">{confirmed.length} confirmed</Badge>}
+        {wider.length > 0 && <Badge variant="error" size="sm">{wider.length} wider issues</Badge>}
+      </div>
+
+      {scanned.map((sf, i) => (
+        <div key={i} className="mx-step-content__pr-item" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <strong>{sf.title}</strong>
+            <Badge variant={sf.pattern_is_standard ? 'warning' : 'info'} size="sm">
+              {sf.related_count ?? 0} related
+            </Badge>
+            {sf.pattern_is_standard && <Badge variant="warning" size="sm">STANDARD</Badge>}
+            {fps.includes(sf.title ?? '') && <Badge variant="error" size="sm">Likely FP</Badge>}
+          </div>
+          {sf.pattern_searched && (
+            <code style={{ fontSize: 12, opacity: 0.7 }}>{sf.pattern_searched}</code>
+          )}
+          {sf.assessment && <p style={{ margin: '2px 0 0', fontSize: 13 }}>{sf.assessment}</p>}
+          {sf.related_files && sf.related_files.length > 0 && (
+            <div style={{ fontSize: 12, opacity: 0.6 }}>{sf.related_files.join(', ')}</div>
+          )}
+        </div>
+      ))}
+
+      {wider.length > 0 && (
+        <div className="mx-step-content__class-section" style={{ marginTop: 12 }}>
+          <h5>Wider Issues Found</h5>
+          {wider.map((w, i) => (
+            <div key={i} className="mx-step-content__pr-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+              <strong>{w.finding}</strong>
+              {w.description && <p style={{ margin: '2px 0 0', fontSize: 13 }}>{w.description}</p>}
+              {w.additional_files && (
+                <div style={{ fontSize: 12, opacity: 0.6 }}>{w.additional_files.join(', ')}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FPSeverityCheckView({ content }: { content: ParsedContent }) {
+  const verified = (content.verified_findings ?? []) as Array<{
+    title?: string; original_severity?: string; calibrated_severity?: string
+    fp_status?: string; correctness_check?: string; intentionality_check?: string
+    impact_assessment?: string; evidence?: string
+  }>
+  const removed = (content.false_positives_removed ?? []) as Array<{ title?: string; reason?: string }>
+  const changes = (content.severity_changes ?? []) as Array<{ title?: string; from?: string; to?: string; reason?: string }>
+  const counts = content.final_counts as { blocking?: number; non_blocking?: number; removed?: number } | undefined
+  const skipped = content.skipped as string | undefined
+
+  if (skipped) return <p className="mx-step-content__empty">Skipped: {skipped}</p>
+  if (!verified.length && !removed.length) return <p className="mx-step-content__empty">No verification results.</p>
+
+  const FP_VARIANT: Record<string, 'success' | 'warning' | 'error' | 'info' | 'neutral'> = {
+    CONFIRMED: 'error', FALSE_POSITIVE: 'neutral', DOWNGRADED: 'warning', UNCERTAIN: 'info',
+  }
+
+  const SEV_VARIANT: Record<string, 'error' | 'warning' | 'info' | 'neutral'> = {
+    critical: 'error', major: 'error', minor: 'warning', nitpick: 'neutral',
+  }
+
+  return (
+    <div className="mx-step-content__fp-check">
+      {counts && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          {(counts.blocking ?? 0) > 0 && <Badge variant="error" size="sm">{counts.blocking} blocking</Badge>}
+          {(counts.non_blocking ?? 0) > 0 && <Badge variant="warning" size="sm">{counts.non_blocking} non-blocking</Badge>}
+          {(counts.removed ?? 0) > 0 && <Badge variant="neutral" size="sm">{counts.removed} removed</Badge>}
+          {changes.length > 0 && <Badge variant="info" size="sm">{changes.length} severity changed</Badge>}
+        </div>
+      )}
+
+      {removed.length > 0 && (
+        <div className="mx-step-content__class-section">
+          <h5>False Positives Removed ({removed.length})</h5>
+          {removed.map((fp, i) => (
+            <div key={i} className="mx-step-content__pr-item">
+              <Badge variant="neutral" size="sm">FP</Badge>
+              <strong>{fp.title}</strong>
+              {fp.reason && <span style={{ fontSize: 13, opacity: 0.8 }}> — {fp.reason}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {changes.length > 0 && (
+        <div className="mx-step-content__class-section">
+          <h5>Severity Changes ({changes.length})</h5>
+          {changes.map((sc, i) => (
+            <div key={i} className="mx-step-content__pr-item">
+              <Badge variant={SEV_VARIANT[sc.from ?? ''] ?? 'neutral'} size="sm">{sc.from}</Badge>
+              <span>→</span>
+              <Badge variant={SEV_VARIANT[sc.to ?? ''] ?? 'neutral'} size="sm">{sc.to}</Badge>
+              <strong>{sc.title}</strong>
+              {sc.reason && <span style={{ fontSize: 13, opacity: 0.8 }}> — {sc.reason}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {verified.length > 0 && (
+        <div className="mx-step-content__class-section">
+          <h5>Verified Findings ({verified.length})</h5>
+          {verified.map((vf, i) => (
+            <div key={i} className="mx-step-content__pr-item" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Badge variant={FP_VARIANT[vf.fp_status ?? ''] ?? 'neutral'} size="sm">{vf.fp_status}</Badge>
+                {vf.calibrated_severity && (
+                  <Badge variant={SEV_VARIANT[vf.calibrated_severity] ?? 'neutral'} size="sm">{vf.calibrated_severity}</Badge>
+                )}
+                <strong>{vf.title}</strong>
+                {vf.original_severity !== vf.calibrated_severity && vf.original_severity && (
+                  <span style={{ fontSize: 12, opacity: 0.5, textDecoration: 'line-through' }}>{vf.original_severity}</span>
+                )}
+              </div>
+              {vf.correctness_check && <p style={{ margin: 0, fontSize: 13 }}><strong>Correctness:</strong> {vf.correctness_check}</p>}
+              {vf.intentionality_check && <p style={{ margin: 0, fontSize: 13 }}><strong>Intentionality:</strong> {vf.intentionality_check}</p>}
+              {vf.impact_assessment && <p style={{ margin: 0, fontSize: 13 }}><strong>Impact:</strong> {vf.impact_assessment}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 const VIEWERS: Record<string, React.FC<{ content: ParsedContent; step: WorkflowStep; instanceId?: number }>> = {
   pr_select: ({ content }) => <PRSelectView content={content} />,
   prioritize: ({ content }) => <PrioritizeView content={content} />,
@@ -1159,6 +1308,8 @@ const VIEWERS: Record<string, React.FC<{ content: ParsedContent; step: WorkflowS
   publish: ({ content }) => <PublishView content={content} />,
   expert_select: ({ content }) => <ExpertSelectView content={content} />,
   holistic_review: ({ content }) => <HolisticView content={content} />,
+  related_issue_scan: ({ content }) => <RelatedIssueScanView content={content} />,
+  fp_severity_check: ({ content }) => <FPSeverityCheckView content={content} />,
   followup_check: ({ content }) => <FollowupCheckView content={content} />,
   followup_action: ({ content }) => <FollowupActionView content={content} />,
 }
@@ -1529,6 +1680,8 @@ const RUNNING_MESSAGES: Record<string, string> = {
   prompt_generate: 'Building expert review prompts...',
   pr_select: 'Fetching pull requests...',
   prioritize: 'Analyzing PR priority...',
+  related_issue_scan: 'Scanning codebase for related patterns...',
+  fp_severity_check: 'Verifying findings and calibrating severity...',
   human_gate: 'Awaiting human decision...',
 }
 
@@ -1555,7 +1708,7 @@ export function StepContentViewer({ step, artifacts, instanceId }: StepContentVi
     if (DOMAIN_TRACKED_TYPES.includes(step.step_type) && instanceId) {
       return <AgentDomainTracker instanceId={instanceId} stepId={step.step_id} />
     }
-    const AI_STEP_TYPES = ['expert_select', 'holistic_review']
+    const AI_STEP_TYPES = ['expert_select', 'holistic_review', 'related_issue_scan', 'fp_severity_check']
     if (AI_STEP_TYPES.includes(step.step_type) && instanceId) {
       return <LiveAgentOutput instanceId={instanceId} stepId={step.step_id} />
     }
@@ -1599,6 +1752,8 @@ export function StepContentViewer({ step, artifacts, instanceId }: StepContentVi
     const WRAPPER_KEYS: Record<string, string> = {
       synthesis: 'synthesis',
       holistic_review: 'holistic',
+      related_issue_scan: 'related_scan',
+      fp_severity_check: 'fp_check',
     }
     const wrapperKey = WRAPPER_KEYS[step.step_type]
     if (wrapperKey && parsed[wrapperKey] && typeof parsed[wrapperKey] === 'object') {

@@ -86,6 +86,8 @@ class HumanGateExecutor(StepExecutor):
             "per_domain_synthesis": inputs.get("per_domain_synthesis",
                                                synthesis.get("per_domain_synthesis", [])),
             "holistic": inputs.get("holistic", {}),
+            "related_scan": inputs.get("related_scan", {}),
+            "fp_check": inputs.get("fp_check", {}),
             "questions": synthesis.get("questions",
                                        self._aggregate_questions(reviews)),
             "checklist_completion": self._aggregate_checklists(reviews),
