@@ -71,8 +71,7 @@ def build_gh_comment(synthesis: dict, mode: str = "team-review",
         for i, f in enumerate(blocking, 1):
             inner = f.get("finding_a", f.get("finding", f))
             loc = inner.get("location", {})
-            file_ref = _format_file_ref(loc)
-            source = f.get("source", f.get("domain", ""))
+            file_ref = _format_file_ref(loc, inner)
             severity = inner.get("severity", "")
             sev_tag = f" [{severity}]" if severity else ""
             lines.append(f'{i}. **{inner.get("title", "Untitled")}**{sev_tag} — `{file_ref}`')
@@ -92,7 +91,7 @@ def build_gh_comment(synthesis: dict, mode: str = "team-review",
         for i, f in enumerate(non_blocking_items, 1):
             inner = f.get("finding_a", f.get("finding", f))
             loc = inner.get("location", {})
-            file_ref = _format_file_ref(loc)
+            file_ref = _format_file_ref(loc, inner)
             severity = inner.get("severity", "")
             sev_tag = f" [{severity}]" if severity else ""
             lines.append(f'{i}. **{inner.get("title", "Untitled")}**{sev_tag} — `{file_ref}`')
@@ -115,10 +114,14 @@ def build_gh_comment(synthesis: dict, mode: str = "team-review",
 
     questions = synthesis.get("questions", [])
     if questions:
+        # Cap at 5 most actionable questions to avoid information overload
+        capped = questions[:5]
         lines.append("### Questions")
         lines.append("")
-        for i, q in enumerate(questions, 1):
+        for i, q in enumerate(capped, 1):
             lines.append(f"{i}. {q}")
+        if len(questions) > 5:
+            lines.append(f"\n_({len(questions) - 5} additional questions omitted for brevity)_")
         lines.append("")
 
     if freshness:
@@ -174,14 +177,22 @@ def _collect_non_blocking(agreed: list, a_only: list, b_only: list) -> list:
     return non_blocking
 
 
-def _format_file_ref(loc: dict) -> str:
-    if not loc:
+def _format_file_ref(loc: dict, finding: dict | None = None) -> str:
+    if not loc and not finding:
         return "unknown"
-    f = loc.get("file", loc.get("raw", ""))
-    line = loc.get("start_line")
-    if f and line:
-        return f"{f}:{line}"
-    return f or "unknown"
+    if loc:
+        f = loc.get("file", loc.get("raw", ""))
+        line = loc.get("start_line")
+        if f and line:
+            return f"{f}:{line}"
+        if f:
+            return f
+    # Holistic findings use "domain" instead of "location"
+    if finding:
+        domain = finding.get("domain", "")
+        if domain:
+            return domain
+    return "unknown"
 
 
 @register_step("publish")
@@ -262,6 +273,7 @@ class PublishExecutor(StepExecutor):
         event_map = {
             "APPROVE": "APPROVE",
             "CHANGES_REQUESTED": "REQUEST_CHANGES",
+            "REQUEST_CHANGES": "REQUEST_CHANGES",
             "NEEDS_DISCUSSION": "COMMENT",
             "COMMENT": "COMMENT",
         }
@@ -332,8 +344,12 @@ class PublishExecutor(StepExecutor):
         return enriched
 
     def _fetch_existing_findings(self, owner: str, repo: str, pr_number: int) -> set[str]:
-        """Fetch titles/summaries of findings already raised by other reviewers."""
-        existing: set[str] = set()
+        """Fetch keyword fragments from all existing review/comment bodies on the PR.
+
+        Stores the full body text (lowercased) so we can do substring matching
+        against finding titles and key phrases, not just first 200 chars.
+        """
+        existing_bodies: list[str] = []
         try:
             result = subprocess.run(
                 ["gh", "api", f"repos/{owner}/{repo}/pulls/{pr_number}/reviews",
@@ -343,7 +359,7 @@ class PublishExecutor(StepExecutor):
             if result.returncode == 0:
                 for body in result.stdout.strip().split("\n"):
                     if body.strip():
-                        existing.add(body.strip()[:200].lower())
+                        existing_bodies.append(body.strip().lower())
         except Exception:
             pass
         try:
@@ -355,25 +371,90 @@ class PublishExecutor(StepExecutor):
             if result.returncode == 0:
                 for body in result.stdout.strip().split("\n"):
                     if body.strip():
-                        existing.add(body.strip()[:200].lower())
+                        existing_bodies.append(body.strip().lower())
         except Exception:
             pass
-        return existing
+        try:
+            result = subprocess.run(
+                ["gh", "api", f"repos/{owner}/{repo}/issues/{pr_number}/comments",
+                 "--paginate", "--jq", '.[].body'],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                for body in result.stdout.strip().split("\n"):
+                    if body.strip():
+                        existing_bodies.append(body.strip().lower())
+        except Exception:
+            pass
+        # Concatenate all bodies into one big searchable blob
+        return set(existing_bodies) if existing_bodies else set()
+
+    @staticmethod
+    def _finding_matches_existing(finding: dict, existing: set[str]) -> bool:
+        """Check if a finding was already raised using multi-signal matching.
+
+        Checks: exact title, key noun phrases from the title (3+ word chunks),
+        and distinctive technical terms that are unlikely to be coincidental.
+        """
+        inner = finding.get("finding_a", finding.get("finding", finding))
+        title = inner.get("title", "").lower()
+        if not title:
+            return False
+
+        # Direct title match in any existing body
+        if any(title in body for body in existing):
+            return True
+
+        # Extract distinctive key phrases (3+ consecutive words)
+        words = re.split(r'\s+', title)
+        if len(words) >= 4:
+            for start in range(len(words) - 2):
+                phrase = " ".join(words[start:start + 3])
+                if len(phrase) > 15 and any(phrase in body for body in existing):
+                    return True
+
+        # Check for distinctive technical terms that indicate the same finding
+        tech_terms = re.findall(
+            r'(?:cors|mfa|multi.az|ecr.*mutable|logs:\*|permission.boundary'
+            r'|abort.*multipart|lifecycle.?config|tag.?mutab)',
+            title,
+        )
+        if tech_terms:
+            for term in tech_terms:
+                if any(term in body for body in existing):
+                    return True
+
+        return False
 
     def _filter_already_raised(self, synthesis: dict, existing: set[str]) -> dict:
-        """Remove findings that were already raised by other reviewers."""
+        """Remove findings that were already raised by other reviewers.
+
+        Filters synthesis-level findings (agreed/a_only/b_only) and also
+        holistic findings (_holistic_blocking/_holistic_non_blocking).
+        """
         if not existing:
             return synthesis
 
-        def is_new(finding: dict) -> bool:
-            inner = finding.get("finding_a", finding.get("finding", {}))
-            title = inner.get("title", "").lower()
-            return not any(title in ex for ex in existing)
-
         filtered = dict(synthesis)
+
+        # Filter standard synthesis findings
         for key in ("agreed", "a_only", "b_only"):
             if key in filtered and isinstance(filtered[key], list):
-                filtered[key] = [f for f in filtered[key] if is_new(f)]
+                filtered[key] = [f for f in filtered[key]
+                                 if not self._finding_matches_existing(f, existing)]
+
+        # Filter holistic findings too
+        for key in ("_holistic_blocking", "_holistic_non_blocking"):
+            if key in filtered and isinstance(filtered[key], list):
+                filtered[key] = [f for f in filtered[key]
+                                 if not self._finding_matches_existing(f, existing)]
+
+        # Filter cross-cutting concerns
+        if "_cross_cutting" in filtered and isinstance(filtered["_cross_cutting"], list):
+            filtered["_cross_cutting"] = [
+                f for f in filtered["_cross_cutting"]
+                if not self._finding_matches_existing(f, existing)
+            ]
 
         filtered["total_findings"] = (
             len(filtered.get("agreed", [])) +
