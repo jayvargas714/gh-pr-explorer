@@ -10,7 +10,7 @@ import { useWorkflowEngineStore } from '../../stores/useWorkflowEngineStore'
 import { parseContent } from '../../api/workflow-engine'
 import type { WorkflowInstance } from '../../api/workflow-engine'
 
-type GateTab = 'overview' | 'comparison' | 'reviews' | 'publish' | 'freshness' | 'synthesis_log' | 'questions' | 'domains'
+type GateTab = 'overview' | 'comparison' | 'reviews' | 'publish' | 'freshness' | 'synthesis_log' | 'questions' | 'domains' | 'related_scan' | 'fp_check'
 
 interface GateViewProps {
   instance: WorkflowInstance
@@ -556,6 +556,25 @@ export function GateView({ instance, onBack }: GateViewProps) {
     affected_findings?: string[]; recommendation?: string
   }>
 
+  const relatedScan = (gateOutputs?.related_scan ?? {}) as Record<string, unknown>
+  const scannedFindings = (relatedScan.scanned_findings ?? []) as Array<{
+    title?: string; related_count?: number; pattern_is_standard?: boolean; assessment?: string
+  }>
+  const likelyFPs = (relatedScan.likely_false_positives ?? []) as string[]
+  const confirmedFindings = (relatedScan.confirmed_findings ?? []) as string[]
+  const widerIssues = (relatedScan.wider_issues ?? []) as Array<{ title?: string; files?: string[]; description?: string }>
+  const hasRelatedScan = scannedFindings.length > 0 || likelyFPs.length > 0
+
+  const fpCheck = (gateOutputs?.fp_check ?? {}) as Record<string, unknown>
+  const verifiedFindings = (fpCheck.verified_findings ?? []) as Array<{
+    title?: string; original_severity?: string; calibrated_severity?: string
+    fp_status?: string; correctness_check?: string; intentionality_check?: string
+    impact_assessment?: string; evidence?: string
+  }>
+  const fpRemoved = (fpCheck.false_positives_removed ?? []) as Array<{ title?: string; reason?: string }>
+  const severityChanges = (fpCheck.severity_changes ?? []) as Array<{ title?: string; from?: string; to?: string; reason?: string }>
+  const hasFpCheck = verifiedFindings.length > 0 || fpRemoved.length > 0
+
   const blockingFindings = (holisticData.blocking_findings ?? []) as Array<Record<string, unknown>>
   const nonBlockingFindings = (holisticData.non_blocking_findings ?? []) as Array<Record<string, unknown>>
   const crossCuttingFindings = (holisticData.cross_cutting_findings ?? []) as Array<{ title?: string; domains?: string[]; description?: string; origin?: string }>
@@ -612,6 +631,8 @@ export function GateView({ instance, onBack }: GateViewProps) {
     { id: 'comparison', label: 'Comparison', show: true },
     { id: 'synthesis_log', label: `Synthesis Log (${synthesisLog.length})`, show: synthesisLog.length > 0 },
     { id: 'questions', label: `Questions (${questions.length})`, show: questions.length > 0 },
+    { id: 'related_scan', label: `Related Scan (${scannedFindings.length})`, show: hasRelatedScan },
+    { id: 'fp_check', label: `FP Check (${verifiedFindings.length})`, show: hasFpCheck },
     { id: 'publish', label: 'Publish Preview', show: true },
     { id: 'freshness', label: 'Freshness', show: freshnessChecks.length > 0 },
   ]
@@ -879,6 +900,127 @@ export function GateView({ instance, onBack }: GateViewProps) {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {tab === 'related_scan' && (
+          <div className="mx-gate-view__related-scan">
+            {likelyFPs.length > 0 && (
+              <div className="mx-gate-view__section">
+                <h4><Badge variant="warning" size="sm">Likely False Positives</Badge> <span>{likelyFPs.length} findings</span></h4>
+                <ul style={{ margin: '8px 0', paddingLeft: '20px' }}>
+                  {likelyFPs.map((fp, i) => <li key={i} style={{ marginBottom: '4px' }}>{fp}</li>)}
+                </ul>
+              </div>
+            )}
+            {confirmedFindings.length > 0 && (
+              <div className="mx-gate-view__section">
+                <h4><Badge variant="success" size="sm">Confirmed</Badge> <span>{confirmedFindings.length} findings</span></h4>
+                <ul style={{ margin: '8px 0', paddingLeft: '20px' }}>
+                  {confirmedFindings.map((cf, i) => <li key={i} style={{ marginBottom: '4px' }}>{cf}</li>)}
+                </ul>
+              </div>
+            )}
+            {widerIssues.length > 0 && (
+              <div className="mx-gate-view__section">
+                <h4><Badge variant="error" size="sm">Wider Issues</Badge> <span>{widerIssues.length} found</span></h4>
+                {widerIssues.map((wi, i) => (
+                  <div key={i} className="mx-gate-view__log-entry" style={{ padding: '8px 12px' }}>
+                    <strong>{wi.title}</strong>
+                    {wi.description && <p style={{ margin: '4px 0 0', fontSize: '13px', opacity: 0.85 }}>{wi.description}</p>}
+                    {wi.files && wi.files.length > 0 && (
+                      <div style={{ marginTop: '4px', display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                        {wi.files.map((f, j) => <Badge key={j} variant="neutral" size="sm">{f}</Badge>)}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {scannedFindings.length > 0 && (
+              <div className="mx-gate-view__section">
+                <h4>Scanned Findings ({scannedFindings.length})</h4>
+                {scannedFindings.map((sf, i) => (
+                  <div key={i} className="mx-gate-view__log-entry" style={{ padding: '8px 12px' }}>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <strong>{sf.title}</strong>
+                      {sf.pattern_is_standard && <Badge variant="warning" size="sm">STANDARD</Badge>}
+                      <Badge variant="neutral" size="sm">{sf.related_count ?? 0} related</Badge>
+                    </div>
+                    {sf.assessment && <p style={{ margin: '4px 0 0', fontSize: '13px', opacity: 0.85 }}>{sf.assessment}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {!hasRelatedScan && <p className="mx-gate-view__empty">No related scan data available.</p>}
+          </div>
+        )}
+
+        {tab === 'fp_check' && (
+          <div className="mx-gate-view__fp-check">
+            {fpRemoved.length > 0 && (
+              <div className="mx-gate-view__section">
+                <h4><Badge variant="error" size="sm">False Positives Removed</Badge> <span>{fpRemoved.length}</span></h4>
+                {fpRemoved.map((fp, i) => (
+                  <div key={i} className="mx-gate-view__log-entry" style={{ padding: '8px 12px' }}>
+                    <strong>{fp.title}</strong>
+                    {fp.reason && <p style={{ margin: '4px 0 0', fontSize: '13px', opacity: 0.85 }}>{fp.reason}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {severityChanges.length > 0 && (
+              <div className="mx-gate-view__section">
+                <h4><Badge variant="warning" size="sm">Severity Changes</Badge> <span>{severityChanges.length}</span></h4>
+                {severityChanges.map((sc, i) => (
+                  <div key={i} className="mx-gate-view__log-entry" style={{ padding: '8px 12px' }}>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <strong>{sc.title}</strong>
+                      <Badge variant="error" size="sm">{sc.from}</Badge>
+                      <span>&rarr;</span>
+                      <Badge variant="warning" size="sm">{sc.to}</Badge>
+                    </div>
+                    {sc.reason && <p style={{ margin: '4px 0 0', fontSize: '13px', opacity: 0.85 }}>{sc.reason}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {verifiedFindings.length > 0 && (
+              <div className="mx-gate-view__section">
+                <h4>Verified Findings ({verifiedFindings.length})</h4>
+                {verifiedFindings.map((vf, i) => {
+                  const statusVariant = vf.fp_status === 'CONFIRMED' ? 'success'
+                    : vf.fp_status === 'FALSE_POSITIVE' ? 'error'
+                    : vf.fp_status === 'DOWNGRADED' ? 'warning' : 'neutral'
+                  return (
+                    <div key={i} className="mx-gate-view__log-entry" style={{ padding: '10px 12px' }}>
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '6px' }}>
+                        <strong>{vf.title}</strong>
+                        <Badge variant={statusVariant} size="sm">{vf.fp_status}</Badge>
+                        {vf.original_severity !== vf.calibrated_severity && (
+                          <>
+                            <Badge variant="neutral" size="sm">{vf.original_severity}</Badge>
+                            <span>&rarr;</span>
+                            <Badge variant="info" size="sm">{vf.calibrated_severity}</Badge>
+                          </>
+                        )}
+                      </div>
+                      {vf.correctness_check && (
+                        <div style={{ fontSize: '13px', marginBottom: '4px' }}><strong>Correctness:</strong> {vf.correctness_check}</div>
+                      )}
+                      {vf.intentionality_check && (
+                        <div style={{ fontSize: '13px', marginBottom: '4px' }}><strong>Intentionality:</strong> {vf.intentionality_check}</div>
+                      )}
+                      {vf.impact_assessment && (
+                        <div style={{ fontSize: '13px', marginBottom: '4px' }}><strong>Impact:</strong> {vf.impact_assessment}</div>
+                      )}
+                      {vf.evidence && <code className="mx-gate-view__log-evidence">{vf.evidence}</code>}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            {!hasFpCheck && <p className="mx-gate-view__empty">No FP check data available.</p>}
           </div>
         )}
 
