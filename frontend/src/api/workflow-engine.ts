@@ -69,6 +69,7 @@ export interface Agent {
   type: string
   model: string
   is_active: boolean
+  config_json?: string
 }
 
 export async function listTemplates(): Promise<WorkflowTemplate[]> {

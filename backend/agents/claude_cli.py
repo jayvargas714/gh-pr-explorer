@@ -150,6 +150,7 @@ class ClaudeCLIAgent(AgentBackend):
         super().__init__(name, config)
         self._processes: dict[str, _ProcessState] = {}
         self.model = config.get("model")
+        self.effort = config.get("effort")  # low, medium, high, max
 
     def start_review(self, prompt: str, context: dict) -> AgentHandle:
         base_reviews_dir = get_reviews_dir()
@@ -187,6 +188,8 @@ class ClaudeCLIAgent(AgentBackend):
 
         if self.model:
             cmd.extend(["--model", self.model])
+        if self.effort:
+            cmd.extend(["--effort", self.effort])
 
         try:
             process = subprocess.Popen(

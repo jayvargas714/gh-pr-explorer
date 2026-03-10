@@ -15,13 +15,38 @@
       "type": "claude_cli",
       "model": "claude-opus-4-6"
     },
+    "claude-opus-low": {
+      "type": "claude_cli",
+      "model": "claude-opus-4-6",
+      "effort": "low"
+    },
+    "claude-opus-max": {
+      "type": "claude_cli",
+      "model": "claude-opus-4-6",
+      "effort": "max"
+    },
     "claude-sonnet": {
       "type": "claude_cli",
       "model": "claude-sonnet-4-6"
     },
+    "claude-sonnet-low": {
+      "type": "claude_cli",
+      "model": "claude-sonnet-4-6",
+      "effort": "low"
+    },
+    "claude-sonnet-max": {
+      "type": "claude_cli",
+      "model": "claude-sonnet-4-6",
+      "effort": "max"
+    },
     "claude-haiku": {
       "type": "claude_cli",
       "model": "claude-haiku-4-5-20251001"
+    },
+    "claude-haiku-low": {
+      "type": "claude_cli",
+      "model": "claude-haiku-4-5-20251001",
+      "effort": "low"
     },
     "openai-gpt4o": {
       "type": "openai_api",

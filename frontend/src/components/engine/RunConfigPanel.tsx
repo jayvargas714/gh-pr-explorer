@@ -268,11 +268,15 @@ export function RunConfigPanel({ repo, onClose, onStarted }: RunConfigPanelProps
                       setAgentOverrides((prev) => ({ ...prev, [s.id]: e.target.value }))
                     }
                   >
-                    {agents.filter((a) => a.is_active).map((a) => (
-                      <option key={a.name} value={a.name}>
-                        {a.name} ({a.model})
-                      </option>
-                    ))}
+                    {agents.filter((a) => a.is_active).map((a) => {
+                      const cfg = a.config_json ? (() => { try { return JSON.parse(a.config_json) } catch { return {} } })() : {}
+                      const effort = cfg.effort ? ` [${cfg.effort}]` : ''
+                      return (
+                        <option key={a.name} value={a.name}>
+                          {a.name} ({a.model}){effort}
+                        </option>
+                      )
+                    })}
                   </select>
                 </div>
               )

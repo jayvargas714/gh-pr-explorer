@@ -127,10 +127,15 @@ BUILTIN_TEMPLATES = [
 ]
 
 BUILTIN_AGENTS = [
-    # Claude CLI agents (direct Anthropic API)
+    # Claude CLI agents — effort levels: low, medium, high (default), max
     ("claude-opus", "claude_cli", "claude-opus-4-6", {}),
+    ("claude-opus-low", "claude_cli", "claude-opus-4-6", {"effort": "low"}),
+    ("claude-opus-max", "claude_cli", "claude-opus-4-6", {"effort": "max"}),
     ("claude-sonnet", "claude_cli", "claude-sonnet-4-6", {}),
+    ("claude-sonnet-low", "claude_cli", "claude-sonnet-4-6", {"effort": "low"}),
+    ("claude-sonnet-max", "claude_cli", "claude-sonnet-4-6", {"effort": "max"}),
     ("claude-haiku", "claude_cli", "claude-haiku-4-5-20251001", {}),
+    ("claude-haiku-low", "claude_cli", "claude-haiku-4-5-20251001", {"effort": "low"}),
     # Cursor CLI agents (via Cursor's agent runtime)
     ("cursor-opus-thinking", "cursor_cli", "opus-4.6-thinking", {"sandbox": "disabled"}),
     ("cursor-codex-high", "cursor_cli", "gpt-5.3-codex-high", {"sandbox": "disabled"}),
