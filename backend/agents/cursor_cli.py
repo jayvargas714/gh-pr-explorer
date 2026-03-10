@@ -56,6 +56,10 @@ class _ProcessState:
         self._live_lines: list[str] = []
         self._stderr_lines: list[str] = []
         self._result_text: Optional[str] = None
+        self._usage: Optional[dict] = None
+        self._cost_usd: Optional[float] = None
+        self._duration_ms: Optional[int] = None
+        self._num_turns: Optional[int] = None
         self._lock = threading.Lock()
         self._last_full: str = ""
         self._stdout_thread = threading.Thread(target=self._read_stream_json, daemon=True)
@@ -114,6 +118,10 @@ class _ProcessState:
                 elif msg_type == "result":
                     with self._lock:
                         self._result_text = msg.get("result", "")
+                        self._usage = msg.get("usage")
+                        self._cost_usd = msg.get("cost_usd")
+                        self._duration_ms = msg.get("duration_ms")
+                        self._num_turns = msg.get("num_turns")
         except (ValueError, OSError):
             pass
 
@@ -311,11 +319,23 @@ class CursorCLIAgent(AgentBackend):
         if content_json and "score" in content_json:
             score = content_json["score"].get("overall")
 
+        usage = None
+        with state._lock:
+            if state._usage:
+                usage = dict(state._usage)
+                if state._cost_usd is not None:
+                    usage["cost_usd"] = state._cost_usd
+                if state._duration_ms is not None:
+                    usage["duration_ms"] = state._duration_ms
+                if state._num_turns is not None:
+                    usage["num_turns"] = state._num_turns
+
         return ReviewArtifact(
             content_md=content_md,
             content_json=content_json,
             file_path=state.review_file,
             score=score,
+            usage=usage,
         )
 
     def get_live_output(self, handle: AgentHandle) -> str:

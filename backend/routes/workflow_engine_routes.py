@@ -443,6 +443,16 @@ def rerun_step_agent(instance_id, step_id, domain):
     return jsonify({"ok": True})
 
 
+# --- Usage Stats ---
+
+@workflow_engine_bp.route("/api/workflows/usage-stats", methods=["GET"])
+def get_usage_stats():
+    """Return average token usage per template per PR."""
+    db = get_workflow_db()
+    stats = db.get_usage_stats()
+    return jsonify(stats)
+
+
 # --- Agents ---
 
 @workflow_engine_bp.route("/api/agents", methods=["GET"])
@@ -558,6 +568,49 @@ def _set_terminal_status(db, instance_id: int, status: str):
     if current and current["status"] == "cancelled":
         return
     db.update_instance_status(instance_id, status)
+    if status in ("completed", "awaiting_gate"):
+        _persist_usage(db, instance_id)
+
+
+def _persist_usage(db, instance_id: int):
+    """Compute and save aggregate token usage + PR count for the instance."""
+    try:
+        steps = db.get_steps(instance_id)
+        total = {"input_tokens": 0, "output_tokens": 0}
+        pr_count = 0
+        has_any = False
+
+        for s in steps:
+            if not s.get("outputs_json"):
+                continue
+            try:
+                outputs = json.loads(s["outputs_json"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+            # Count PRs from pr_select step
+            if s["step_type"] == "pr_select":
+                prs = outputs.get("prs", outputs.get("selected", []))
+                pr_count = len(prs) if isinstance(prs, list) else 0
+
+            u = outputs.get("usage")
+            if not u or not isinstance(u, dict):
+                continue
+            has_any = True
+            total["input_tokens"] += u.get("input_tokens", 0)
+            total["output_tokens"] += u.get("output_tokens", 0)
+            for k in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+                if k in u:
+                    total[k] = total.get(k, 0) + u[k]
+            if "cost_usd" in u:
+                total["cost_usd"] = total.get("cost_usd", 0) + u["cost_usd"]
+            if "num_turns" in u:
+                total["num_turns"] = total.get("num_turns", 0) + u["num_turns"]
+
+        if has_any:
+            db.save_instance_usage(instance_id, total, max(pr_count, 1))
+    except Exception as e:
+        logger.warning(f"Failed to persist usage for instance {instance_id}: {e}")
 
 
 def _run_workflow(instance_id: int, template: dict, repo: str, config: dict):

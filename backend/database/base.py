@@ -531,6 +531,28 @@ class Database:
                 except Exception as e:
                     logger.warning(f"CASCADE migration skipped: {e}")
 
+            # Migration: add usage_json and pr_count to workflow_instances
+            wi_cols = {
+                col[1]
+                for col in cursor.execute("PRAGMA table_info(workflow_instances)").fetchall()
+            }
+            if "usage_json" not in wi_cols:
+                try:
+                    cursor.execute(
+                        "ALTER TABLE workflow_instances ADD COLUMN usage_json TEXT"
+                    )
+                    logger.info("Added column usage_json to workflow_instances")
+                except sqlite3.OperationalError:
+                    pass
+            if "pr_count" not in wi_cols:
+                try:
+                    cursor.execute(
+                        "ALTER TABLE workflow_instances ADD COLUMN pr_count INTEGER DEFAULT 0"
+                    )
+                    logger.info("Added column pr_count to workflow_instances")
+                except sqlite3.OperationalError:
+                    pass
+
             logger.info(f"Database initialized at {self.db_path}")
 
     @staticmethod

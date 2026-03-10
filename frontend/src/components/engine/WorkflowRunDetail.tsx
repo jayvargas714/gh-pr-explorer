@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
-import { StepContentViewer } from './StepContentViewer'
+import { StepContentViewer, TokenUsageBadge, type TokenUsage } from './StepContentViewer'
 import { useWorkflowEngineStore } from '../../stores/useWorkflowEngineStore'
-import { retryStep, getStepDownloadUrl, getInstanceFeedback, clearInstanceFeedback } from '../../api/workflow-engine'
+import { retryStep, getStepDownloadUrl, getInstanceFeedback, clearInstanceFeedback, parseContent } from '../../api/workflow-engine'
 import type { WorkflowInstance } from '../../api/workflow-engine'
 
 const STATUS_VARIANT: Record<string, 'success' | 'warning' | 'error' | 'info' | 'neutral'> = {
@@ -80,6 +80,30 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
   const hasGate = steps.some((s) => s.step_type === 'human_gate' && s.status === 'awaiting_gate')
   const selectedStep = steps.find((s) => s.step_id === selectedStepId) ?? null
 
+  const runUsage = useMemo<TokenUsage | null>(() => {
+    const total: TokenUsage = { input_tokens: 0, output_tokens: 0 }
+    let hasAny = false
+    for (const s of steps) {
+      if (!s.outputs_json) continue
+      const parsed = parseContent(s.outputs_json)
+      const u = parsed?.usage as TokenUsage | undefined
+      if (!u) continue
+      hasAny = true
+      total.input_tokens = (total.input_tokens ?? 0) + (u.input_tokens ?? 0)
+      total.output_tokens = (total.output_tokens ?? 0) + (u.output_tokens ?? 0)
+      if (u.cache_read_input_tokens) {
+        total.cache_read_input_tokens = (total.cache_read_input_tokens ?? 0) + u.cache_read_input_tokens
+      }
+      if (u.cost_usd != null) {
+        total.cost_usd = (total.cost_usd ?? 0) + u.cost_usd
+      }
+      if (u.num_turns) {
+        total.num_turns = (total.num_turns ?? 0) + u.num_turns
+      }
+    }
+    return hasAny ? total : null
+  }, [steps])
+
   const prevSelectedRef = useRef<{ stepId: string | null; status: string | null }>({ stepId: null, status: null })
 
   useEffect(() => {
@@ -116,6 +140,7 @@ export function WorkflowRunDetail({ instance, onBack, onOpenGate }: WorkflowRunD
         <div className="mx-run-detail__meta">
           <span>{inst.repo}</span>
           <span>{new Date(inst.created_at).toLocaleString()}</span>
+          {runUsage && <TokenUsageBadge usage={runUsage} />}
         </div>
         {hasGate && (
           <Button variant="primary" size="sm" onClick={onOpenGate}>

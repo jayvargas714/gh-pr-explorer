@@ -17,6 +17,53 @@ interface ParsedContent {
   [key: string]: unknown
 }
 
+interface TokenUsage {
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+  cost_usd?: number
+  duration_ms?: number
+  num_turns?: number
+}
+
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
+}
+
+export { type TokenUsage }
+
+export function TokenUsageBadge({ usage }: { usage: TokenUsage }) {
+  const input = usage.input_tokens ?? 0
+  const output = usage.output_tokens ?? 0
+  if (!input && !output) return null
+
+  const parts: string[] = []
+  parts.push(`In: ${formatTokenCount(input)}`)
+  parts.push(`Out: ${formatTokenCount(output)}`)
+  if (usage.cache_read_input_tokens) {
+    parts.push(`Cache read: ${formatTokenCount(usage.cache_read_input_tokens)}`)
+  }
+  if (usage.num_turns) {
+    parts.push(`${usage.num_turns} turns`)
+  }
+  if (usage.cost_usd != null) {
+    parts.push(`$${usage.cost_usd.toFixed(4)}`)
+  }
+
+  return (
+    <div className="mx-token-usage" title={parts.join(' · ')}>
+      <span className="mx-token-usage__icon">T</span>
+      <span className="mx-token-usage__summary">
+        {formatTokenCount(input + output)} tokens
+        {usage.cost_usd != null && <span className="mx-token-usage__cost"> · ${usage.cost_usd.toFixed(4)}</span>}
+      </span>
+    </div>
+  )
+}
+
 function parseContent(artifact: WorkflowArtifact): ParsedContent | null {
   const raw = artifact.content_json
   if (!raw) return null
@@ -1476,6 +1523,7 @@ export function StepContentViewer({ step, artifacts, instanceId }: StepContentVi
   if (outputsRaw) {
     let parsed: ParsedContent | null = parseOutputs(outputsRaw) as ParsedContent | null
     if (parsed) {
+      const usage = parsed.usage as TokenUsage | undefined
       const WRAPPER_KEYS: Record<string, string> = {
         synthesis: 'synthesis',
         holistic_review: 'holistic',
@@ -1486,6 +1534,7 @@ export function StepContentViewer({ step, artifacts, instanceId }: StepContentVi
       }
       return (
         <div className="mx-step-content">
+          {usage && (usage.input_tokens || usage.output_tokens) && <TokenUsageBadge usage={usage} />}
           <Viewer content={parsed} step={step} />
         </div>
       )

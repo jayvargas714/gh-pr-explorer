@@ -86,6 +86,38 @@
   margin: 0;
 }
 
+/* Usage stats toggle + panel */
+.mx-engine-list__usage-toggle {
+  display: block;
+  background: none;
+  border: none;
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-xs, 11px);
+  cursor: pointer;
+  padding: 4px 0;
+  margin-bottom: var(--mx-space-2);
+  opacity: 0.7;
+}
+.mx-engine-list__usage-toggle:hover { opacity: 1; }
+
+.mx-usage-stats {
+  margin-bottom: var(--mx-space-3);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-sm);
+  padding: var(--mx-space-2) var(--mx-space-3);
+  background: var(--mx-color-bg-secondary);
+}
+.mx-usage-stats__empty {
+  font-size: var(--mx-font-size-xs, 11px);
+  color: var(--mx-color-text-muted);
+  margin: var(--mx-space-2) 0;
+}
+.mx-table--compact th,
+.mx-table--compact td {
+  padding: 4px 8px;
+  font-size: var(--mx-font-size-xs, 11px);
+}
+
 .mx-engine-list__row {
   cursor: pointer;
 }
@@ -577,6 +609,35 @@
   padding: var(--mx-space-3);
   background: rgba(239, 68, 68, 0.08);
   border-radius: var(--mx-radius-sm);
+}
+
+/* Token usage badge */
+.mx-token-usage {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: var(--mx-font-size-xs, 11px);
+  color: var(--mx-color-text-secondary);
+  background: var(--mx-color-bg-tertiary, rgba(128, 128, 128, 0.08));
+  border-radius: var(--mx-radius-sm);
+  cursor: default;
+  white-space: nowrap;
+}
+.mx-token-usage__icon {
+  font-weight: 700;
+  font-size: 9px;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  background: var(--mx-color-text-muted, #999);
+  color: var(--mx-color-bg, #fff);
+}
+.mx-token-usage__cost {
+  opacity: 0.75;
 }
 
 .mx-step-content__pr-list {

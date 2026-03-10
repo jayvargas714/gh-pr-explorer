@@ -30,6 +30,7 @@ class ReviewArtifact:
     file_path: Optional[str] = None
     score: Optional[float] = None
     error: Optional[str] = None
+    usage: Optional[dict] = None  # {input_tokens, output_tokens, cost_usd, ...}
 
 
 class AgentBackend(ABC):

@@ -5,6 +5,7 @@ import { Card } from '../common/Card'
 import { Spinner } from '../common/Spinner'
 import { useWorkflowEngineStore } from '../../stores/useWorkflowEngineStore'
 import { useAccountStore } from '../../stores/useAccountStore'
+import { getUsageStats, type TemplateUsageStats } from '../../api/workflow-engine'
 import type { WorkflowInstance } from '../../api/workflow-engine'
 
 const STATUS_VARIANTS: Record<string, 'success' | 'error' | 'warning' | 'info' | 'neutral'> = {
@@ -116,6 +117,8 @@ export function WorkflowRunList({ onSelectInstance, onNewRun, onOpenDomains, onO
         })}
       </div>
 
+      <UsageStatsPanel />
+
       {error && (
         <div className="mx-alert mx-alert--error" style={{ marginBottom: 'var(--mx-space-4)' }}>
           <div className="mx-alert__content">{error}</div>
@@ -162,6 +165,80 @@ export function WorkflowRunList({ onSelectInstance, onNewRun, onOpenDomains, onO
                       <Button variant="ghost" size="sm" onClick={(e) => handleCancel(e, inst.id)}>Cancel</Button>
                     )}
                   </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
+}
+
+function UsageStatsPanel() {
+  const [stats, setStats] = useState<TemplateUsageStats[]>([])
+  const [open, setOpen] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    if (!open || loaded) return
+    getUsageStats().then((data) => {
+      setStats(data)
+      setLoaded(true)
+    }).catch(() => setLoaded(true))
+  }, [open, loaded])
+
+  if (!open) {
+    return (
+      <button
+        className="mx-engine-list__usage-toggle"
+        onClick={() => setOpen(true)}
+      >
+        Token Usage by Template ▸
+      </button>
+    )
+  }
+
+  return (
+    <div className="mx-usage-stats">
+      <button
+        className="mx-engine-list__usage-toggle mx-engine-list__usage-toggle--open"
+        onClick={() => setOpen(false)}
+      >
+        Token Usage by Template ▾
+      </button>
+      {stats.length === 0 ? (
+        <p className="mx-usage-stats__empty">No usage data yet. Run a workflow to see stats.</p>
+      ) : (
+        <div className="mx-table-wrapper">
+          <table className="mx-table mx-table--compact">
+            <thead>
+              <tr>
+                <th>Template</th>
+                <th>Runs</th>
+                <th>PRs</th>
+                <th title="Average tokens (in+out) per PR">Avg Tokens/PR</th>
+                <th title="Average cost per PR">Avg Cost/PR</th>
+                <th title="Average tokens per run">Avg Tokens/Run</th>
+                <th title="Average cost per run">Avg Cost/Run</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.map((s) => (
+                <tr key={s.template_name}>
+                  <td>{s.template_name}</td>
+                  <td>{s.run_count}</td>
+                  <td>{s.total_prs}</td>
+                  <td>{formatTokens(s.avg_input_tokens_per_pr + s.avg_output_tokens_per_pr)}</td>
+                  <td>{s.avg_cost_per_pr ? `$${s.avg_cost_per_pr.toFixed(4)}` : '—'}</td>
+                  <td>{formatTokens(s.avg_input_tokens_per_run + s.avg_output_tokens_per_run)}</td>
+                  <td>{s.avg_cost_per_run ? `$${s.avg_cost_per_run.toFixed(4)}` : '—'}</td>
                 </tr>
               ))}
             </tbody>

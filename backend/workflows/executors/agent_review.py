@@ -255,6 +255,9 @@ class AgentReviewExecutor(StepExecutor):
         completed_reviews = [r for r in reviews if r.get("status") == "completed"]
         failed_reviews = [r for r in reviews if r.get("status") in ("failed", "cancelled")]
 
+        # Aggregate token usage across all completed reviews
+        usage_total = self._aggregate_usage(completed_reviews)
+
         if not completed_reviews and failed_reviews:
             errors = "; ".join(
                 f'PR #{r.get("pr_number", "?")}: {r.get("error", "unknown")}'
@@ -263,17 +266,38 @@ class AgentReviewExecutor(StepExecutor):
             return StepResult(
                 success=False,
                 error=f"All reviews failed ({agent_name}): {errors}",
-                outputs={"reviews": reviews, "agent_name": agent_name},
+                outputs={"reviews": reviews, "agent_name": agent_name, "usage": usage_total},
             )
 
         return StepResult(
             success=True,
-            outputs={"reviews": reviews, "agent_name": agent_name},
+            outputs={"reviews": reviews, "agent_name": agent_name, "usage": usage_total},
             artifacts=[
                 {"type": "review", "pr_number": r["pr_number"], "data": r}
                 for r in completed_reviews
             ],
         )
+
+    @staticmethod
+    def _aggregate_usage(reviews: list[dict]) -> dict:
+        """Sum token usage across multiple review results."""
+        total: dict = {"input_tokens": 0, "output_tokens": 0}
+        has_any = False
+        for r in reviews:
+            u = r.get("usage")
+            if not u:
+                continue
+            has_any = True
+            total["input_tokens"] += u.get("input_tokens", 0)
+            total["output_tokens"] += u.get("output_tokens", 0)
+            for k in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+                if k in u:
+                    total[k] = total.get(k, 0) + u[k]
+            if "cost_usd" in u:
+                total["cost_usd"] = total.get("cost_usd", 0) + u["cost_usd"]
+            if "num_turns" in u:
+                total["num_turns"] = total.get("num_turns", 0) + u["num_turns"]
+        return total if has_any else {}
 
     @staticmethod
     def _build_context(prompt_data: dict, phase: str, inst_id: int) -> dict:
@@ -321,6 +345,8 @@ class AgentReviewExecutor(StepExecutor):
             "score": artifact.score,
             "head_sha": info["prompt_data"].get("head_sha", ""),
         }
+        if artifact.usage:
+            entry["usage"] = artifact.usage
         d = info["prompt_data"].get("domain")
         if d:
             entry["domain"] = d

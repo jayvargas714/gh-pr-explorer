@@ -136,6 +136,15 @@ class WorkflowDB:
                 (json.dumps(config), instance_id),
             )
 
+    def save_instance_usage(self, instance_id: int, usage: dict, pr_count: int):
+        """Persist aggregate token usage and PR count for a completed run."""
+        with self.db.connection() as conn:
+            conn.execute(
+                "UPDATE workflow_instances SET usage_json=?, pr_count=?, "
+                "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (json.dumps(usage), pr_count, instance_id),
+            )
+
     # --- Steps ---
 
     def create_step(self, instance_id: int, step_id: str, step_type: str,
@@ -449,6 +458,73 @@ class WorkflowDB:
                 "SELECT * FROM review_followups WHERE id=?", (followup_id,)
             ).fetchone()
             return dict(row) if row else None
+
+    # --- Usage Stats ---
+
+    def get_usage_stats(self) -> list[dict]:
+        """Return average token usage per template (only runs with usage data)."""
+        with self.db.connection() as conn:
+            rows = conn.execute("""
+                SELECT wt.name AS template_name,
+                       COUNT(*) AS run_count,
+                       SUM(wi.pr_count) AS total_prs,
+                       wi.usage_json
+                FROM workflow_instances wi
+                JOIN workflow_templates wt ON wi.template_id = wt.id
+                WHERE wi.usage_json IS NOT NULL
+                  AND wi.status IN ('completed', 'awaiting_gate')
+                GROUP BY wt.name
+            """).fetchall()
+
+            # We need to aggregate JSON usage across rows per template.
+            # SQLite can't sum inside JSON, so fetch all and aggregate in Python.
+            rows_all = conn.execute("""
+                SELECT wt.name AS template_name,
+                       wi.usage_json,
+                       wi.pr_count
+                FROM workflow_instances wi
+                JOIN workflow_templates wt ON wi.template_id = wt.id
+                WHERE wi.usage_json IS NOT NULL
+                  AND wi.status IN ('completed', 'awaiting_gate')
+                ORDER BY wt.name
+            """).fetchall()
+
+        from collections import defaultdict
+        buckets: dict[str, dict] = defaultdict(lambda: {
+            "run_count": 0, "total_prs": 0,
+            "total_input_tokens": 0, "total_output_tokens": 0,
+            "total_cost_usd": 0.0,
+        })
+
+        for row in rows_all:
+            tname = row["template_name"]
+            b = buckets[tname]
+            b["run_count"] += 1
+            b["total_prs"] += row["pr_count"] or 0
+            try:
+                usage = json.loads(row["usage_json"])
+                b["total_input_tokens"] += usage.get("input_tokens", 0)
+                b["total_output_tokens"] += usage.get("output_tokens", 0)
+                b["total_cost_usd"] += usage.get("cost_usd", 0)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        result = []
+        for tname, b in buckets.items():
+            n = b["run_count"]
+            prs = b["total_prs"] or n  # fallback if pr_count was 0
+            result.append({
+                "template_name": tname,
+                "run_count": n,
+                "total_prs": b["total_prs"],
+                "avg_input_tokens_per_run": round(b["total_input_tokens"] / n) if n else 0,
+                "avg_output_tokens_per_run": round(b["total_output_tokens"] / n) if n else 0,
+                "avg_cost_per_run": round(b["total_cost_usd"] / n, 4) if n else 0,
+                "avg_input_tokens_per_pr": round(b["total_input_tokens"] / prs) if prs else 0,
+                "avg_output_tokens_per_pr": round(b["total_output_tokens"] / prs) if prs else 0,
+                "avg_cost_per_pr": round(b["total_cost_usd"] / prs, 4) if prs else 0,
+            })
+        return result
 
     def list_followups(self, repo: Optional[str] = None,
                        status: Optional[str] = None) -> list[dict]:

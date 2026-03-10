@@ -19,6 +19,7 @@ class _CompletionState:
         self.result: Optional[str] = None
         self.error: Optional[str] = None
         self.content_json: Optional[dict] = None
+        self.usage: Optional[dict] = None
 
 
 class OpenAIAgent(AgentBackend):
@@ -73,6 +74,7 @@ class OpenAIAgent(AgentBackend):
             content_md=state.result,
             content_json=state.content_json,
             score=state.content_json.get("score", {}).get("overall") if state.content_json else None,
+            usage=state.usage,
         )
 
     def cancel(self, handle: AgentHandle) -> bool:
@@ -134,6 +136,14 @@ class OpenAIAgent(AgentBackend):
             data = response.json()
             content = data["choices"][0]["message"]["content"]
             state.result = content
+
+            api_usage = data.get("usage")
+            if api_usage:
+                state.usage = {
+                    "input_tokens": api_usage.get("prompt_tokens", 0),
+                    "output_tokens": api_usage.get("completion_tokens", 0),
+                }
+
             state.status = AgentStatus.COMPLETED
 
             logger.info(f"OpenAI: completed review for handle {handle_id[:8]}")
