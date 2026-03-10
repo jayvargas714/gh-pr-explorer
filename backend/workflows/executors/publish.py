@@ -68,13 +68,14 @@ def build_gh_comment(synthesis: dict, mode: str = "team-review",
     if blocking:
         lines.append("### Blocking Findings")
         lines.append("")
-        for i, f in enumerate(blocking, 1):
+        counter = 1
+        for f in blocking:
             inner = f.get("finding_a", f.get("finding", f))
             loc = inner.get("location", {})
             file_ref = _format_file_ref(loc, inner)
             severity = inner.get("severity", "")
             sev_tag = f" [{severity}]" if severity else ""
-            lines.append(f'{i}. **{inner.get("title", "Untitled")}**{sev_tag} — `{file_ref}`')
+            lines.append(f'{counter}. **{inner.get("title", "Untitled")}**{sev_tag} — `{file_ref}`')
             if inner.get("problem") or inner.get("description"):
                 lines.append(f'   {inner.get("problem") or inner.get("description")}')
             if inner.get("evidence"):
@@ -82,6 +83,24 @@ def build_gh_comment(synthesis: dict, mode: str = "team-review",
             if inner.get("fix") or inner.get("suggestion"):
                 lines.append(f'   **Suggested fix:** {inner.get("fix") or inner.get("suggestion")}')
             lines.append("")
+            counter += 1
+
+            # Emit additional failure modes as separate line items to prevent
+            # synthesis loss (multi-path findings collapsed into one entry)
+            for extra in f.get("additional_failure_modes", []):
+                extra_loc = extra.get("location", {})
+                extra_ref = _format_file_ref(extra_loc, extra)
+                extra_sev = extra.get("severity", "")
+                extra_tag = f" [{extra_sev}]" if extra_sev else ""
+                lines.append(f'{counter}. **{extra.get("title", "Untitled")}**{extra_tag} — `{extra_ref}`')
+                if extra.get("problem") or extra.get("description"):
+                    lines.append(f'   {extra.get("problem") or extra.get("description")}')
+                if extra.get("evidence"):
+                    lines.append(f'   Evidence: {extra["evidence"]}')
+                if extra.get("fix") or extra.get("suggestion"):
+                    lines.append(f'   **Suggested fix:** {extra.get("fix") or extra.get("suggestion")}')
+                lines.append("")
+                counter += 1
     else:
         lines.extend(["### Blocking Findings", "", "None — approving.", ""])
 
@@ -110,6 +129,20 @@ def build_gh_comment(synthesis: dict, mode: str = "team-review",
             lines.append(f"{i}. **{title}**{domain_str}")
             if desc:
                 lines.append(f"   {desc}")
+            lines.append("")
+
+    silent_pass = synthesis.get("_silent_pass", [])
+    if silent_pass:
+        lines.append("### Silent-Pass Test Warnings")
+        lines.append("")
+        for i, sp in enumerate(silent_pass, 1):
+            test_name = sp.get("test_name", "unknown")
+            file_ref = sp.get("file", "unknown")
+            line_num = sp.get("line")
+            loc_str = f"{file_ref}:{line_num}" if line_num else file_ref
+            lines.append(f"{i}. **{test_name}** — `{loc_str}`")
+            if sp.get("issue"):
+                lines.append(f"   {sp['issue']}")
             lines.append("")
 
     questions = synthesis.get("questions", [])
@@ -343,6 +376,8 @@ class PublishExecutor(StepExecutor):
             enriched["summary"] = holistic["summary"]
         if holistic.get("cross_cutting_findings"):
             enriched["_cross_cutting"] = holistic["cross_cutting_findings"]
+        if holistic.get("silent_pass_findings"):
+            enriched["_silent_pass"] = holistic["silent_pass_findings"]
         return enriched
 
     def _fetch_existing_findings(self, owner: str, repo: str, pr_number: int) -> set[str]:

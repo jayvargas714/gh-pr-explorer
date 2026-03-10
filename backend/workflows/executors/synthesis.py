@@ -523,7 +523,14 @@ class SynthesisExecutor(StepExecutor):
             "1. **Verify** against the actual diff — read the code at the cited location\n"
             "2. **Classify**: CONFIRMED | FALSE_POSITIVE | RECLASSIFIED (with new severity)\n"
             "3. **For disputed findings** (A_ONLY, B_ONLY): determine validity with code evidence\n"
-            "4. **Drop false positives** with explicit reasoning\n\n"
+            "4. **Drop false positives** with explicit reasoning\n"
+            "5. **Preserve distinct failure modes**: If a finding has multiple failure paths "
+            "(e.g., race on read AND race on write), each MUST appear as a separate verified_finding. "
+            "Do NOT collapse multi-path findings into a single entry.\n\n"
+            "Severity calibration:\n"
+            "- A finding is critical/blocking ONLY if you can describe a concrete production failure scenario\n"
+            "- If the problem requires unusual conditions or is a best-practice violation, it is major at most\n"
+            "- Default to non-blocking when uncertain\n\n"
             "Additionally:\n"
             "- **Generate SYNTH findings**: issues BOTH reviewers missed (source: 'SYNTH')\n"
             "- **Extract cross-cutting flags**: any issues outside this domain's scope → list them\n"
@@ -813,26 +820,41 @@ class SynthesisExecutor(StepExecutor):
                            review_a: dict, review_b: dict) -> dict:
         agreed = []
         a_only = []
-        b_matched = set()
+        b_matched: dict[int, list[dict]] = {}  # b_idx -> list of matched a-findings
+        a_matched = set()
         agent_a = review_a.get("agent_name", "Agent A")
         agent_b = review_b.get("agent_name", "Agent B")
 
-        for fa in findings_a:
-            matched = False
-            for idx, fb in enumerate(findings_b):
-                if idx in b_matched:
-                    continue
+        # First pass: find ALL matches (not just first) to detect multi-path findings
+        for a_idx, fa in enumerate(findings_a):
+            for b_idx, fb in enumerate(findings_b):
                 if self._findings_match(fa, fb):
-                    agreed.append({
-                        "source": "BOTH",
-                        "finding_a": fa,
-                        "finding_b": fb,
-                        "resolution": "Both agents identified this issue independently",
-                    })
-                    b_matched.add(idx)
-                    matched = True
-                    break
-            if not matched:
+                    b_matched.setdefault(b_idx, []).append(fa)
+                    a_matched.add(a_idx)
+
+        # Build agreed entries, preserving additional failure modes when multiple
+        # A-findings match the same B-finding (prevents synthesis loss)
+        for b_idx, matched_a_findings in b_matched.items():
+            fb = findings_b[b_idx]
+            primary = matched_a_findings[0]
+            entry = {
+                "source": "BOTH",
+                "finding_a": primary,
+                "finding_b": fb,
+                "resolution": "Both agents identified this issue independently",
+            }
+            if len(matched_a_findings) > 1:
+                entry["additional_failure_modes"] = matched_a_findings[1:]
+                entry["resolution"] = (
+                    f"Both agents identified this issue independently. "
+                    f"{len(matched_a_findings)} distinct failure modes from {agent_a} "
+                    f"matched this finding — each must be preserved in published output."
+                )
+            agreed.append(entry)
+
+        # A-findings that didn't match any B-finding
+        for a_idx, fa in enumerate(findings_a):
+            if a_idx not in a_matched:
                 a_only.append({
                     "source": "A",
                     "finding": fa,
@@ -900,6 +922,24 @@ class SynthesisExecutor(StepExecutor):
         agent_a = review_a.get("agent_name", "Agent A")
         agent_b = review_b.get("agent_name", "Agent B")
 
+        # Log multi-path findings so reviewers see every distinct failure mode
+        for entry in classified["agreed"]:
+            extra = entry.get("additional_failure_modes", [])
+            if extra:
+                primary = entry.get("finding_a", {})
+                log.append({
+                    "type": "multi_path",
+                    "finding_source": "BOTH",
+                    "agent": agent_a,
+                    "finding": primary,
+                    "additional_count": len(extra),
+                    "resolution": (
+                        f"Multi-path: {agent_a} identified {len(extra) + 1} distinct failure modes "
+                        f"for '{primary.get('title', '')}'. Each must be preserved in published output."
+                    ),
+                    "additional_titles": [f.get("title", "") for f in extra],
+                })
+
         for entry in classified["a_only"]:
             finding = entry.get("finding", {})
             log.append({
@@ -938,6 +978,15 @@ class SynthesisExecutor(StepExecutor):
         if has_critical_agreed:
             return "CHANGES_REQUESTED"
 
+        has_major_agreed = any(
+            f.get("finding_a", {}).get("severity") == "major"
+            for f in classified["agreed"]
+        )
+        if has_major_agreed:
+            return "CHANGES_REQUESTED"
+
+        # Single-agent critical findings warrant discussion, not outright rejection.
+        # Only both-agents-agree critical findings (handled above) trigger CHANGES_REQUESTED.
         has_critical_a = any(
             f.get("finding", {}).get("severity") == "critical"
             for f in classified["a_only"]
@@ -946,13 +995,8 @@ class SynthesisExecutor(StepExecutor):
             f.get("finding", {}).get("severity") == "critical"
             for f in classified["b_only"]
         )
-
-        has_major_agreed = any(
-            f.get("finding_a", {}).get("severity") == "major"
-            for f in classified["agreed"]
-        )
-        if has_major_agreed or has_critical_a or has_critical_b:
-            return "CHANGES_REQUESTED"
+        if has_critical_a or has_critical_b:
+            return "NEEDS_DISCUSSION"
 
         verdict_a = self._extract_verdict(review_a)
         verdict_b = self._extract_verdict(review_b)

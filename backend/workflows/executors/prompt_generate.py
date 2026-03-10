@@ -387,7 +387,25 @@ class PromptGenerateExecutor(StepExecutor):
     def _output_format(pr: dict) -> str:
         pr_number = pr.get("number", 0)
         title = pr.get("title", "")
+        changed_files = pr.get("changedFiles", 0)
+        total = pr.get("additions", 0) + pr.get("deletions", 0)
+
+        cap_note = ""
+        if changed_files >= 50 or total >= 5000:
+            cap_note = (
+                "\n**Large PR note**: Cap your total findings at 15-20 max. "
+                "Group minor issues by category rather than listing each individually.\n"
+            )
+
         return (
+            "## Severity Guide\n\n"
+            "- **Blocking/Critical**: Production data loss, security vulnerability, crash in mainline path. "
+            "You MUST describe a concrete production failure scenario — if you cannot, it is NOT blocking.\n"
+            "- **Major**: Correctness issue with workaround, performance regression, missing error handling on external input. "
+            "Non-blocking by default.\n"
+            "- **Minor**: Style, naming, documentation, test coverage gap. Never blocking.\n\n"
+            "Default to non-blocking. When in doubt, mark as major (non-blocking).\n"
+            f"{cap_note}\n"
             "## Output Format\n\n"
             "Your review MUST use this exact structure:\n\n"
             f"# Review: PR #{pr_number} — {title}\n\n"
