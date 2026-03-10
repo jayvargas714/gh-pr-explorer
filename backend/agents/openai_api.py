@@ -28,6 +28,7 @@ class OpenAIAgent(AgentBackend):
     def __init__(self, name: str, config: dict):
         super().__init__(name, config)
         self._completions: dict[str, _CompletionState] = {}
+        self._lock = threading.Lock()
         self.model = config.get("model", "gpt-4o")
         api_key_env = config.get("api_key_env", "OPENAI_API_KEY")
         self.api_key = os.environ.get(api_key_env)
@@ -40,7 +41,8 @@ class OpenAIAgent(AgentBackend):
 
         handle_id = str(uuid.uuid4())
         state = _CompletionState()
-        self._completions[handle_id] = state
+        with self._lock:
+            self._completions[handle_id] = state
 
         thread = threading.Thread(
             target=self._run_completion,
@@ -59,13 +61,15 @@ class OpenAIAgent(AgentBackend):
         )
 
     def check_status(self, handle: AgentHandle) -> AgentStatus:
-        state = self._completions.get(handle.handle_id)
+        with self._lock:
+            state = self._completions.get(handle.handle_id)
         if state is None:
             return AgentStatus.FAILED
         return state.status
 
     def get_output(self, handle: AgentHandle) -> ReviewArtifact:
-        state = self._completions.get(handle.handle_id)
+        with self._lock:
+            state = self._completions.get(handle.handle_id)
         if state is None:
             return ReviewArtifact(error="Unknown handle")
         if state.error:
@@ -77,15 +81,23 @@ class OpenAIAgent(AgentBackend):
             usage=state.usage,
         )
 
+    def cleanup(self, handle: AgentHandle) -> None:
+        with self._lock:
+            self._completions.pop(handle.handle_id, None)
+
     def cancel(self, handle: AgentHandle) -> bool:
-        state = self._completions.get(handle.handle_id)
+        with self._lock:
+            state = self._completions.get(handle.handle_id)
         if state and state.status == AgentStatus.RUNNING:
             state.status = AgentStatus.CANCELLED
             return True
         return False
 
     def _run_completion(self, handle_id: str, prompt: str, context: dict):
-        state = self._completions[handle_id]
+        with self._lock:
+            state = self._completions.get(handle_id)
+        if state is None:
+            return
         try:
             import httpx
 

@@ -149,6 +149,7 @@ class ClaudeCLIAgent(AgentBackend):
     def __init__(self, name: str, config: dict):
         super().__init__(name, config)
         self._processes: dict[str, _ProcessState] = {}
+        self._lock = threading.Lock()
         self.model = config.get("model")
         self.effort = config.get("effort")  # low, medium, high, max
 
@@ -193,7 +194,8 @@ class ClaudeCLIAgent(AgentBackend):
 
         try:
             import os
-            env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("CLAUDECODE", "OPENAI_API_KEY")}
             process = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 start_new_session=True, env=env,
@@ -202,7 +204,8 @@ class ClaudeCLIAgent(AgentBackend):
             raise RuntimeError("Claude CLI not found. Ensure 'claude' is installed and in PATH.")
 
         handle_id = str(uuid.uuid4())
-        self._processes[handle_id] = _ProcessState(process, str(review_file), json_file)
+        with self._lock:
+            self._processes[handle_id] = _ProcessState(process, str(review_file), json_file)
 
         register_pid(
             process.pid,
@@ -222,7 +225,8 @@ class ClaudeCLIAgent(AgentBackend):
         )
 
     def check_status(self, handle: AgentHandle) -> AgentStatus:
-        state = self._processes.get(handle.handle_id)
+        with self._lock:
+            state = self._processes.get(handle.handle_id)
         if state is None:
             return AgentStatus.FAILED
 
@@ -242,14 +246,16 @@ class ClaudeCLIAgent(AgentBackend):
         return AgentStatus.COMPLETED if exit_code == 0 else AgentStatus.FAILED
 
     def get_live_output(self, handle: AgentHandle) -> str:
-        state = self._processes.get(handle.handle_id)
+        with self._lock:
+            state = self._processes.get(handle.handle_id)
         if state is None:
             return ""
         return state.get_live_text()
 
     def cleanup(self, handle: AgentHandle) -> None:
         """Remove process state and close pipes to prevent FD leaks."""
-        state = self._processes.pop(handle.handle_id, None)
+        with self._lock:
+            state = self._processes.pop(handle.handle_id, None)
         if state is None:
             return
         unregister_pid(state.process.pid)
@@ -265,7 +271,8 @@ class ClaudeCLIAgent(AgentBackend):
             pass
 
     def get_output(self, handle: AgentHandle) -> ReviewArtifact:
-        state = self._processes.get(handle.handle_id)
+        with self._lock:
+            state = self._processes.get(handle.handle_id)
         if state is None:
             return ReviewArtifact(error="Unknown handle")
 
@@ -327,7 +334,8 @@ class ClaudeCLIAgent(AgentBackend):
         )
 
     def cancel(self, handle: AgentHandle) -> bool:
-        state = self._processes.get(handle.handle_id)
+        with self._lock:
+            state = self._processes.get(handle.handle_id)
         if state is None or state.exit_code is not None:
             return False
         try:
