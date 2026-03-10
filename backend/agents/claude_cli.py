@@ -192,9 +192,11 @@ class ClaudeCLIAgent(AgentBackend):
             cmd.extend(["--effort", self.effort])
 
         try:
+            import os
+            env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
             process = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                start_new_session=True,
+                start_new_session=True, env=env,
             )
         except FileNotFoundError:
             raise RuntimeError("Claude CLI not found. Ensure 'claude' is installed and in PATH.")
