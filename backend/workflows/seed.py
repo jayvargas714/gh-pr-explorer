@@ -480,8 +480,17 @@ def seed_builtin_data():
         if existing is None:
             db.create_template(name, description, template, is_builtin=True)
             logger.info(f"Seeded built-in template: {name}")
+        elif existing.get("is_builtin"):
+            import json as _json
+            with db.db.connection() as conn:
+                conn.execute(
+                    "UPDATE workflow_templates SET description=?, template_json=?, "
+                    "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (description, _json.dumps(template), existing["id"]),
+                )
+            logger.info(f"Updated built-in template: {name}")
         else:
-            logger.debug(f"Built-in template '{name}' already exists")
+            logger.debug(f"Template '{name}' exists (user-modified), skipping")
 
     for name, agent_type, model, config in BUILTIN_AGENTS:
         db.upsert_agent(name, agent_type, model, config)
