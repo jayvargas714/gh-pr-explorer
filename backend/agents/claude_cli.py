@@ -298,8 +298,10 @@ class ClaudeCLIAgent(AgentBackend):
             except Exception as e:
                 logger.warning(f"Could not read markdown review: {e}")
 
-        if content_md is None and state.stdout:
-            content_md = state.stdout
+        # Prefer full live text over _result_text (which is just a summary)
+        if content_md is None:
+            live = state.get_live_text()
+            content_md = live if live else state.stdout
 
         score = None
         if content_json and "score" in content_json:

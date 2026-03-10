@@ -287,6 +287,27 @@ class CursorCLIAgent(AgentBackend):
         review_path = Path(state.review_file)
         json_path = Path(state.json_file)
 
+        # If files not at expected path, search workspace and phase-b dirs
+        if not review_path.exists() or not json_path.exists():
+            base_name = review_path.name
+            json_name = Path(state.json_file).name
+            search_dirs = [
+                review_path.parent,
+                Path(get_reviews_dir()) / "phase-b",
+                Path.cwd(),
+            ]
+            for d in search_dirs:
+                if not d.exists():
+                    continue
+                for found in d.rglob(base_name):
+                    review_path = found
+                    break
+                for found in d.rglob(json_name):
+                    json_path = found
+                    break
+                if review_path.exists():
+                    break
+
         content_json = None
         content_md = None
 
@@ -298,7 +319,7 @@ class CursorCLIAgent(AgentBackend):
                 if valid:
                     content_json = parsed
                 else:
-                    logger.warning(f"JSON validation failed: {errs[:3]}")
+                    logger.warning(f"JSON validation failed for {json_path}: {errs[:3]}")
             except Exception as e:
                 logger.warning(f"Could not parse JSON review: {e}")
 
@@ -310,10 +331,11 @@ class CursorCLIAgent(AgentBackend):
             except Exception as e:
                 logger.warning(f"Could not read markdown review: {e}")
 
-        # Fall back to captured stdout when no files were written (e.g.
-        # non-review tasks like expert_generation or synthesis).
-        if content_md is None and state.stdout:
-            content_md = state.stdout
+        # Fall back to captured output when no files were written.
+        # Prefer full live text over _result_text (which is just a summary).
+        if content_md is None:
+            live = state.get_live_text()
+            content_md = live if live else state.stdout
 
         score = None
         if content_json and "score" in content_json:
