@@ -5,8 +5,44 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def get_review_status(review_decision):
-    """Determine review status from reviewDecision field."""
+def get_review_status(review_decision, reviews=None):
+    """Determine review status using full reviews history with reviewDecision fallback.
+
+    GitHub's reviewDecision can be reset when a re-review is requested, even though
+    the CHANGES_REQUESTED is still blocking. We compute the effective state from
+    all reviews to catch this case.
+
+    Priority:
+    1. If any reviewer's most recent actionable review is CHANGES_REQUESTED → changes_requested
+    2. If all actionable reviews are APPROVED → approved
+    3. Fall back to reviewDecision field
+    """
+    # Compute effective state from full reviews history
+    if reviews:
+        has_changes_requested = False
+        has_approved = False
+        reviewer_state = {}  # login -> latest actionable state
+        for review in reviews:
+            author = review.get("author") or {}
+            login = author.get("login")
+            if not login:
+                continue
+            state = (review.get("state") or "").upper()
+            if state in ("APPROVED", "CHANGES_REQUESTED"):
+                reviewer_state[login] = state
+
+        for state in reviewer_state.values():
+            if state == "CHANGES_REQUESTED":
+                has_changes_requested = True
+            elif state == "APPROVED":
+                has_approved = True
+
+        if has_changes_requested:
+            return "changes_requested"
+        if has_approved:
+            return "approved"
+
+    # Fall back to reviewDecision
     if not review_decision:
         return "pending"
 
@@ -21,31 +57,41 @@ def get_review_status(review_decision):
     return "pending"
 
 
-def get_current_reviewers(latest_reviews):
-    """Extract per-reviewer state from the latestReviews field.
+def get_current_reviewers(reviews):
+    """Compute per-reviewer blocking state from ALL reviews.
 
-    GitHub's latestReviews returns each reviewer's most recent review action,
-    so the list already reflects the current state (e.g. if someone changed
-    from APPROVED to CHANGES_REQUESTED, only the latter appears).
+    Uses the full reviews list (not latestReviews) to determine each reviewer's
+    effective blocking state. This handles the case where a re-review is requested
+    which resets latestReviews to PENDING, but the CHANGES_REQUESTED still blocks.
+
+    For each reviewer, finds their most recent APPROVED or CHANGES_REQUESTED review.
+    Only returns reviewers with an actionable state (not commenters or pending).
 
     Returns a list of dicts: [{login, avatarUrl, state}, ...]
-    where state is one of: APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED, PENDING.
+    where state is APPROVED or CHANGES_REQUESTED.
     """
-    if not latest_reviews:
+    if not reviews:
         return []
 
-    reviewers = []
-    for review in latest_reviews:
+    actionable_states = {"APPROVED", "CHANGES_REQUESTED"}
+
+    # Walk reviews in order (oldest first) to find each reviewer's latest actionable state
+    reviewer_state = {}  # login -> {avatarUrl, state}
+    for review in reviews:
         author = review.get("author") or {}
         login = author.get("login")
         if not login:
             continue
-        reviewers.append({
+        state = (review.get("state") or "").upper()
+        if state not in actionable_states:
+            continue
+        reviewer_state[login] = {
             "login": login,
             "avatarUrl": author.get("avatarUrl", ""),
-            "state": (review.get("state") or "").upper(),
-        })
-    return reviewers
+            "state": state,
+        }
+
+    return list(reviewer_state.values())
 
 
 def _dedupe_checks(contexts):

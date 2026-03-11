@@ -9,7 +9,8 @@ import { QueueReviewButton } from '../reviews/QueueReviewButton'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
 import { formatNumber, formatRelativeTime } from '../../utils/formatters'
-import type { MergeQueueItem, Reviewer } from '../../api/types'
+import { ReviewersBadge } from '../common/ReviewersBadge'
+import type { MergeQueueItem } from '../../api/types'
 
 interface QueueItemProps {
   item: MergeQueueItem
@@ -139,29 +140,7 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
               {item.isDraft && <Badge variant="warning">Draft</Badge>}
               {getReviewStatusBadge()}
               {item.currentReviewers?.length > 0 && (
-                <span
-                  className="mx-pr-card__reviewers"
-                  data-tooltip={item.currentReviewers
-                    .map((r: Reviewer) => {
-                      const icon = r.state === 'APPROVED' ? '✓' : r.state === 'CHANGES_REQUESTED' ? '✗' : r.state === 'COMMENTED' ? '💬' : '—'
-                      return `${icon} ${r.login} — ${r.state.replace('_', ' ').toLowerCase()}`
-                    })
-                    .join('\n')}
-                >
-                  {item.currentReviewers.map((r: Reviewer) => (
-                    <span
-                      key={r.login}
-                      className={`mx-pr-card__reviewer mx-pr-card__reviewer--${r.state.toLowerCase().replace('_', '-')}`}
-                    >
-                      {r.avatarUrl ? (
-                        <img src={r.avatarUrl} alt={r.login} className="mx-pr-card__reviewer-avatar" />
-                      ) : null}
-                      <span className="mx-pr-card__reviewer-icon">
-                        {r.state === 'APPROVED' ? '✓' : r.state === 'CHANGES_REQUESTED' ? '✗' : r.state === 'COMMENTED' ? '💬' : '—'}
-                      </span>
-                    </span>
-                  ))}
-                </span>
+                <ReviewersBadge reviewers={item.currentReviewers} />
               )}
               {getCIStatusBadge()}
             </div>
@@ -182,21 +161,21 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
           <div className="mx-queue-item__badges">
             {item.isFollowup && <Badge variant="info">Follow-up</Badge>}
             {item.hasNewCommits && <Badge variant="warning">New Commits</Badge>}
-            {item.inlineCommentsPosted && (
+            {!!item.inlineCommentsPosted && (item.criticalFoundCount ?? 0) > 0 && (
               <span data-tooltip={buildInlineTooltip('Critical', item.criticalIssueTitles, item.criticalPostedCount, item.criticalFoundCount)}>
                 <Badge variant={item.criticalPostedCount !== null && item.criticalPostedCount < (item.criticalFoundCount ?? 0) ? 'warning' : 'info'}>
                   Critical {item.criticalPostedCount ?? '?'}/{item.criticalFoundCount ?? '?'}
                 </Badge>
               </span>
             )}
-            {item.majorConcernsPosted && (
+            {!!item.majorConcernsPosted && (item.majorFoundCount ?? 0) > 0 && (
               <span data-tooltip={buildInlineTooltip('Major', item.majorIssueTitles, item.majorPostedCount, item.majorFoundCount)}>
                 <Badge variant={item.majorPostedCount !== null && item.majorPostedCount < (item.majorFoundCount ?? 0) ? 'warning' : 'info'}>
                   Major {item.majorPostedCount ?? '?'}/{item.majorFoundCount ?? '?'}
                 </Badge>
               </span>
             )}
-            {item.minorIssuesPosted && (
+            {!!item.minorIssuesPosted && (item.minorFoundCount ?? 0) > 0 && (
               <span data-tooltip={buildInlineTooltip('Minor', item.minorIssueTitles, item.minorPostedCount, item.minorFoundCount)}>
                 <Badge variant={item.minorPostedCount !== null && item.minorPostedCount < (item.minorFoundCount ?? 0) ? 'warning' : 'info'}>
                   Minor {item.minorPostedCount ?? '?'}/{item.minorFoundCount ?? '?'}

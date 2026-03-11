@@ -13,10 +13,17 @@ from backend.services.pr_service import get_review_status, get_ci_status, get_cu
 
 pr_bp = Blueprint("pr", __name__)
 
+# Map computed reviewStatus back to uppercase reviewDecision for frontend badges
+_STATUS_TO_DECISION = {
+    "changes_requested": "CHANGES_REQUESTED",
+    "approved": "APPROVED",
+    "review_required": "REVIEW_REQUIRED",
+}
+
 PR_JSON_FIELDS = (
     "number,title,author,state,isDraft,createdAt,updatedAt,closedAt,"
     "mergedAt,url,body,headRefName,baseRefName,labels,assignees,"
-    "reviewRequests,reviewDecision,latestReviews,"
+    "reviewRequests,reviewDecision,reviews,"
     "mergeable,additions,deletions,changedFiles,"
     "milestone,statusCheckRollup"
 )
@@ -40,9 +47,11 @@ def _get_pr_by_number(owner, repo, pr_number):
         if not pr:
             return jsonify({"prs": []})
 
-        pr["reviewStatus"] = get_review_status(pr.get("reviewDecision"))
+        reviews = pr.get("reviews")
+        pr["reviewStatus"] = get_review_status(pr.get("reviewDecision"), reviews)
+        pr["reviewDecision"] = _STATUS_TO_DECISION.get(pr["reviewStatus"], pr.get("reviewDecision"))
         pr["ciStatus"] = get_ci_status(pr.get("statusCheckRollup"))
-        pr["currentReviewers"] = get_current_reviewers(pr.get("latestReviews"))
+        pr["currentReviewers"] = get_current_reviewers(reviews)
         return jsonify({"prs": [pr]})
     except RuntimeError:
         return jsonify({"prs": []})
@@ -72,10 +81,28 @@ def get_prs(owner, repo):
             prs = [pr for pr in prs if not pr.get("isDraft", False)]
 
         # Post-process: add review status and CI status summaries
+        # Compute reviewStatus from full reviews history, then sync reviewDecision
+        # so badges and filters use the same source of truth.
         for pr in prs:
-            pr["reviewStatus"] = get_review_status(pr.get("reviewDecision"))
+            reviews = pr.get("reviews")
+            pr["reviewStatus"] = get_review_status(pr.get("reviewDecision"), reviews)
+            pr["reviewDecision"] = _STATUS_TO_DECISION.get(pr["reviewStatus"], pr.get("reviewDecision"))
             pr["ciStatus"] = get_ci_status(pr.get("statusCheckRollup"))
-            pr["currentReviewers"] = get_current_reviewers(pr.get("latestReviews"))
+            pr["currentReviewers"] = get_current_reviewers(reviews)
+
+        # Post-filter by review status using our computed reviewStatus
+        # GitHub's review: qualifier can be inconsistent when re-reviews are requested,
+        # so we verify against our reviews-based computation for consistency.
+        if params.review:
+            review_values = {r.strip() for r in params.review.split(",") if r.strip()}
+            review_status_map = {
+                "none": "pending",
+                "required": "review_required",
+                "approved": "approved",
+                "changes_requested": "changes_requested",
+            }
+            allowed = {review_status_map.get(v, v) for v in review_values}
+            prs = [pr for pr in prs if pr.get("reviewStatus") in allowed]
 
         # Post-filter by CI status (gh search doesn't support status: qualifier for CI checks)
         if params.status:

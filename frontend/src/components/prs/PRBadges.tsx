@@ -1,19 +1,6 @@
-import { PullRequest, DivergenceInfo, Reviewer } from '../../api/types'
+import { PullRequest, DivergenceInfo } from '../../api/types'
 import { Badge } from '../common/Badge'
-
-const REVIEW_STATE_ICON: Record<string, string> = {
-  APPROVED: '✓',
-  CHANGES_REQUESTED: '✗',
-  COMMENTED: '💬',
-  DISMISSED: '—',
-}
-
-function buildReviewerTooltip(reviewers: Reviewer[]): string {
-  if (!reviewers.length) return ''
-  return reviewers
-    .map((r) => `${REVIEW_STATE_ICON[r.state] || '?'} ${r.login} — ${r.state.replace('_', ' ').toLowerCase()}`)
-    .join('\n')
-}
+import { ReviewersBadge } from '../common/ReviewersBadge'
 
 interface PRBadgesProps {
   pr: PullRequest
@@ -48,35 +35,6 @@ export function PRBadges({ pr, divergence }: PRBadgesProps) {
       default:
         return null
     }
-  }
-
-  const getReviewerBadges = () => {
-    if (!reviewers.length) return null
-    return (
-      <span
-        key="reviewers"
-        className="mx-pr-card__reviewers"
-        data-tooltip={buildReviewerTooltip(reviewers)}
-      >
-        {reviewers.map((r) => (
-          <span
-            key={r.login}
-            className={`mx-pr-card__reviewer mx-pr-card__reviewer--${r.state.toLowerCase().replace('_', '-')}`}
-          >
-            {r.avatarUrl ? (
-              <img
-                src={r.avatarUrl}
-                alt={r.login}
-                className="mx-pr-card__reviewer-avatar"
-              />
-            ) : null}
-            <span className="mx-pr-card__reviewer-icon">
-              {REVIEW_STATE_ICON[r.state] || '?'}
-            </span>
-          </span>
-        ))}
-      </span>
-    )
   }
 
   const getCIStatusBadge = () => {
@@ -156,7 +114,7 @@ export function PRBadges({ pr, divergence }: PRBadgesProps) {
   const badges = [
     getStateBadge(),
     getReviewStatusBadge(),
-    getReviewerBadges(),
+    reviewers.length > 0 ? <ReviewersBadge key="reviewers" reviewers={reviewers} /> : null,
     getCIStatusBadge(),
     getDivergenceBadge(),
   ].filter(Boolean)

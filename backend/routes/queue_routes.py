@@ -8,7 +8,7 @@ from flask import Blueprint, jsonify, request
 from backend.extensions import logger
 from backend.database import get_queue_db, get_reviews_db
 from backend.services.github_service import fetch_pr_state_and_sha, fetch_pr_queue_data
-from backend.services.pr_service import get_ci_status, get_current_reviewers
+from backend.services.pr_service import get_ci_status, get_current_reviewers, get_review_status
 from backend.routes import error_response
 
 queue_bp = Blueprint("queue", __name__)
@@ -57,10 +57,20 @@ def get_merge_queue():
                 queue_data = fetch_pr_queue_data(owner, repo, item["pr_number"])
                 pr_state = queue_data["state"]
                 current_sha = queue_data["headRefOid"]
-                review_decision = queue_data["reviewDecision"]
+                queue_reviews = queue_data.get("reviews")
+                # Compute effective review status from full reviews history,
+                # then map back to uppercase for frontend badge display
+                effective_status = get_review_status(queue_data["reviewDecision"], queue_reviews)
+                status_to_decision = {
+                    "changes_requested": "CHANGES_REQUESTED",
+                    "approved": "APPROVED",
+                    "review_required": "REVIEW_REQUIRED",
+                    "pending": None,
+                }
+                review_decision = status_to_decision.get(effective_status, queue_data["reviewDecision"])
                 ci_status = get_ci_status(queue_data["statusCheckRollup"])
                 is_draft = queue_data.get("isDraft", False)
-                current_reviewers = get_current_reviewers(queue_data.get("latestReviews"))
+                current_reviewers = get_current_reviewers(queue_reviews)
 
                 latest_review = reviews_db.get_latest_review_for_pr(item["repo"], item["pr_number"])
                 if latest_review:

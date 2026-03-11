@@ -115,69 +115,60 @@
 }
 
 /* ============================================================================
-   Reviewers (shared by PRCard badges and QueueItem title row)
+   Reviewers Popup (shared by PRCard badges and QueueItem)
    ============================================================================ */
 
-.mx-pr-card__reviewers {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  cursor: default;
-}
-
-.mx-pr-card__reviewer {
-  display: inline-flex;
-  align-items: center;
-  position: relative;
-  border-radius: 50%;
-  border: 2px solid transparent;
-}
-
-.mx-pr-card__reviewer--approved {
-  border-color: var(--mx-color-success);
-}
-
-.mx-pr-card__reviewer--changes-requested {
-  border-color: var(--mx-color-error);
-}
-
-.mx-pr-card__reviewer--commented {
-  border-color: var(--mx-color-text-tertiary);
-}
-
-.mx-pr-card__reviewer--dismissed {
-  border-color: var(--mx-color-text-tertiary);
-  opacity: 0.6;
-}
-
-.mx-pr-card__reviewer-avatar {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  display: block;
-}
-
-.mx-pr-card__reviewer-icon {
-  position: absolute;
-  bottom: -3px;
-  right: -3px;
-  font-size: 10px;
-  line-height: 1;
+.mx-reviewers-popup {
+  position: fixed;
+  transform: translateX(-50%);
+  z-index: 9999;
   background: var(--mx-color-bg-elevated);
-  border-radius: 50%;
-  width: 14px;
-  height: 14px;
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  box-shadow: var(--mx-shadow-lg);
+  padding: var(--mx-space-2) 0;
+  min-width: 200px;
+  max-width: 300px;
+  animation: fadeIn 0.1s ease-out;
+}
+
+.mx-reviewers-popup__item {
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: var(--mx-space-3);
+  padding: var(--mx-space-2) var(--mx-space-3);
 }
 
-.mx-pr-card__reviewer--approved .mx-pr-card__reviewer-icon {
-  color: var(--mx-color-success);
+.mx-reviewers-popup__item:hover {
+  background: var(--mx-color-surface-hover);
 }
 
-.mx-pr-card__reviewer--changes-requested .mx-pr-card__reviewer-icon {
-  color: var(--mx-color-error);
+.mx-reviewers-popup__avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.mx-reviewers-popup__info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.mx-reviewers-popup__name {
+  font-size: var(--mx-font-size-sm);
+  font-weight: var(--mx-font-weight-semibold);
+  color: var(--mx-color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mx-reviewers-popup__state {
+  font-size: var(--mx-font-size-xs);
+  font-weight: var(--mx-font-weight-medium);
 }
 
 /* ============================================================================
