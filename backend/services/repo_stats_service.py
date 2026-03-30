@@ -211,10 +211,9 @@ def fetch_repo_stats(owner, repo):
 
     def _fetch_pr_count(qualifier):
         try:
+            q = f"repo:{full_repo}+is:pr+{qualifier.replace(' ', '+')}"
             output = run_gh_command([
-                "api", "search/issues",
-                "-f", f"q=repo:{full_repo} is:pr {qualifier}",
-                "-f", "per_page=1",
+                "api", f"search/issues?q={q}&per_page=1",
                 "--jq", ".total_count",
             ])
             return int(output.strip()) if output.strip().isdigit() else 0
@@ -228,9 +227,7 @@ def fetch_repo_stats(owner, repo):
         while True:
             try:
                 output = run_gh_command([
-                    "api", f"repos/{full_repo}/branches",
-                    "-f", "per_page=100",
-                    "-f", f"page={page}",
+                    "api", f"repos/{full_repo}/branches?per_page=100&page={page}",
                 ])
                 branches = parse_json_output(output)
                 if not isinstance(branches, list):
@@ -244,11 +241,13 @@ def fetch_repo_stats(owner, repo):
                 break
         return total
 
-    def _fetch_total_commits():
+    def _fetch_contributors_stats():
+        """Fetch stats/contributors and return (total_commits, contributor_count)."""
         contributors = fetch_github_stats_api(owner, repo, "stats/contributors")
         if not isinstance(contributors, list):
-            return 0
-        return sum(c.get("total", 0) for c in contributors if isinstance(c, dict))
+            return 0, 0
+        total = sum(c.get("total", 0) for c in contributors if isinstance(c, dict))
+        return total, len(contributors)
 
     with ThreadPoolExecutor(max_workers=7) as executor:
         f_overview = executor.submit(_fetch_overview)
@@ -258,7 +257,7 @@ def fetch_repo_stats(owner, repo):
         f_pr_closed = executor.submit(_fetch_pr_count, "is:closed is:unmerged")
         f_pr_merged = executor.submit(_fetch_pr_count, "is:merged")
         f_branches = executor.submit(_fetch_branch_count)
-        f_commits = executor.submit(_fetch_total_commits)
+        f_contrib_stats = executor.submit(_fetch_contributors_stats)
 
         overview_raw = f_overview.result()
         languages_raw = f_languages.result()
@@ -267,11 +266,7 @@ def fetch_repo_stats(owner, repo):
         pr_closed = f_pr_closed.result()
         pr_merged = f_pr_merged.result()
         branch_count = f_branches.result()
-        total_commits = f_commits.result()
-
-    # --- contributor count (reuse stats/contributors data) ---
-    contributors_data = fetch_github_stats_api(owner, repo, "stats/contributors")
-    total_contributors = len(contributors_data) if isinstance(contributors_data, list) else 0
+        total_commits, total_contributors = f_contrib_stats.result()
 
     # --- overview ---
     license_info = overview_raw.get("license") or {}
