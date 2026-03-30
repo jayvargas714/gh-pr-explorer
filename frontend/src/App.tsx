@@ -8,6 +8,7 @@ import { FilterPanel } from './components/filters/FilterPanel'
 import { PRList } from './components/prs/PRList'
 import { AnalyticsView } from './components/analytics/AnalyticsView'
 import { WorkflowsView } from './components/workflows/WorkflowsView'
+import { RepoStatsView } from './components/repo-stats/RepoStatsView'
 import { QueuePanel } from './components/queue/QueuePanel'
 import { ReviewErrorModal } from './components/reviews/ReviewErrorModal'
 import { ReviewViewer } from './components/reviews/ReviewViewer'
@@ -42,6 +43,8 @@ function App() {
         return <AnalyticsView />
       case 'workflows':
         return <WorkflowsView />
+      case 'repo-stats':
+        return <RepoStatsView />
       default:
         return null
     }
