@@ -214,6 +214,26 @@ class Database:
                 )
             """)
 
+            # Create repo_stats_cache table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS repo_stats_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo TEXT NOT NULL UNIQUE,
+                    data TEXT NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Create repo_loc_cache table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS repo_loc_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo TEXT NOT NULL UNIQUE,
+                    data TEXT NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # Migration: Add section-posted columns to reviews for existing databases
             cursor.execute("PRAGMA table_info(reviews)")
             reviews_columns = {row[1] for row in cursor.fetchall()}

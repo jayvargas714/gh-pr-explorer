@@ -13,6 +13,8 @@ from backend.database.cache_stores import (
     WorkflowCacheDB,
     ContributorTimeSeriesCacheDB,
     CodeActivityCacheDB,
+    RepoStatsCacheDB,
+    RepoLOCCacheDB,
 )
 
 # Thread-safe singleton instances
@@ -27,6 +29,8 @@ _lifecycle_cache_db: Optional[LifecycleCacheDB] = None
 _workflow_cache_db: Optional[WorkflowCacheDB] = None
 _contributor_ts_cache_db: Optional[ContributorTimeSeriesCacheDB] = None
 _code_activity_cache_db: Optional[CodeActivityCacheDB] = None
+_repo_stats_cache_db: Optional[RepoStatsCacheDB] = None
+_repo_loc_cache_db: Optional[RepoLOCCacheDB] = None
 
 
 def get_database() -> Database:
@@ -118,11 +122,33 @@ def get_code_activity_cache_db() -> CodeActivityCacheDB:
     return _code_activity_cache_db
 
 
+def get_repo_stats_cache_db() -> RepoStatsCacheDB:
+    global _repo_stats_cache_db
+    if _repo_stats_cache_db is None:
+        db = get_database()
+        with _db_lock:
+            if _repo_stats_cache_db is None:
+                _repo_stats_cache_db = RepoStatsCacheDB(db)
+    return _repo_stats_cache_db
+
+
+def get_repo_loc_cache_db() -> RepoLOCCacheDB:
+    global _repo_loc_cache_db
+    if _repo_loc_cache_db is None:
+        db = get_database()
+        with _db_lock:
+            if _repo_loc_cache_db is None:
+                _repo_loc_cache_db = RepoLOCCacheDB(db)
+    return _repo_loc_cache_db
+
+
 __all__ = [
     "Database", "ReviewsDB", "MergeQueueDB", "SettingsDB",
     "DeveloperStatsDB", "LifecycleCacheDB", "WorkflowCacheDB",
     "ContributorTimeSeriesCacheDB", "CodeActivityCacheDB",
+    "RepoStatsCacheDB", "RepoLOCCacheDB",
     "get_database", "get_reviews_db", "get_queue_db", "get_settings_db",
     "get_dev_stats_db", "get_lifecycle_cache_db", "get_workflow_cache_db",
     "get_contributor_ts_cache_db", "get_code_activity_cache_db",
+    "get_repo_stats_cache_db", "get_repo_loc_cache_db",
 ]

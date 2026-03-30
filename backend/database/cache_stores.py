@@ -230,3 +230,105 @@ class CodeActivityCacheDB:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM code_activity_cache")
+
+
+class RepoStatsCacheDB:
+    """Cache for repo stats data in SQLite."""
+
+    def __init__(self, db):
+        self.db = db
+
+    def get_cached(self, repo: str) -> Optional[Dict[str, Any]]:
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT data, updated_at FROM repo_stats_cache WHERE repo = ?",
+                (repo,)
+            )
+            row = cursor.fetchone()
+            if row:
+                try:
+                    return {
+                        "data": json.loads(row["data"]),
+                        "updated_at": row["updated_at"]
+                    }
+                except json.JSONDecodeError:
+                    logger.warning(f"Corrupt repo stats cache for {repo}, treating as miss")
+                    return None
+            return None
+
+    def save_cache(self, repo: str, data: Any) -> None:
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO repo_stats_cache (repo, data, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(repo) DO UPDATE SET
+                   data = excluded.data, updated_at = CURRENT_TIMESTAMP""",
+                (repo, json.dumps(data))
+            )
+
+    def is_stale(self, repo: str, ttl_hours: int = 4) -> bool:
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT updated_at FROM repo_stats_cache WHERE repo = ?",
+                (repo,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return True
+            updated = datetime.strptime(row["updated_at"], "%Y-%m-%d %H:%M:%S")
+            age_hours = (datetime.now() - updated).total_seconds() / 3600
+            return age_hours > ttl_hours
+
+
+class RepoLOCCacheDB:
+    """Cache for LOC data in SQLite."""
+
+    def __init__(self, db):
+        self.db = db
+
+    def get_cached(self, repo: str) -> Optional[Dict[str, Any]]:
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT data, updated_at FROM repo_loc_cache WHERE repo = ?",
+                (repo,)
+            )
+            row = cursor.fetchone()
+            if row:
+                try:
+                    return {
+                        "data": json.loads(row["data"]),
+                        "updated_at": row["updated_at"]
+                    }
+                except json.JSONDecodeError:
+                    logger.warning(f"Corrupt LOC cache for {repo}, treating as miss")
+                    return None
+            return None
+
+    def save_cache(self, repo: str, data: Any) -> None:
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO repo_loc_cache (repo, data, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(repo) DO UPDATE SET
+                   data = excluded.data, updated_at = CURRENT_TIMESTAMP""",
+                (repo, json.dumps(data))
+            )
+
+    def is_stale(self, repo: str, ttl_hours: int = 24) -> bool:
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT updated_at FROM repo_loc_cache WHERE repo = ?",
+                (repo,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return True
+            updated = datetime.strptime(row["updated_at"], "%Y-%m-%d %H:%M:%S")
+            age_hours = (datetime.now() - updated).total_seconds() / 3600
+            return age_hours > ttl_hours
