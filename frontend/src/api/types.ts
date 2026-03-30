@@ -460,6 +460,86 @@ export interface ReviewStats {
 }
 
 // ============================================================================
+// Repo Stats Types
+// ============================================================================
+
+export interface RepoOverview {
+  name: string
+  full_name: string
+  description: string
+  default_branch: string
+  license: string | null
+  created_at: string
+  age_days: number
+  size_kb: number
+  stars: number
+  forks: number
+  watchers: number
+  open_issues: number
+}
+
+export interface LanguageEntry {
+  name: string
+  bytes: number
+  percentage: number
+}
+
+export interface FileExtensionEntry {
+  extension: string
+  count: number
+  percentage: number
+}
+
+export interface RepoCodeStats {
+  total_commits: number
+  total_files: number
+  total_contributors: number
+  total_branches: number
+}
+
+export interface RepoPRStats {
+  open: number
+  closed: number
+  merged: number
+  total_all_time: number
+}
+
+export interface RepoStats {
+  overview: RepoOverview
+  code: RepoCodeStats
+  prs: RepoPRStats
+  languages: LanguageEntry[]
+  files_by_extension: FileExtensionEntry[]
+}
+
+export interface RepoStatsResponse extends RepoStats, CacheMeta {}
+
+export interface LOCEntry {
+  language: string
+  files: number
+  blank: number
+  comment: number
+  code: number
+}
+
+export interface LOCTotals {
+  files: number
+  blank: number
+  comment: number
+  code: number
+}
+
+export interface LOCResult {
+  loc: LOCEntry[]
+  totals: LOCTotals
+}
+
+export interface LOCResponse extends LOCResult {
+  last_updated: string | null
+  cached: boolean
+}
+
+// ============================================================================
 // Settings Types
 // ============================================================================
 
