@@ -85,6 +85,7 @@ export interface Reviewer {
   login: string
   avatarUrl: string
   state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED' | 'PENDING'
+  body?: string
 }
 
 export interface ReviewRequest {
