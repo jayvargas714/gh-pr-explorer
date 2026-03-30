@@ -164,7 +164,7 @@ The backend is organized as a Python package with clear separation of concerns:
 
 **Routes** (`backend/routes/`):
 
-11 Flask Blueprints organized by domain. Each route handler is thin (parse request → call service → convert → jsonify).
+12 Flask Blueprints organized by domain. Each route handler is thin (parse request → call service → convert → jsonify).
 
 | Blueprint | Routes |
 |-----------|--------|
@@ -179,6 +179,7 @@ The backend is organized as a Python package with clear separation of concerns:
 | `history_bp` | `/api/review-history` list, detail, PR reviews, stats, check |
 | `settings_bp` | `/api/settings` CRUD |
 | `cache_bp` | `/api/clear-cache` |
+| `repo_stats_bp` | `/api/repos/.../repo-stats`, `/api/repos/.../repo-stats/loc` |
 
 ### Database Module
 
@@ -198,6 +199,8 @@ The database module provides SQLite-based persistence for reviews and merge queu
 | `WorkflowCacheDB` | Caches workflow runs data with configurable TTL (default 1 hour) for stale-while-revalidate serving |
 | `ContributorTimeSeriesCacheDB` | Caches per-contributor weekly time series data with 24-hour TTL for stale-while-revalidate serving |
 | `CodeActivityCacheDB` | Caches full 52-week code activity data with 24-hour TTL for stale-while-revalidate serving |
+| `RepoStatsCacheDB` | Caches aggregated repository statistics with 4-hour TTL |
+| `RepoLOCCacheDB` | Caches lines-of-code analysis results with 24-hour TTL |
 
 #### Database Schema
 
@@ -309,6 +312,22 @@ CREATE TABLE contributor_timeseries_cache (
 
 -- Code activity cache table: Caches full 52-week code activity data
 CREATE TABLE code_activity_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL UNIQUE,
+    data TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Repo stats cache table: Caches aggregated repository statistics
+CREATE TABLE IF NOT EXISTS repo_stats_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL UNIQUE,
+    data TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Repo LOC cache table: Caches lines-of-code analysis results
+CREATE TABLE IF NOT EXISTS repo_loc_cache (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     repo TEXT NOT NULL UNIQUE,
     data TEXT NOT NULL,
@@ -432,13 +451,14 @@ The frontend uses React 18 with TypeScript, built via Vite. State management use
 
 #### Main Tab Architecture
 
-The application uses a 3-tab layout as the primary navigation:
+The application uses a 4-tab layout as the primary navigation:
 
 | Tab | View Key | Description |
 |-----|----------|-------------|
 | Pull Requests | `prs` | PR list with filters, pagination, and action buttons |
 | Analytics | `analytics` | 5 sub-tabs for developer and repository analytics |
 | CI/Workflows | `workflows` | Workflow run history with filters and aggregate stats |
+| Repo Stats | `repo-stats` | Repository-level statistics, language breakdown, LOC analysis |
 
 #### Analytics Sub-tabs
 
@@ -859,6 +879,35 @@ User settings are automatically saved to the SQLite database and restored on pag
 3. Account and repository selections are restored first
 4. Filter settings are restored after selections complete (to avoid reset conflicts)
 5. PRs are re-fetched with the restored filter configuration
+
+### Repo Stats Tab
+
+The Repo Stats tab provides comprehensive repository-level statistics aggregated from multiple GitHub API endpoints.
+
+#### Data Sources
+
+Data is fetched in parallel via ThreadPoolExecutor(max_workers=7) from:
+- `repos/{owner}/{repo}` — Repository metadata (size, stars, forks, watchers, created date, license)
+- `repos/{owner}/{repo}/languages` — Language breakdown by bytes
+- `repos/{owner}/{repo}/git/trees/HEAD?recursive=1` — Complete file listing
+- `search/issues?q=repo:...+is:pr+is:open/closed/merged` — PR counts by state (3 queries)
+- `repos/{owner}/{repo}/branches` — Branch count (paginated)
+- `stats/contributors` — Total commits (sum of contributor totals)
+
+#### UI Sections
+
+| Section | Description |
+|---------|-------------|
+| Repository Overview | Name, description, default branch, license, age, size, stars, forks, watchers, open issues |
+| Summary Stats Cards | Two rows: Code stats (commits, files, contributors, branches) and PR stats (open, opened, closed, merged) |
+| Language Breakdown | Horizontal stacked color bar with legend showing language name, bytes, and percentage |
+| Files by Extension | Sortable table with extension, count, percentage. Top 20 with "Show all" toggle |
+| Lines of Code | On-demand shallow clone + line counting. Shows per-language breakdown of blank, comment, and code lines |
+
+#### Caching
+
+- Main stats: SQLite cache with 4-hour TTL, stale-while-revalidate pattern
+- LOC results: SQLite cache with 24-hour TTL, synchronous on first request
 
 ### Review History
 
@@ -2155,6 +2204,30 @@ Checks if a PR has been reviewed.
 
 ---
 
+### Repo Stats
+
+**GET** `/api/repos/<owner>/<repo>/repo-stats`
+
+Returns aggregated repository statistics. Cached with 4-hour TTL using stale-while-revalidate.
+
+**Query Parameters**:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `refresh` | string | Set to "true" for synchronous refresh |
+
+**Response**: Contains `overview`, `code`, `prs`, `languages`, `files_by_extension` objects plus cache metadata (`last_updated`, `cached`, `stale`, `refreshing`).
+
+---
+
+**POST** `/api/repos/<owner>/<repo>/repo-stats/loc`
+
+Triggers a shallow clone and counts non-whitespace lines per language. Cached with 24-hour TTL.
+
+**Response**: Contains `loc` (array of per-language stats) and `totals` objects plus `last_updated` and `cached` fields. Returns 202 if calculation is already in progress.
+
+---
+
 ### Cache Management
 
 **POST** `/api/clear-cache`
@@ -2676,7 +2749,8 @@ gh-pr-explorer/
 │   │   ├── activity_service.py     # Code activity data from 3 stats APIs
 │   │   ├── contributor_service.py  # Contributor time series transform
 │   │   ├── review_schema.py        # Review JSON schema, validation, JSON<->markdown conversion
-│   │   └── review_schema_spec.json # Formal JSON Schema file for external tools/agents
+│   │   ├── review_schema_spec.json # Formal JSON Schema file for external tools/agents
+│   │   └── repo_stats_service.py       # Parallel repo stats fetching + LOC analysis
 │   │
 │   ├── filters/                    # Request parameter processing
 │   │   └── pr_filter_builder.py    # PRFilterParams dataclass + PRFilterBuilder -> gh CLI args
@@ -2690,7 +2764,7 @@ gh-pr-explorer/
 │   │   ├── lifecycle_visualizer.py # Merge time distribution, stale PR detection, pr_table
 │   │   └── responsiveness_visualizer.py  # Reviewer leaderboard, bottleneck detection
 │   │
-│   └── routes/                     # Flask Blueprints (11 blueprints)
+│   └── routes/                     # Flask Blueprints (12 blueprints)
 │       ├── __init__.py             # register_blueprints(app)
 │       ├── static_routes.py        # / and /assets/<path>
 │       ├── auth_routes.py          # /api/user, /api/orgs
@@ -2702,12 +2776,14 @@ gh-pr-explorer/
 │       ├── review_routes.py        # /api/reviews CRUD + status + inline-comments + check-new-commits
 │       ├── history_routes.py       # /api/review-history list, detail, PR reviews, stats, check
 │       ├── settings_routes.py      # /api/settings CRUD
-│       └── cache_routes.py         # /api/clear-cache
+│       ├── cache_routes.py         # /api/clear-cache
+│       └── repo_stats_routes.py        # /api/repos/.../repo-stats, repo-stats/loc
 │
 ├── frontend/                       # React + TypeScript frontend
 │   ├── src/
 │   │   ├── api/                    # Type-safe API modules
 │   │   ├── components/             # React components by feature
+│   │   │   ├── /repo-stats       # RepoStatsView
 │   │   ├── stores/                 # Zustand state management
 │   │   ├── styles/                 # CSS styles
 │   │   ├── types/                  # TypeScript types
