@@ -27,3 +27,6 @@ frontend/.vite/
 
 # Logs
 gh-pr-explorer.log
+
+# Superpowers
+docs/superpowers/
