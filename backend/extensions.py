@@ -39,3 +39,9 @@ stats_refresh_lock = threading.Lock()
 
 lifecycle_refresh_in_progress = set()
 lifecycle_refresh_lock = threading.Lock()
+
+repo_stats_refresh_in_progress = set()
+repo_stats_refresh_lock = threading.Lock()
+
+loc_in_progress = set()
+loc_lock = threading.Lock()
