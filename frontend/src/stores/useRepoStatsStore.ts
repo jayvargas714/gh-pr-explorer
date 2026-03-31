@@ -9,6 +9,7 @@ interface RepoStatsState {
   locResult: LOCResult | null
   locLoading: boolean
   locError: string | null
+  locLastUpdated: string | null
 
   cacheMeta: CacheMeta
 
@@ -19,6 +20,7 @@ interface RepoStatsState {
   setLOCResult: (result: LOCResult | null) => void
   setLOCLoading: (loading: boolean) => void
   setLOCError: (error: string | null) => void
+  setLOCLastUpdated: (ts: string | null) => void
 
   setCacheMeta: (meta: Partial<CacheMeta>) => void
 
@@ -40,6 +42,7 @@ export const useRepoStatsStore = create<RepoStatsState>((set) => ({
   locResult: null,
   locLoading: false,
   locError: null,
+  locLastUpdated: null,
 
   cacheMeta: { ...initialCacheMeta },
 
@@ -50,6 +53,7 @@ export const useRepoStatsStore = create<RepoStatsState>((set) => ({
   setLOCResult: (result) => set({ locResult: result }),
   setLOCLoading: (loading) => set({ locLoading: loading }),
   setLOCError: (error) => set({ locError: error }),
+  setLOCLastUpdated: (ts) => set({ locLastUpdated: ts }),
 
   setCacheMeta: (meta) => set((state) => ({ cacheMeta: { ...state.cacheMeta, ...meta } })),
 
@@ -60,6 +64,7 @@ export const useRepoStatsStore = create<RepoStatsState>((set) => ({
     locResult: null,
     locLoading: false,
     locError: null,
+    locLastUpdated: null,
     cacheMeta: { ...initialCacheMeta },
   }),
 }))

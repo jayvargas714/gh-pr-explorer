@@ -122,16 +122,6 @@ def get_repo_loc(owner, repo):
     repo_loc_cache_db = get_repo_loc_cache_db()
 
     try:
-        # Return cached data if not stale
-        cached = repo_loc_cache_db.get_cached(repo_key)
-        is_stale = repo_loc_cache_db.is_stale(repo_key)
-        if cached and not is_stale:
-            return jsonify({
-                **cached["data"],
-                "last_updated": _normalize_timestamp(cached["updated_at"]),
-                "cached": True,
-            })
-
         # Check if LOC calculation already in progress
         with loc_lock:
             if repo_key in loc_in_progress:

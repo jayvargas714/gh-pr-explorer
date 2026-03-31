@@ -5,6 +5,7 @@ import { fetchRepoStats, fetchLOC } from '../../api/repoStats'
 import { CacheTimestamp } from '../common/CacheTimestamp'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
+import { InfoTooltip } from '../common/InfoTooltip'
 import { formatNumber } from '../../utils/formatters'
 
 // ============================================================================
@@ -90,6 +91,7 @@ export function RepoStatsView() {
     loading,
     error,
     locResult,
+    locLastUpdated,
     locLoading,
     locError,
     cacheMeta,
@@ -99,6 +101,7 @@ export function RepoStatsView() {
     setLOCResult,
     setLOCLoading,
     setLOCError,
+    setLOCLastUpdated,
     setCacheMeta,
     reset,
   } = useRepoStatsStore()
@@ -141,6 +144,7 @@ export function RepoStatsView() {
       setLOCError(null)
       const response = await fetchLOC(selectedRepo.owner.login, selectedRepo.name)
       setLOCResult(response)
+      setLOCLastUpdated(response.last_updated)
     } catch (err) {
       setLOCError(err instanceof Error ? err.message : 'Failed to calculate LOC')
     } finally {
@@ -333,17 +337,17 @@ export function RepoStatsView() {
       {/* Files by Extension */}
       {files_by_extension.length > 0 && (
         <>
-          <h3 className="mx-repo-stats__section-title">Files by Extension</h3>
+          <h3 className="mx-repo-stats__section-title">Files by Extension<InfoTooltip text="File count grouped by extension from the repository's default branch. Click column headers to sort." /></h3>
           <table className="mx-ext-table">
             <thead>
               <tr>
-                <th onClick={() => toggleExtSort('extension')}>
+                <th onClick={() => toggleExtSort('extension')} title="File extension (e.g. .ts, .py)">
                   Extension{sortIndicator('extension')}
                 </th>
-                <th onClick={() => toggleExtSort('count')}>
+                <th onClick={() => toggleExtSort('count')} title="Number of files with this extension">
                   Count{sortIndicator('count')}
                 </th>
-                <th>%</th>
+                <th title="Percentage of total files">%</th>
               </tr>
             </thead>
             <tbody>
@@ -371,7 +375,7 @@ export function RepoStatsView() {
 
       {/* LOC Section */}
       <div className="mx-loc-section">
-        <h3 className="mx-repo-stats__section-title">Lines of Code</h3>
+        <h3 className="mx-repo-stats__section-title">Lines of Code<InfoTooltip text="Non-whitespace line counts per language via shallow clone. Detects common comment syntaxes (// # /* */ <!-- -->) for supported languages." /></h3>
 
         {!locResult && !locLoading && !locError && (
           <button className="mx-loc-trigger" onClick={handleCalculateLOC}>
@@ -396,14 +400,17 @@ export function RepoStatsView() {
 
         {locResult && !locLoading && (
           <>
+            {locLastUpdated && (
+              <CacheTimestamp lastUpdated={locLastUpdated} stale={false} refreshing={false} />
+            )}
             <table className="mx-loc-table">
               <thead>
                 <tr>
-                  <th>Language</th>
-                  <th>Files</th>
-                  <th>Blank</th>
-                  <th>Comment</th>
-                  <th>Code</th>
+                  <th title="Programming language detected from file extension">Language</th>
+                  <th title="Number of source files for this language">Files</th>
+                  <th title="Empty lines (whitespace only)">Blank</th>
+                  <th title="Lines identified as comments (// # /* */ <!-- --> etc.)">Comment</th>
+                  <th title="Non-blank, non-comment lines of code">Code</th>
                 </tr>
               </thead>
               <tbody>
