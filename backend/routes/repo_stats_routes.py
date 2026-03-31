@@ -113,6 +113,23 @@ def get_repo_stats(owner, repo):
         return error_response("Internal server error", 500, f"Failed to fetch repo stats for {repo_key}: {e}")
 
 
+# --- LOC Cache ---
+
+@repo_stats_bp.route("/api/repos/<owner>/<repo>/repo-stats/loc", methods=["GET"])
+def get_cached_loc(owner, repo):
+    """Return cached LOC data if available, otherwise 404."""
+    repo_key = f"{owner}/{repo}"
+    repo_loc_cache_db = get_repo_loc_cache_db()
+    cached = repo_loc_cache_db.get_cached(repo_key)
+    if not cached:
+        return jsonify({"message": "No cached LOC data"}), 404
+    return jsonify({
+        **cached["data"],
+        "last_updated": _normalize_timestamp(cached["updated_at"]),
+        "cached": True,
+    })
+
+
 # --- LOC Calculation ---
 
 @repo_stats_bp.route("/api/repos/<owner>/<repo>/repo-stats/loc", methods=["POST"])

@@ -301,10 +301,14 @@ def fetch_repo_stats(owner, repo):
         pct = round(byte_count / total_bytes * 100, 1) if total_bytes > 0 else 0.0
         languages.append({"name": lang, "bytes": byte_count, "percentage": pct})
 
-    # --- files by extension ---
+    # --- files by extension (filter out vendored/generated directories) ---
     ext_counter = Counter()
-    total_files = len(tree_paths)
-    for path in tree_paths:
+    filtered_paths = [
+        p for p in tree_paths
+        if not any(skip in p.split("/") for skip in SKIP_DIRS)
+    ]
+    total_files = len(filtered_paths)
+    for path in filtered_paths:
         _, ext = os.path.splitext(path)
         ext = ext.lower() if ext else "(none)"
         ext_counter[ext] += 1

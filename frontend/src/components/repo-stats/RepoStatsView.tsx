@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useRepoStatsStore } from '../../stores/useRepoStatsStore'
 import { useAccountStore } from '../../stores/useAccountStore'
-import { fetchRepoStats, fetchLOC } from '../../api/repoStats'
+import { fetchRepoStats, fetchLOC, fetchCachedLOC } from '../../api/repoStats'
 import { CacheTimestamp } from '../common/CacheTimestamp'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
@@ -114,6 +114,7 @@ export function RepoStatsView() {
     if (selectedRepo) {
       reset()
       loadStats()
+      loadCachedLOC()
     }
   }, [selectedRepo])
 
@@ -134,6 +135,17 @@ export function RepoStatsView() {
       setError(err instanceof Error ? err.message : 'Failed to load repo stats')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadCachedLOC = async () => {
+    if (!selectedRepo) return
+    try {
+      const response = await fetchCachedLOC(selectedRepo.owner.login, selectedRepo.name)
+      setLOCResult(response)
+      setLOCLastUpdated(response.last_updated)
+    } catch {
+      // 404 = no cached data, that's fine — user can click Calculate
     }
   }
 

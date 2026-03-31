@@ -10,6 +10,13 @@ export async function fetchRepoStats(
   return api.get<RepoStatsResponse>(`/repos/${owner}/${repo}/repo-stats${params}`)
 }
 
+export async function fetchCachedLOC(
+  owner: string,
+  repo: string
+): Promise<LOCResponse> {
+  return api.get<LOCResponse>(`/repos/${owner}/${repo}/repo-stats/loc`)
+}
+
 export async function fetchLOC(
   owner: string,
   repo: string
