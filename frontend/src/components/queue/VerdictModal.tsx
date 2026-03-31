@@ -62,6 +62,7 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
   const [success, setSuccess] = useState<string | null>(null)
   const [reviewDetail, setReviewDetail] = useState<ReviewDetail | null>(null)
   const [showReviewPanel, setShowReviewPanel] = useState(false)
+  const [showPreview, setShowPreview] = useState(false)
 
   // Drag state for the review panel
   const [panelPos, setPanelPos] = useState({ x: 40, y: 80 })
@@ -628,9 +629,46 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
                   </div>
                 )}
 
+                {showPreview && (
+                  <div className="mx-verdict-modal__preview">
+                    <div className="mx-verdict-modal__preview-header">
+                      <label className="mx-verdict-modal__label">Preview</label>
+                      <span className="mx-verdict-modal__preview-event-badge" data-event={event}>
+                        {EVENT_OPTIONS.find((o) => o.value === event)?.label}
+                      </span>
+                    </div>
+                    <div className="mx-verdict-modal__preview-body mx-markdown-body">
+                      {hasContent ? (
+                        <>
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            rehypePlugins={[rehypeHighlight]}
+                          >
+                            {composeBody() || '*No body text — inline comments only*'}
+                          </ReactMarkdown>
+                          {hasInlineContent && (
+                            <div className="mx-verdict-modal__preview-inline-note">
+                              + {buildInlineComments().length} inline comment(s) will be posted on specific lines
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <p className="mx-verdict-modal__preview-empty">Nothing to preview — add text or enable sections above.</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 <div className="mx-verdict-modal__actions">
                   <Button variant="ghost" onClick={onClose} disabled={submitting}>
                     Cancel
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setShowPreview(!showPreview)}
+                    disabled={submitting}
+                  >
+                    {showPreview ? 'Hide Preview' : 'Preview'}
                   </Button>
                   <Button
                     variant={getSubmitVariant()}

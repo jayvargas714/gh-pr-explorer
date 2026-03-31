@@ -111,15 +111,28 @@ function formatRecommendationsToMarkdown(recs: ReviewRecommendation[]): string {
  * Extract sections from structured JSON review data (preferred path).
  */
 export function sectionsFromJSON(reviewJson: ReviewJSON): ReviewSection[] {
-  const sections = reviewJson.sections
-    .filter(section => section.issues.length > 0)
-    .map(section => ({
-      key: section.type === 'critical' ? 'critical-issues'
-        : section.type === 'major' ? 'major-concerns'
-        : 'minor-issues',
-      heading: section.display_name,
-      content: formatSectionToMarkdown(section),
-    }))
+  const sections: ReviewSection[] = []
+
+  // Include summary as the first toggleable section
+  if (reviewJson.summary?.trim()) {
+    sections.push({
+      key: 'summary',
+      heading: 'Summary',
+      content: reviewJson.summary.trim(),
+    })
+  }
+
+  for (const section of reviewJson.sections) {
+    if (section.issues.length > 0) {
+      sections.push({
+        key: section.type === 'critical' ? 'critical-issues'
+          : section.type === 'major' ? 'major-concerns'
+          : 'minor-issues',
+        heading: section.display_name,
+        content: formatSectionToMarkdown(section),
+      })
+    }
+  }
 
   if (reviewJson.recommendations?.length) {
     sections.push({

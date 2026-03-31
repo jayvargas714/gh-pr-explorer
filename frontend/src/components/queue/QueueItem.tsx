@@ -8,6 +8,7 @@ import { VerdictModal } from './VerdictModal'
 import { QueueReviewButton } from '../reviews/QueueReviewButton'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
+import { ChangesRequestedModal } from '../common/ChangesRequestedModal'
 import { formatNumber, formatRelativeTime } from '../../utils/formatters'
 import { ReviewersBadge } from '../common/ReviewersBadge'
 import type { MergeQueueItem } from '../../api/types'
@@ -38,6 +39,7 @@ function buildInlineTooltip(
 export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
   const [showNotes, setShowNotes] = useState(false)
   const [showVerdict, setShowVerdict] = useState(false)
+  const [showChangesModal, setShowChangesModal] = useState(false)
   const [removing, setRemoving] = useState(false)
   const openReviewViewer = useReviewStore((state) => state.openReviewViewer)
 
@@ -87,7 +89,14 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
       case 'APPROVED':
         return <Badge variant="success">✓ Approved</Badge>
       case 'CHANGES_REQUESTED':
-        return <Badge variant="error">✗ Changes Requested</Badge>
+        return (
+          <span
+            className="mx-badge-clickable"
+            onClick={(e) => { e.stopPropagation(); setShowChangesModal(true) }}
+          >
+            <Badge variant="error">✗ Changes Requested</Badge>
+          </span>
+        )
       case 'REVIEW_REQUIRED':
         return <Badge variant="warning">👀 Review Required</Badge>
       default:
@@ -239,6 +248,13 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
           repo={item.repo}
           onClose={() => setShowVerdict(false)}
           onRefresh={onRefresh}
+        />
+      )}
+
+      {showChangesModal && (
+        <ChangesRequestedModal
+          reviewers={item.currentReviewers || []}
+          onClose={() => setShowChangesModal(false)}
         />
       )}
     </>

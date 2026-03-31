@@ -89,6 +89,7 @@ def get_current_reviewers(reviews):
             "login": login,
             "avatarUrl": author.get("avatarUrl", ""),
             "state": state,
+            "body": review.get("body", ""),
         }
 
     return list(reviewer_state.values())

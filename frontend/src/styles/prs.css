@@ -172,6 +172,177 @@
 }
 
 /* ============================================================================
+   Clickable Badge
+   ============================================================================ */
+
+.mx-badge-clickable {
+  cursor: pointer;
+}
+
+.mx-badge-clickable:hover .mx-badge {
+  filter: brightness(1.2);
+}
+
+/* ============================================================================
+   Draggable / Resizable Modal (reusable)
+   ============================================================================ */
+
+.mx-draggable-modal {
+  position: relative;
+  background: var(--mx-color-bg-elevated);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-lg);
+  box-shadow: var(--mx-shadow-xl);
+  width: 100%;
+  max-width: 640px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.mx-draggable-modal--positioned {
+  position: fixed;
+  max-width: none;
+  max-height: none;
+  z-index: var(--mx-z-modal);
+}
+
+.mx-draggable-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--mx-space-4) var(--mx-space-6);
+  border-bottom: 1px solid var(--mx-color-border);
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.mx-draggable-modal__header:active {
+  cursor: grabbing;
+}
+
+.mx-draggable-modal__header h2 {
+  margin: 0;
+  font-size: var(--mx-font-size-xl);
+  pointer-events: none;
+}
+
+.mx-draggable-modal__close {
+  background: none;
+  border: none;
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-3xl);
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  width: var(--mx-space-8);
+  height: var(--mx-space-8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--mx-radius-sm);
+  transition: all var(--mx-transition-fast);
+}
+
+.mx-draggable-modal__close:hover {
+  background-color: var(--mx-color-surface-hover);
+  color: var(--mx-color-text-primary);
+}
+
+.mx-draggable-modal__body {
+  padding: var(--mx-space-6);
+  overflow-y: auto;
+  flex: 1;
+}
+
+.mx-draggable-modal__resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  background: linear-gradient(
+    135deg,
+    transparent 40%,
+    var(--mx-color-text-tertiary) 40%,
+    var(--mx-color-text-tertiary) 45%,
+    transparent 45%,
+    transparent 55%,
+    var(--mx-color-text-tertiary) 55%,
+    var(--mx-color-text-tertiary) 60%,
+    transparent 60%,
+    transparent 70%,
+    var(--mx-color-text-tertiary) 70%,
+    var(--mx-color-text-tertiary) 75%,
+    transparent 75%
+  );
+  opacity: 0.5;
+  transition: opacity var(--mx-transition-fast);
+}
+
+.mx-draggable-modal__resize-handle:hover {
+  opacity: 1;
+}
+
+/* ============================================================================
+   Changes Requested Modal
+   ============================================================================ */
+
+.mx-changes-requested-modal__empty {
+  color: var(--mx-text-secondary);
+  font-style: italic;
+  text-align: center;
+  padding: var(--mx-spacing-lg);
+}
+
+.mx-changes-requested-modal__entry {
+  padding: var(--mx-spacing-md);
+  border-bottom: 1px solid var(--mx-border-color);
+}
+
+.mx-changes-requested-modal__entry:last-child {
+  border-bottom: none;
+}
+
+.mx-changes-requested-modal__reviewer {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-spacing-sm);
+  margin-bottom: var(--mx-spacing-sm);
+}
+
+.mx-changes-requested-modal__avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.mx-changes-requested-modal__name {
+  font-weight: var(--mx-font-weight-semibold);
+  color: var(--mx-color-text-primary);
+  font-size: var(--mx-font-size-sm);
+}
+
+.mx-changes-requested-modal__body {
+  padding: var(--mx-spacing-sm) var(--mx-spacing-md);
+  background: var(--mx-bg-secondary);
+  border-radius: var(--mx-border-radius-md);
+}
+
+.mx-changes-requested-modal__body p {
+  margin: 0 0 0.5em;
+}
+
+.mx-changes-requested-modal__body p:last-child {
+  margin-bottom: 0;
+}
+
+/* ============================================================================
    PR Stats
    ============================================================================ */
 

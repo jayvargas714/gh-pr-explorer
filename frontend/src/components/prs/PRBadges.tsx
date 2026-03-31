@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { PullRequest, DivergenceInfo } from '../../api/types'
 import { Badge } from '../common/Badge'
 import { ReviewersBadge } from '../common/ReviewersBadge'
+import { ChangesRequestedModal } from '../common/ChangesRequestedModal'
 
 interface PRBadgesProps {
   pr: PullRequest
@@ -8,6 +10,7 @@ interface PRBadgesProps {
 }
 
 export function PRBadges({ pr, divergence }: PRBadgesProps) {
+  const [showChangesModal, setShowChangesModal] = useState(false)
   const reviewers = pr.currentReviewers || []
 
   const getReviewStatusBadge = () => {
@@ -22,9 +25,15 @@ export function PRBadges({ pr, divergence }: PRBadgesProps) {
         )
       case 'CHANGES_REQUESTED':
         return (
-          <Badge variant="error" key="review">
-            ✗ Changes Requested
-          </Badge>
+          <span
+            key="review"
+            className="mx-badge-clickable"
+            onClick={(e) => { e.stopPropagation(); setShowChangesModal(true) }}
+          >
+            <Badge variant="error">
+              ✗ Changes Requested
+            </Badge>
+          </span>
         )
       case 'REVIEW_REQUIRED':
         return (
@@ -119,7 +128,17 @@ export function PRBadges({ pr, divergence }: PRBadgesProps) {
     getDivergenceBadge(),
   ].filter(Boolean)
 
-  if (badges.length === 0) return null
+  if (badges.length === 0 && !showChangesModal) return null
 
-  return <div className="mx-pr-card__badges">{badges}</div>
+  return (
+    <>
+      {badges.length > 0 && <div className="mx-pr-card__badges">{badges}</div>}
+      {showChangesModal && (
+        <ChangesRequestedModal
+          reviewers={reviewers}
+          onClose={() => setShowChangesModal(false)}
+        />
+      )}
+    </>
+  )
 }
