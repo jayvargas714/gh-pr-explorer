@@ -350,25 +350,26 @@ def calculate_loc(owner, repo):
       - loc: list of {language, files, blank, comment, code}
       - totals: {files, blank, comment, code}
     """
-    clone_url = f"https://github.com/{owner}/{repo}.git"
+    full_repo = f"{owner}/{repo}"
     tmpdir = tempfile.mkdtemp(prefix="gh_pr_explorer_loc_")
 
     try:
+        # Use gh repo clone for authenticated access (handles private repos)
         subprocess.run(
-            ["git", "clone", "--depth", "1", "--quiet", clone_url, tmpdir],
+            ["gh", "repo", "clone", full_repo, tmpdir, "--", "--depth", "1", "--quiet"],
             capture_output=True,
             text=True,
             check=True,
             timeout=120,
         )
     except subprocess.TimeoutExpired:
-        logger.warning(f"Git clone timed out for {owner}/{repo}")
+        logger.error(f"Git clone timed out for {full_repo}")
         shutil.rmtree(tmpdir, ignore_errors=True)
-        return {"loc": [], "totals": {"files": 0, "blank": 0, "comment": 0, "code": 0}}
+        raise RuntimeError(f"Clone timed out for {full_repo}")
     except subprocess.CalledProcessError as e:
-        logger.warning(f"Git clone failed for {owner}/{repo}: {e.stderr}")
+        logger.error(f"Git clone failed for {full_repo}: {e.stderr}")
         shutil.rmtree(tmpdir, ignore_errors=True)
-        return {"loc": [], "totals": {"files": 0, "blank": 0, "comment": 0, "code": 0}}
+        raise RuntimeError(f"Clone failed for {full_repo}: {e.stderr}")
 
     # Accumulate stats per language
     lang_stats = defaultdict(lambda: {"files": 0, "blank": 0, "comment": 0, "code": 0})
