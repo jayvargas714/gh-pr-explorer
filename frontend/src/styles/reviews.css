@@ -36,10 +36,22 @@
   overflow-y: auto;
 }
 
-.mx-review-error__help {
+.mx-review-error__explanation {
   font-size: var(--mx-font-size-sm);
-  color: var(--mx-color-text-secondary);
-  font-style: italic;
+  color: var(--mx-color-text-primary);
+  line-height: 1.6;
+  background: var(--mx-color-surface);
+  border-left: 3px solid var(--mx-color-warning, #e2b93d);
+  padding: var(--mx-spacing-3);
+  border-radius: 0 var(--mx-radius-sm) var(--mx-radius-sm) 0;
+}
+
+.mx-review-error__actions {
+  display: flex;
+  gap: var(--mx-spacing-3);
+  margin-top: var(--mx-spacing-4);
+  padding-top: var(--mx-spacing-4);
+  border-top: 1px solid var(--mx-color-border);
 }
 
 /* Review Viewer Modal */

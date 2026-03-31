@@ -15,6 +15,9 @@ interface ReviewState {
     show: boolean
     prNumber: number | null
     prTitle: string
+    prUrl: string
+    owner: string
+    repo: string
     errorOutput: string
     exitCode: number | null
   }
@@ -38,6 +41,9 @@ interface ReviewState {
   showReviewError: (
     prNumber: number,
     prTitle: string,
+    prUrl: string,
+    owner: string,
+    repo: string,
     errorOutput: string,
     exitCode: number | null
   ) => void
@@ -67,6 +73,9 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     show: false,
     prNumber: null,
     prTitle: '',
+    prUrl: '',
+    owner: '',
+    repo: '',
     errorOutput: '',
     exitCode: null,
   },
@@ -103,12 +112,15 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
 
   setPollingEnabled: (enabled) => set({ pollingEnabled: enabled }),
 
-  showReviewError: (prNumber, prTitle, errorOutput, exitCode) =>
+  showReviewError: (prNumber, prTitle, prUrl, owner, repo, errorOutput, exitCode) =>
     set({
       reviewErrorModal: {
         show: true,
         prNumber,
         prTitle,
+        prUrl,
+        owner,
+        repo,
         errorOutput,
         exitCode,
       },
@@ -120,6 +132,9 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
         show: false,
         prNumber: null,
         prTitle: '',
+        prUrl: '',
+        owner: '',
+        repo: '',
         errorOutput: '',
         exitCode: null,
       },

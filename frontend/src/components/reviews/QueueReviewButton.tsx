@@ -81,6 +81,9 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
     showReviewError(
       item.number,
       item.title,
+      item.url,
+      owner,
+      repo,
       review.error_output || 'Unknown error',
       review.exit_code || null,
     )

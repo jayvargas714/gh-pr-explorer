@@ -66,6 +66,9 @@ export function ReviewButton({ pr }: ReviewButtonProps) {
     showReviewError(
       pr.number,
       pr.title,
+      pr.url,
+      owner,
+      repo,
       review.error_output || 'Unknown error',
       review.exit_code || null,
     )
