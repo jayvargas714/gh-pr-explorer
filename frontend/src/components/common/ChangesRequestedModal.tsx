@@ -90,13 +90,19 @@ export function ChangesRequestedModal({ reviewers, onClose }: ChangesRequestedMo
     const node = nodeRef.current
     if (!node) return
     const rect = node.getBoundingClientRect()
+    if (!pos) {
+      setPos({ x: rect.left, y: rect.top })
+    }
+    if (!size) {
+      setSize({ w: rect.width, h: rect.height })
+    }
     resizeRef.current = {
       startX: e.clientX,
       startY: e.clientY,
       origW: size?.w ?? rect.width,
       origH: size?.h ?? rect.height,
     }
-  }, [size])
+  }, [pos, size])
 
   const modalStyle: React.CSSProperties = {
     ...(pos ? { left: pos.x, top: pos.y } : {}),

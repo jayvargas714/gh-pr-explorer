@@ -68,7 +68,8 @@
 }
 
 .mx-description-modal__content {
-  max-height: 500px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: var(--mx-spacing-3);
   background: var(--mx-color-surface);
