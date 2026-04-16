@@ -30,4 +30,6 @@ gh-pr-explorer.log
 
 # Superpowers
 docs/superpowers/
+.superpowers/
+.worktrees/
 pr_explorer.db*
