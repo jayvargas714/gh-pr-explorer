@@ -199,6 +199,8 @@ def json_to_markdown(review: Dict[str, Any]) -> str:
                 loc_str += f":{start}"
             if loc_str:
                 lines.append(f"- Location: `{loc_str}`")
+            if issue.get("principle"):
+                lines.append(f"- Principle: {issue['principle']}")
             if issue.get("problem"):
                 lines.append(f"- Problem: {issue['problem']}")
             if issue.get("fix"):
@@ -285,10 +287,26 @@ def json_to_markdown(review: Dict[str, Any]) -> str:
         lines.append("**Previous Issue Resolution**")
         lines.append("")
         for res in followup["resolution_status"]:
-            status_label = res.get("status", "unknown").replace("_", " ").title()
-            lines.append(f"- **{res.get('issue', '')}**: {status_label}")
-            if res.get("notes"):
-                lines.append(f"  - {res['notes']}")
+            # Accept varying shapes from the reviewer agent: the issue label may
+            # live under "issue", "title", or be identified only by an id.
+            label = (
+                res.get("issue")
+                or res.get("title")
+                or res.get("issue_title")
+            )
+            if not label:
+                ident = res.get("id") or res.get("issue_id")
+                if ident is not None:
+                    label = f"Issue {ident}"
+                else:
+                    label = "Untitled issue"
+            status_raw = str(res.get("status", "unknown"))
+            status_label = status_raw.replace("_", " ").strip().title() or "Unknown"
+            lines.append(f"- **{label}**: {status_label}")
+            # Notes may also come back under "details".
+            notes = res.get("notes") or res.get("details")
+            if notes:
+                lines.append(f"  - {notes}")
         lines.append("")
 
     return "\n".join(lines)
@@ -528,6 +546,7 @@ def _parse_issues_from_section(section_text: str) -> List[Dict[str, Any]]:
         block = section_text[start:end]
 
         location_str = _extract_field(block, "Location")
+        principle = _extract_field(block, "Principle")
         problem = _extract_field(block, "Problem")
         fix = _extract_field(block, "Fix")
 
@@ -540,6 +559,8 @@ def _parse_issues_from_section(section_text: str) -> List[Dict[str, Any]]:
             "location": loc,
             "problem": problem or "",
         }
+        if principle:
+            issue["principle"] = principle
         if fix:
             issue["fix"] = fix
 
@@ -556,7 +577,7 @@ def _parse_issues_from_section(section_text: str) -> List[Dict[str, Any]]:
 def _extract_field(block: str, field_name: str) -> Optional[str]:
     """Extract a field from an issue block (e.g. '- Location: value')."""
     pattern = re.compile(
-        rf'-\s*{field_name}:\s*(.*?)(?=\n-\s*(?:Location|Problem|Fix):|\n\*\*\d+\.|\n```|\Z)',
+        rf'-\s*{field_name}:\s*(.*?)(?=\n-\s*(?:Location|Principle|Problem|Fix):|\n\*\*\d+\.|\n```|\Z)',
         re.DOTALL
     )
     m = pattern.search(block)

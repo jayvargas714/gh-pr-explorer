@@ -399,6 +399,7 @@ export interface ReviewJSONMetadata {
 export interface ReviewIssueJSON {
   title: string
   location: { file: string; start_line: number | null; end_line: number | null }
+  principle?: string
   problem: string
   fix?: string
   code_snippet?: string

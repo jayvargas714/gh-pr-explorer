@@ -7,7 +7,7 @@ from flask import Blueprint, jsonify, request
 from backend.extensions import logger
 from backend.database import get_reviews_db
 from backend.routes import error_response
-from backend.services.review_schema import json_to_markdown
+from backend.services.review_schema import json_to_markdown, markdown_to_json, validate_review_json
 
 history_bp = Blueprint("history", __name__)
 
@@ -173,3 +173,52 @@ def check_pr_review_exists(owner, repo, pr_number):
 
     except Exception as e:
         return error_response("Internal server error", 500, f"Error checking review for PR #{pr_number}: {e}")
+
+
+@history_bp.route("/api/review-history/<int:review_id>/reparse", methods=["POST"])
+def reparse_review(review_id):
+    """Re-parse a review's .md file from disk to refresh its content_json.
+
+    Useful for backfilling fields (like 'principle') that were added after
+    the review was originally saved.
+    """
+    try:
+        from pathlib import Path
+
+        reviews_db = get_reviews_db()
+        review = reviews_db.get_review(review_id)
+        if not review:
+            return jsonify({"error": "Review not found"}), 404
+
+        file_path = review.get("review_file_path")
+        if not file_path:
+            return jsonify({"error": "No review file path stored for this review"}), 400
+
+        md_path = Path(file_path)
+        if not md_path.exists():
+            return jsonify({"error": f"Review file not found on disk: {file_path}"}), 404
+
+        md_content = md_path.read_text(encoding="utf-8")
+
+        metadata = {
+            "pr_number": review["pr_number"],
+            "repo": review["repo"],
+            "pr_url": review.get("pr_url", ""),
+            "pr_title": review.get("pr_title"),
+            "pr_author": review.get("pr_author"),
+            "is_followup": review.get("is_followup", False),
+            "parent_review_id": review.get("parent_review_id"),
+        }
+        new_json = markdown_to_json(md_content, metadata)
+
+        valid, errs = validate_review_json(new_json)
+        if not valid:
+            return jsonify({"error": "Re-parsed JSON failed validation", "details": errs[:5]}), 400
+
+        reviews_db.update_review(review_id, content_json=json.dumps(new_json))
+        logger.info(f"Re-parsed review {review_id} from {file_path}")
+
+        return jsonify({"success": True, "review_id": review_id})
+
+    except Exception as e:
+        return error_response("Internal server error", 500, f"Error re-parsing review {review_id}: {e}")

@@ -35,6 +35,7 @@ const INLINE_ELIGIBLE_KEYS = new Set(['critical-issues', 'major-concerns', 'mino
 interface EditableIssue {
   title: string
   location: { file: string; start_line: number | null; end_line: number | null }
+  principle: string
   problem: string
   fix: string
 }
@@ -70,6 +71,13 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null)
   const resizeRef = useRef<{ startX: number; startY: number; origW: number; origH: number } | null>(null)
   const panelNodeRef = useRef<HTMLDivElement>(null)
+
+  // Drag state for the preview panel
+  const [previewPos, setPreviewPos] = useState({ x: 120, y: 100 })
+  const [previewSize, setPreviewSize] = useState({ w: 560, h: 500 })
+  const previewDragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null)
+  const previewResizeRef = useRef<{ startX: number; startY: number; origW: number; origH: number } | null>(null)
+  const previewNodeRef = useRef<HTMLDivElement>(null)
 
   // Drag state for the verdict modal itself
   const [verdictPos, setVerdictPos] = useState<{ x: number; y: number } | null>(null)
@@ -138,12 +146,34 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
           h: Math.max(VERDICT_MIN_HEIGHT, verdictResizeRef.current.origH + dy),
         })
       }
+      // Preview panel drag
+      if (previewDragRef.current) {
+        e.preventDefault()
+        const dx = e.clientX - previewDragRef.current.startX
+        const dy = e.clientY - previewDragRef.current.startY
+        setPreviewPos({
+          x: Math.max(0, previewDragRef.current.origX + dx),
+          y: Math.max(0, previewDragRef.current.origY + dy),
+        })
+      }
+      // Preview panel resize
+      if (previewResizeRef.current) {
+        e.preventDefault()
+        const dx = e.clientX - previewResizeRef.current.startX
+        const dy = e.clientY - previewResizeRef.current.startY
+        setPreviewSize({
+          w: Math.max(MIN_PANEL_WIDTH, previewResizeRef.current.origW + dx),
+          h: Math.max(MIN_PANEL_HEIGHT, previewResizeRef.current.origH + dy),
+        })
+      }
     }
     const handleMouseUp = () => {
       dragRef.current = null
       resizeRef.current = null
       verdictDragRef.current = null
       verdictResizeRef.current = null
+      previewDragRef.current = null
+      previewResizeRef.current = null
     }
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseup', handleMouseUp)
@@ -207,6 +237,28 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
     }
   }, [verdictSize])
 
+  // Preview panel drag/resize handlers
+  const onPreviewDragStart = useCallback((e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return
+    previewDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: previewPos.x,
+      origY: previewPos.y,
+    }
+  }, [previewPos])
+
+  const onPreviewResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    previewResizeRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origW: previewSize.w,
+      origH: previewSize.h,
+    }
+  }, [previewSize])
+
   const loadReviewContent = async () => {
     try {
       setLoading(true)
@@ -233,6 +285,7 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
             issueMap[key] = jsonSection.issues.map((issue: ReviewIssueJSON) => ({
               title: issue.title,
               location: { ...issue.location },
+              principle: issue.principle ?? '',
               problem: issue.problem,
               fix: issue.fix ?? '',
             }))
@@ -455,6 +508,11 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
               <code className="mx-verdict-modal__issue-location">
                 {formatLocation(issue.location)}
               </code>
+              {issue.principle && (
+                <div className="mx-verdict-modal__issue-principle">
+                  {issue.principle}
+                </div>
+              )}
               <div className="mx-verdict-modal__issue-fields">
                 <label className="mx-verdict-modal__issue-field-label">Problem</label>
                 <textarea
@@ -629,36 +687,6 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
                   </div>
                 )}
 
-                {showPreview && (
-                  <div className="mx-verdict-modal__preview">
-                    <div className="mx-verdict-modal__preview-header">
-                      <label className="mx-verdict-modal__label">Preview</label>
-                      <span className="mx-verdict-modal__preview-event-badge" data-event={event}>
-                        {EVENT_OPTIONS.find((o) => o.value === event)?.label}
-                      </span>
-                    </div>
-                    <div className="mx-verdict-modal__preview-body mx-markdown-body">
-                      {hasContent ? (
-                        <>
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            rehypePlugins={[rehypeHighlight]}
-                          >
-                            {composeBody() || '*No body text — inline comments only*'}
-                          </ReactMarkdown>
-                          {hasInlineContent && (
-                            <div className="mx-verdict-modal__preview-inline-note">
-                              + {buildInlineComments().length} inline comment(s) will be posted on specific lines
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        <p className="mx-verdict-modal__preview-empty">Nothing to preview — add text or enable sections above.</p>
-                      )}
-                    </div>
-                  </div>
-                )}
-
                 <div className="mx-verdict-modal__actions">
                   <Button variant="ghost" onClick={onClose} disabled={submitting}>
                     Cancel
@@ -724,6 +752,64 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
             className="mx-verdict-review-panel__resize-handle"
             onMouseDown={onPanelResizeStart}
           />
+        </div>
+      )}
+
+      {showPreview && (
+        <div className="mx-verdict-preview-overlay" onClick={() => setShowPreview(false)}>
+          <div
+            ref={previewNodeRef}
+            className="mx-verdict-preview-panel"
+            style={{
+              left: previewPos.x,
+              top: previewPos.y,
+              width: previewSize.w,
+              height: previewSize.h,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="mx-verdict-preview-panel__header"
+              onMouseDown={onPreviewDragStart}
+            >
+              <h3>
+                Preview
+                <span className="mx-verdict-modal__preview-event-badge" data-event={event}>
+                  {EVENT_OPTIONS.find((o) => o.value === event)?.label}
+                </span>
+              </h3>
+              <button
+                className="mx-verdict-preview-panel__close"
+                onClick={() => setShowPreview(false)}
+                aria-label="Close preview"
+              >
+                ×
+              </button>
+            </div>
+            <div className="mx-verdict-preview-panel__content mx-markdown-body">
+              {hasContent ? (
+                <>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeHighlight]}
+                  >
+                    {composeBody() || '*No body text — inline comments only*'}
+                  </ReactMarkdown>
+                  {hasInlineContent && (
+                    <div className="mx-verdict-modal__preview-inline-note">
+                      + {buildInlineComments().length} inline comment(s) will be posted on specific lines
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="mx-verdict-modal__preview-empty">Nothing to preview — add text or enable sections above.</p>
+              )}
+            </div>
+            <div
+              className="mx-verdict-preview-panel__resize-handle"
+              onMouseDown={onPreviewResizeStart}
+            />
+          </div>
         </div>
       )}
     </>

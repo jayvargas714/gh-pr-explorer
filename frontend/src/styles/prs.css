@@ -202,6 +202,10 @@
   animation: fadeIn 0.15s ease-out;
 }
 
+.mx-draggable-modal--xl {
+  max-width: 1200px;
+}
+
 .mx-draggable-modal--positioned {
   position: fixed;
   max-width: none;

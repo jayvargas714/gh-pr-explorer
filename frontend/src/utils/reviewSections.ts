@@ -71,6 +71,7 @@ function formatSectionToMarkdown(section: ReviewSectionJSON): string {
       locStr += `:${loc.start_line}`
     }
     if (locStr) parts.push(`- Location: \`${locStr}\``)
+    if (issue.principle) parts.push(`- Principle: ${issue.principle}`)
     if (issue.problem) parts.push(`- Problem: ${issue.problem}`)
     if (issue.fix) parts.push(`- Fix: ${issue.fix}`)
     if (issue.code_snippet) parts.push(`\n\`\`\`\n${issue.code_snippet}\n\`\`\``)

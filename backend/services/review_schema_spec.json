@@ -68,6 +68,7 @@
                     "end_line": { "type": ["integer", "null"] }
                   }
                 },
+                "principle": { "type": "string", "description": "Engineering principle violated (e.g. DRY, SOLID, Fail Fast) with optional rule code" },
                 "problem": { "type": "string" },
                 "fix": { "type": "string" },
                 "code_snippet": { "type": "string" }

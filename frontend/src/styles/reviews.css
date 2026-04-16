@@ -105,7 +105,6 @@
 }
 
 .mx-review-viewer__content {
-  max-height: 600px;
   overflow-y: auto;
   padding: var(--mx-spacing-3);
   background: var(--mx-color-surface);

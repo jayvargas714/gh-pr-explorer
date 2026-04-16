@@ -543,6 +543,18 @@
   user-select: none;
 }
 
+.mx-verdict-modal__issue-principle {
+  font-size: var(--mx-font-size-xs);
+  font-weight: var(--mx-font-weight-medium);
+  color: var(--mx-color-warning);
+  background: var(--mx-color-warning-bg);
+  border: 1px solid rgba(255, 189, 0, 0.2);
+  border-radius: var(--mx-radius-sm);
+  padding: 2px var(--mx-spacing-2);
+  margin-bottom: var(--mx-spacing-2);
+  display: inline-block;
+}
+
 .mx-verdict-modal__issue-fields {
   display: flex;
   flex-direction: column;
@@ -832,6 +844,108 @@
 }
 
 .mx-verdict-review-panel__resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  background: linear-gradient(
+    135deg,
+    transparent 40%,
+    var(--mx-color-text-tertiary) 40%,
+    var(--mx-color-text-tertiary) 45%,
+    transparent 45%,
+    transparent 55%,
+    var(--mx-color-text-tertiary) 55%,
+    var(--mx-color-text-tertiary) 60%,
+    transparent 60%,
+    transparent 70%,
+    var(--mx-color-text-tertiary) 70%,
+    var(--mx-color-text-tertiary) 75%,
+    transparent 75%
+  );
+  border-radius: 0 0 var(--mx-radius-lg) 0;
+}
+
+/* Floating Preview Panel — draggable + resizable, appears on top of verdict modal */
+.mx-verdict-preview-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1200;
+}
+
+.mx-verdict-preview-panel {
+  position: fixed;
+  background: var(--mx-color-bg-elevated);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-lg);
+  box-shadow: var(--mx-shadow-xl);
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  animation: fadeIn 0.15s ease-out;
+  overflow: hidden;
+}
+
+.mx-verdict-preview-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--mx-spacing-2) var(--mx-spacing-4);
+  border-bottom: 1px solid var(--mx-color-border);
+  background: var(--mx-color-surface);
+  flex-shrink: 0;
+  cursor: grab;
+  user-select: none;
+}
+
+.mx-verdict-preview-panel__header:active {
+  cursor: grabbing;
+}
+
+.mx-verdict-preview-panel__header h3 {
+  margin: 0;
+  font-size: var(--mx-font-size-sm);
+  font-weight: var(--mx-font-weight-semibold);
+  color: var(--mx-color-text-primary);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: var(--mx-spacing-2);
+}
+
+.mx-verdict-preview-panel__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: none;
+  border: none;
+  border-radius: var(--mx-radius-sm);
+  color: var(--mx-color-text-secondary);
+  font-size: 20px;
+  cursor: pointer;
+  transition: var(--mx-transition-base);
+}
+
+.mx-verdict-preview-panel__close:hover {
+  background: var(--mx-color-surface-hover);
+  color: var(--mx-color-text-primary);
+}
+
+.mx-verdict-preview-panel__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--mx-spacing-4);
+  font-size: var(--mx-font-size-sm);
+}
+
+.mx-verdict-preview-panel__resize-handle {
   position: absolute;
   right: 0;
   bottom: 0;

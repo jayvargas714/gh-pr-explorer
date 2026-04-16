@@ -24,7 +24,8 @@ _SCHEMA_INSTRUCTIONS = (
     '"recommendations" (array of {priority: must_fix|high|medium|low, text}), '
     '"score" (object with overall 0-10, optional breakdown array of {category, score, comment}, optional summary). '
     "Each issue MUST have: title (string), location (object with file, start_line, end_line), "
-    "problem (string), and optionally fix (string) and code_snippet (string). "
+    "problem (string), and optionally principle (string — the engineering principle violated, "
+    "e.g. 'DRY / Single Source of Truth (violates DRY)'), fix (string), and code_snippet (string). "
 )
 
 
@@ -203,7 +204,12 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
             f"This is a FOLLOW-UP review. Previous review:\n\n"
             f"---PREVIOUS REVIEW---\n{previous_review_markdown[:8000]}\n---END PREVIOUS REVIEW---\n\n"
             f"Focus on: changes since last review, whether previous issues were addressed. "
-            f"Include a 'followup' section with 'resolution_status' array tracking each previous issue. "
+            f"Include a 'followup' section with a 'resolution_status' array tracking each previous issue. "
+            f"Each entry MUST be an object with exactly these fields: "
+            f'"issue" (string — the human-readable title of the previous issue, copy it verbatim from the previous review), '
+            f'"status" (one of: resolved, partially_addressed, not_addressed, wont_fix), '
+            f'"notes" (string — brief explanation of what changed or why). '
+            f'Do NOT use "title", "details", or "id" as alternative field names. '
             f"Use the elite-code-reviewer agent. "
             f"Write the review to {review_file}. "
             f"ALSO write a structured JSON version to {json_file} following this schema: "
