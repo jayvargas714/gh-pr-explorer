@@ -14,6 +14,7 @@ import './styles/queue.css'
 import './styles/reviews.css'
 import './styles/modals.css'
 import './styles/markdown.css'
+import './styles/timeline.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
