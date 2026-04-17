@@ -15,6 +15,7 @@ interface TimelineEntry {
   error: string | null
   expandedIds: Set<string>
   hiddenTypes: Set<TimelineEventType>
+  pollTimer: number | null
 }
 
 interface ModalTarget {
@@ -40,6 +41,8 @@ interface TimelineState {
   toggleExpanded(key: string, eventId: string): void
   toggleType(key: string, type: TimelineEventType): void
   resetFilters(key: string): void
+  startPolling(key: string): void
+  stopPolling(key: string): void
 }
 
 function keyFor(owner: string, repo: string, prNumber: number): string {
@@ -56,6 +59,7 @@ function emptyEntry(): TimelineEntry {
     error: null,
     expandedIds: new Set(),
     hiddenTypes: new Set(),
+    pollTimer: null,
   }
 }
 
@@ -65,13 +69,19 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
   open(target) {
     const key = keyFor(target.owner, target.repo, target.prNumber)
+    const existing = get().timelines[key]
+    let shouldForce = false
+    if (existing && existing.lastUpdated && existing.prState === 'OPEN') {
+      const age = Date.now() - new Date(existing.lastUpdated).getTime()
+      if (age > 5 * 60_000) shouldForce = true
+    }
     set((state) => ({
       openFor: target,
       timelines: state.timelines[key]
         ? state.timelines
         : { ...state.timelines, [key]: emptyEntry() },
     }))
-    get().load(target.owner, target.repo, target.prNumber)
+    get().load(target.owner, target.repo, target.prNumber, { force: shouldForce })
   },
 
   close() {
@@ -165,6 +175,38 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
         },
       }
     })
+  },
+
+  startPolling(key) {
+    const entry = get().timelines[key]
+    if (!entry) return
+    if (entry.pollTimer !== null) return
+    if (entry.prState !== 'OPEN') return
+    const [owner, repo, prStr] = key.split('/')
+    const prNumber = parseInt(prStr, 10)
+    const timer = window.setInterval(() => {
+      const current = get().timelines[key]
+      if (!current || current.prState !== 'OPEN') return
+      get().load(owner, repo, prNumber, { force: true })
+    }, 45_000)
+    set((state) => ({
+      timelines: {
+        ...state.timelines,
+        [key]: { ...state.timelines[key], pollTimer: timer },
+      },
+    }))
+  },
+
+  stopPolling(key) {
+    const entry = get().timelines[key]
+    if (!entry || entry.pollTimer === null) return
+    window.clearInterval(entry.pollTimer)
+    set((state) => ({
+      timelines: {
+        ...state.timelines,
+        [key]: { ...state.timelines[key], pollTimer: null },
+      },
+    }))
   },
 }))
 
