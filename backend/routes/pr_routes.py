@@ -8,8 +8,10 @@ from backend.config import get_config
 from backend.extensions import logger
 from backend.filters.pr_filter_builder import PRFilterParams, PRFilterBuilder
 from backend.routes import error_response
+from backend.database import get_timeline_cache_db
 from backend.services.github_service import run_gh_command, parse_json_output
 from backend.services.pr_service import get_review_status, get_ci_status, get_current_reviewers
+from backend.services.timeline_service import get_timeline
 
 pr_bp = Blueprint("pr", __name__)
 
@@ -153,3 +155,22 @@ def get_pr_divergence(owner, repo):
 
     except Exception as e:
         return error_response("Internal server error", 500, f"Failed to fetch divergence: {e}")
+
+
+@pr_bp.route("/api/repos/<owner>/<repo>/prs/<int:pr_number>/timeline")
+def get_pr_timeline(owner, repo, pr_number):
+    """Return the normalized event timeline for a single PR."""
+    try:
+        force = request.args.get("refresh") == "true"
+        cache_db = get_timeline_cache_db()
+        result = get_timeline(owner, repo, pr_number, cache_db, force_refresh=force)
+        return jsonify(result)
+    except RuntimeError as e:
+        msg = str(e)
+        if "Not Found" in msg or "404" in msg:
+            return jsonify({"error": "PR not found"}), 404
+        logger.error(f"Timeline fetch failed for {owner}/{repo}#{pr_number}: {msg}")
+        return jsonify({"error": msg}), 503
+    except Exception as e:
+        logger.exception(f"Unexpected timeline error for {owner}/{repo}#{pr_number}")
+        return jsonify({"error": str(e)}), 500
