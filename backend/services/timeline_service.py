@@ -191,3 +191,142 @@ def normalize_timeline_events(
 
     result.sort(key=lambda e: e["created_at"])
     return result
+
+
+def fetch_pr_timeline_from_api(owner: str, repo: str, pr_number: int) -> List[Dict[str, Any]]:
+    """Fetch and normalize the full issue timeline for a PR.
+
+    Also fetches PR metadata (createdAt, user) to synthesize the 'opened' event.
+    """
+    try:
+        raw_output = run_gh_command([
+            "api",
+            f"repos/{owner}/{repo}/issues/{pr_number}/timeline",
+            "--paginate",
+        ])
+    except RuntimeError as e:
+        logger.warning(f"Failed to fetch timeline for {owner}/{repo}#{pr_number}: {e}")
+        raise
+
+    raw_events = parse_json_output(raw_output) or []
+
+    # Fetch minimal PR metadata for the synthesized opened event.
+    try:
+        pr_output = run_gh_command([
+            "api",
+            f"repos/{owner}/{repo}/pulls/{pr_number}",
+            "--jq",
+            '{created_at: .created_at, user: {login: .user.login, avatar_url: .user.avatar_url}}',
+        ])
+        pr_info = parse_json_output(pr_output) or {}
+    except RuntimeError as e:
+        logger.warning(f"Failed to fetch PR info for {owner}/{repo}#{pr_number}: {e}")
+        pr_info = {}
+
+    return normalize_timeline_events(raw_events, pr_info)
+
+
+def _now_iso_z() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _ttl_for_state(pr_state: Optional[str]) -> Optional[int]:
+    """Return the TTL (in minutes) for a given PR state.
+
+    Closed/Merged PRs are immutable — ttl of None means 'never stale'.
+    Open PRs use 5-minute TTL.
+    """
+    if pr_state in ("CLOSED", "MERGED"):
+        return None
+    return _OPEN_TTL_MINUTES
+
+
+def _background_refresh(owner: str, repo: str, pr_number: int, cache_db) -> None:
+    """Worker function: refetch from the API and update the cache."""
+    key = (repo, pr_number)
+    try:
+        current_state = fetch_pr_state(owner, repo, pr_number) or "OPEN"
+        events = fetch_pr_timeline_from_api(owner, repo, pr_number)
+        cache_db.save_cache(f"{owner}/{repo}", pr_number, current_state, events)
+        logger.info(f"Background timeline refresh complete for {owner}/{repo}#{pr_number}")
+    except Exception as e:
+        logger.warning(
+            f"Background timeline refresh failed for {owner}/{repo}#{pr_number}: {e}"
+        )
+    finally:
+        with _refresh_lock:
+            _refreshing.discard(key)
+
+
+def get_timeline(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    cache_db,
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
+    """Cache-aware entry point for the timeline endpoint.
+
+    Returns a dict matching the response schema:
+        {
+            "events": [...],
+            "pr_state": "OPEN" | "CLOSED" | "MERGED",
+            "last_updated": "...Z",
+            "cached": bool,
+            "stale": bool,
+            "refreshing": bool,
+        }
+    """
+    repo_key = f"{owner}/{repo}"
+    key = (repo, pr_number)
+    cached = cache_db.get_cached(repo_key, pr_number)
+
+    if cached and not force_refresh:
+        ttl = _ttl_for_state(cached["pr_state"])
+        is_stale = cache_db.is_stale(repo_key, pr_number, ttl)
+
+        if not is_stale:
+            return {
+                "events": cached["data"],
+                "pr_state": cached["pr_state"],
+                "last_updated": cached["updated_at"],
+                "cached": True,
+                "stale": False,
+                "refreshing": False,
+            }
+
+        # Stale: return immediately, trigger background refresh.
+        with _refresh_lock:
+            already_refreshing = key in _refreshing
+            if not already_refreshing:
+                _refreshing.add(key)
+        if not already_refreshing:
+            t = threading.Thread(
+                target=_background_refresh,
+                args=(owner, repo, pr_number, cache_db),
+                daemon=True,
+            )
+            t.start()
+
+        return {
+            "events": cached["data"],
+            "pr_state": cached["pr_state"],
+            "last_updated": cached["updated_at"],
+            "cached": True,
+            "stale": True,
+            "refreshing": True,
+        }
+
+    # Cache miss or force refresh: fetch synchronously.
+    current_state = fetch_pr_state(owner, repo, pr_number) or "OPEN"
+    events = fetch_pr_timeline_from_api(owner, repo, pr_number)
+    cache_db.save_cache(repo_key, pr_number, current_state, events)
+
+    return {
+        "events": events,
+        "pr_state": current_state,
+        "last_updated": _now_iso_z(),
+        "cached": False,
+        "stale": False,
+        "refreshing": False,
+    }
