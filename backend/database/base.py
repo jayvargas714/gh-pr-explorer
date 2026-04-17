@@ -234,6 +234,24 @@ class Database:
                 )
             """)
 
+            # Create pr_timeline_cache table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pr_timeline_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo TEXT NOT NULL,
+                    pr_number INTEGER NOT NULL,
+                    pr_state TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(repo, pr_number)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_pr_timeline_cache_key
+                ON pr_timeline_cache(repo, pr_number)
+            """)
+
             # Migration: Add section-posted columns to reviews for existing databases
             cursor.execute("PRAGMA table_info(reviews)")
             reviews_columns = {row[1] for row in cursor.fetchall()}
