@@ -15,6 +15,7 @@ from backend.database.cache_stores import (
     CodeActivityCacheDB,
     RepoStatsCacheDB,
     RepoLOCCacheDB,
+    TimelineCacheDB,
 )
 
 # Thread-safe singleton instances
@@ -31,6 +32,7 @@ _contributor_ts_cache_db: Optional[ContributorTimeSeriesCacheDB] = None
 _code_activity_cache_db: Optional[CodeActivityCacheDB] = None
 _repo_stats_cache_db: Optional[RepoStatsCacheDB] = None
 _repo_loc_cache_db: Optional[RepoLOCCacheDB] = None
+_timeline_cache_db: Optional[TimelineCacheDB] = None
 
 
 def get_database() -> Database:
@@ -142,13 +144,24 @@ def get_repo_loc_cache_db() -> RepoLOCCacheDB:
     return _repo_loc_cache_db
 
 
+def get_timeline_cache_db() -> TimelineCacheDB:
+    global _timeline_cache_db
+    if _timeline_cache_db is None:
+        db = get_database()
+        with _db_lock:
+            if _timeline_cache_db is None:
+                _timeline_cache_db = TimelineCacheDB(db)
+    return _timeline_cache_db
+
+
 __all__ = [
     "Database", "ReviewsDB", "MergeQueueDB", "SettingsDB",
     "DeveloperStatsDB", "LifecycleCacheDB", "WorkflowCacheDB",
     "ContributorTimeSeriesCacheDB", "CodeActivityCacheDB",
-    "RepoStatsCacheDB", "RepoLOCCacheDB",
+    "RepoStatsCacheDB", "RepoLOCCacheDB", "TimelineCacheDB",
     "get_database", "get_reviews_db", "get_queue_db", "get_settings_db",
     "get_dev_stats_db", "get_lifecycle_cache_db", "get_workflow_cache_db",
     "get_contributor_ts_cache_db", "get_code_activity_cache_db",
     "get_repo_stats_cache_db", "get_repo_loc_cache_db",
+    "get_timeline_cache_db",
 ]
