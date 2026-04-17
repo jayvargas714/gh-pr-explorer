@@ -1,0 +1,70 @@
+[
+  {
+    "event": "committed",
+    "sha": "abc1234567890abcdef1234567890abcdef1234",
+    "message": "Add caching layer\n\nDetails...",
+    "author": {"name": "J Vargas", "email": "j@example.com", "date": "2026-04-10T14:30:00Z"},
+    "url": "https://api.github.com/repos/owner/repo/git/commits/abc1234567890abcdef1234567890abcdef1234"
+  },
+  {
+    "event": "reviewed",
+    "id": 999,
+    "user": {"login": "alice", "avatar_url": "https://example.com/a.png"},
+    "state": "changes_requested",
+    "body": "Please fix the race condition.",
+    "html_url": "https://github.com/owner/repo/pull/847#pullrequestreview-999",
+    "submitted_at": "2026-04-11T15:45:00Z"
+  },
+  {
+    "event": "commented",
+    "id": 1000,
+    "user": {"login": "bob", "avatar_url": "https://example.com/b.png"},
+    "body": "Looks good to me.",
+    "html_url": "https://github.com/owner/repo/pull/847#issuecomment-1000",
+    "created_at": "2026-04-11T16:00:00Z"
+  },
+  {
+    "event": "review_requested",
+    "id": 1001,
+    "actor": {"login": "jvargas", "avatar_url": "https://example.com/j.png"},
+    "requested_reviewer": {"login": "charlie", "avatar_url": "https://example.com/c.png"},
+    "created_at": "2026-04-11T16:05:00Z"
+  },
+  {
+    "event": "ready_for_review",
+    "id": 1002,
+    "actor": {"login": "jvargas", "avatar_url": "https://example.com/j.png"},
+    "created_at": "2026-04-11T17:00:00Z"
+  },
+  {
+    "event": "convert_to_draft",
+    "id": 1003,
+    "actor": {"login": "jvargas", "avatar_url": "https://example.com/j.png"},
+    "created_at": "2026-04-11T17:30:00Z"
+  },
+  {
+    "event": "head_ref_force_pushed",
+    "id": 1004,
+    "actor": {"login": "jvargas", "avatar_url": "https://example.com/j.png"},
+    "created_at": "2026-04-11T18:00:00Z"
+  },
+  {
+    "event": "closed",
+    "id": 1005,
+    "actor": {"login": "bob", "avatar_url": "https://example.com/b.png"},
+    "created_at": "2026-04-12T09:00:00Z"
+  },
+  {
+    "event": "reopened",
+    "id": 1006,
+    "actor": {"login": "jvargas", "avatar_url": "https://example.com/j.png"},
+    "created_at": "2026-04-12T09:30:00Z"
+  },
+  {
+    "event": "merged",
+    "id": 1007,
+    "actor": {"login": "jvargas", "avatar_url": "https://example.com/j.png"},
+    "commit_id": "merged1234567890abcdef1234567890abcdef12",
+    "created_at": "2026-04-12T10:20:00Z"
+  }
+]
