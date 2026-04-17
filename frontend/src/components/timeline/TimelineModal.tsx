@@ -8,20 +8,30 @@ import { TimelineView } from './TimelineView'
 export function TimelineModal() {
   const openFor = useTimelineStore((s) => s.openFor)
   const close = useTimelineStore((s) => s.close)
+  const startPolling = useTimelineStore((s) => s.startPolling)
+  const stopPolling = useTimelineStore((s) => s.stopPolling)
 
   useEffect(() => {
     if (!openFor) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') close()
     }
+    const key = `${openFor.owner}/${openFor.repo}/${openFor.prNumber}`
+
     window.addEventListener('keydown', onKey)
     const originalOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
+
+    // Start polling once the initial load has a chance to populate prState.
+    const pollStarter = window.setTimeout(() => startPolling(key), 200)
+
     return () => {
       window.removeEventListener('keydown', onKey)
       document.body.style.overflow = originalOverflow
+      window.clearTimeout(pollStarter)
+      stopPolling(key)
     }
-  }, [openFor, close])
+  }, [openFor, close, startPolling, stopPolling])
 
   return (
     <AnimatePresence>
