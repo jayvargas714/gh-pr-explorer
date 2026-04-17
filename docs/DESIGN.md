@@ -139,6 +139,7 @@ The backend is organized as a Python package with clear separation of concerns:
 | `workflow_service.py` | `fetch_workflow_data()` |
 | `activity_service.py` | `fetch_code_activity_data()` |
 | `contributor_service.py` | `fetch_contributor_timeseries()` |
+| `timeline_service.py` | `normalize_timeline_events()`, `fetch_pr_timeline_from_api()`, `get_timeline()` |
 | `review_schema.py` | `validate_review_json()`, `json_to_markdown()`, `markdown_to_json()`, `get_section_display_names()`, `SCHEMA_VERSION` |
 
 **Filters** (`backend/filters/`):
@@ -171,7 +172,7 @@ The backend is organized as a Python package with clear separation of concerns:
 | `static_bp` | `/`, `/assets/<path>` |
 | `auth_bp` | `/api/user`, `/api/orgs` |
 | `repo_bp` | `/api/repos`, contributors, labels, branches, milestones, teams |
-| `pr_bp` | `/api/repos/.../prs`, `/api/repos/.../prs/divergence` |
+| `pr_bp` | `/api/repos/.../prs`, `/api/repos/.../prs/divergence` + /prs/:n/timeline |
 | `analytics_bp` | `/api/repos/.../stats`, lifecycle-metrics, review-responsiveness, code-activity, contributor-timeseries |
 | `workflow_bp` | `/api/repos/.../workflow-runs` |
 | `queue_bp` | `/api/merge-queue` CRUD, reorder, notes |
@@ -201,6 +202,7 @@ The database module provides SQLite-based persistence for reviews and merge queu
 | `CodeActivityCacheDB` | Caches full 52-week code activity data with 24-hour TTL for stale-while-revalidate serving |
 | `RepoStatsCacheDB` | Caches aggregated repository statistics with 4-hour TTL |
 | `RepoLOCCacheDB` | Caches lines-of-code analysis results with 24-hour TTL |
+| `TimelineCacheDB` | Caches per-PR timeline events with state-aware TTL (no TTL for closed/merged, 5-min for open) |
 
 #### Database Schema
 
@@ -333,6 +335,17 @@ CREATE TABLE IF NOT EXISTS repo_loc_cache (
     data TEXT NOT NULL,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- PR timeline cache table: Caches normalized issue-timeline events per (repo, pr_number)
+CREATE TABLE IF NOT EXISTS pr_timeline_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    pr_state TEXT,
+    data TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(repo, pr_number)
+);
 ```
 
 #### ReviewsDB Methods
@@ -404,6 +417,15 @@ CREATE TABLE IF NOT EXISTS repo_loc_cache (
 | `save_cache()` | Saves code activity data with upsert (INSERT ON CONFLICT UPDATE) |
 | `is_stale()` | Checks if cached data is older than TTL (default 24 hours) |
 | `clear()` | Removes all code activity cache entries |
+
+#### TimelineCacheDB Methods
+
+| Method | Description |
+|--------|-------------|
+| `get_cached()` | Returns cached timeline data (events + pr_state) for a (repo, pr_number) key |
+| `save_cache()` | Upserts timeline data and pr_state |
+| `is_stale()` | Checks staleness; ttl_minutes=None means "never stale" (closed/merged) |
+| `clear()` | Removes all timeline cache entries |
 
 **Note**: When returning cached stats, the backend transforms field names to match the frontend expectations:
 - `username` → `login`
@@ -1512,6 +1534,40 @@ Batch-fetches branch ahead/behind information for open PRs using the GitHub comp
 **Error Responses**:
 - `400`: Missing `prs` in request body
 - `500`: Failed to fetch divergence data
+
+---
+
+**GET** `/api/repos/<owner>/<repo>/prs/<pr_number>/timeline`
+
+Returns a normalized chronological event timeline for a single PR. Cached in SQLite with state-aware TTL — closed/merged PRs cached indefinitely (immutable), open PRs cached 5 minutes with stale-while-revalidate.
+
+**Query Parameters**:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `refresh` | string | Set to "true" to bypass cache and force a fresh fetch |
+
+**Response**:
+```json
+{
+  "events": [
+    { "id": "opened-...", "type": "opened", "created_at": "...", "actor": {...} },
+    { "id": "committed-...", "type": "committed", "sha": "...", "short_sha": "abc1234", "message": "...", ... }
+  ],
+  "pr_state": "OPEN",
+  "last_updated": "2026-04-16T14:02:11Z",
+  "cached": false,
+  "stale": false,
+  "refreshing": false
+}
+```
+
+**Event Types**: `opened`, `committed`, `commented`, `reviewed`, `review_requested`, `ready_for_review`, `convert_to_draft`, `closed`, `reopened`, `merged`, `head_ref_force_pushed`.
+
+**Error Responses**:
+- `404`: PR not found
+- `503`: GitHub API error (falls back to stale cache if available)
+- `500`: Internal server error
 
 ---
 
@@ -2736,7 +2792,7 @@ gh-pr-explorer/
 │   │   ├── merge_queue.py          # MergeQueueDB
 │   │   ├── settings.py             # SettingsDB
 │   │   ├── dev_stats.py            # DeveloperStatsDB
-│   │   └── cache_stores.py         # LifecycleCacheDB, WorkflowCacheDB, ContributorTSCacheDB, CodeActivityCacheDB
+│   │   └── cache_stores.py         # LifecycleCacheDB, WorkflowCacheDB, ContributorTSCacheDB, CodeActivityCacheDB, TimelineCacheDB
 │   │
 │   ├── services/                   # Business logic layer
 │   │   ├── github_service.py       # gh CLI wrapper: run_command, parse_json, fetch_stats_api
@@ -2748,6 +2804,7 @@ gh-pr-explorer/
 │   │   ├── workflow_service.py     # Parallel batch workflow data fetching
 │   │   ├── activity_service.py     # Code activity data from 3 stats APIs
 │   │   ├── contributor_service.py  # Contributor time series transform
+│   │   ├── timeline_service.py     # PR timeline: normalize + fetch + cache-aware get
 │   │   ├── review_schema.py        # Review JSON schema, validation, JSON<->markdown conversion
 │   │   ├── review_schema_spec.json # Formal JSON Schema file for external tools/agents
 │   │   └── repo_stats_service.py       # Parallel repo stats fetching + LOC analysis
@@ -2778,6 +2835,14 @@ gh-pr-explorer/
 │       ├── settings_routes.py      # /api/settings CRUD
 │       ├── cache_routes.py         # /api/clear-cache
 │       └── repo_stats_routes.py        # /api/repos/.../repo-stats, repo-stats/loc
+│   │
+│   └── tests/                      # Pytest suite
+│       ├── __init__.py
+│       ├── conftest.py             # Adds project root to sys.path
+│       ├── test_timeline_cache_db.py
+│       ├── test_timeline_service.py
+│       └── fixtures/
+│           └── timeline_raw.json
 │
 ├── frontend/                       # React + TypeScript frontend
 │   ├── src/
