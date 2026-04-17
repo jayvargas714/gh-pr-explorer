@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useReviewStore } from '../../stores/useReviewStore'
+import { useTimelineStore } from '../../stores/useTimelineStore'
 import { removeFromQueue } from '../../api/queue'
 import { NotesModal } from './NotesModal'
 import { VerdictModal } from './VerdictModal'
@@ -42,6 +43,7 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
   const [showChangesModal, setShowChangesModal] = useState(false)
   const [removing, setRemoving] = useState(false)
   const openReviewViewer = useReviewStore((state) => state.openReviewViewer)
+  const openTimeline = useTimelineStore((state) => state.open)
 
   const {
     attributes,
@@ -223,6 +225,23 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
             </>
           )}
           <QueueReviewButton item={item} onRefresh={onRefresh} />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              const [owner, repo] = item.repo.split('/')
+              openTimeline({
+                owner,
+                repo,
+                prNumber: item.number,
+                title: item.title,
+                url: item.url,
+              })
+            }}
+            data-tooltip="View timeline"
+          >
+            ⏱
+          </Button>
           <Button variant="ghost" size="sm" onClick={() => setShowNotes(true)}>
             Notes {item.notesCount > 0 && `(${item.notesCount})`}
           </Button>

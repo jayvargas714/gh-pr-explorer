@@ -4,6 +4,7 @@ import { usePRStore } from '../../stores/usePRStore'
 import { useAccountStore } from '../../stores/useAccountStore'
 import { useQueueStore } from '../../stores/useQueueStore'
 import { useReviewStore } from '../../stores/useReviewStore'
+import { useTimelineStore } from '../../stores/useTimelineStore'
 import { addToQueue as apiAddToQueue, removeFromQueue as apiRemoveFromQueue } from '../../api/queue'
 import { fetchMergeQueue } from '../../api/queue'
 import { Card } from '../common/Card'
@@ -26,6 +27,7 @@ export function PRCard({ pr }: PRCardProps) {
   const selectedRepo = useAccountStore((state) => state.selectedRepo)
   const { isInQueue, setMergeQueue, addToQueue: addToQueueStore, removeFromQueue: removeFromQueueStore } = useQueueStore()
   const openReviewViewer = useReviewStore((state) => state.openReviewViewer)
+  const openTimeline = useTimelineStore((state) => state.open)
 
   const reviewInfo = prReviewScores[pr.number]
 
@@ -153,6 +155,23 @@ export function PRCard({ pr }: PRCardProps) {
         </Button>
 
         <ReviewButton pr={pr} />
+
+        {selectedRepo && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => openTimeline({
+              owner: selectedRepo.owner.login,
+              repo: selectedRepo.name,
+              prNumber: pr.number,
+              title: pr.title,
+              url: pr.url,
+            })}
+            data-tooltip="View timeline"
+          >
+            ⏱
+          </Button>
+        )}
 
         {reviewInfo && (
           <Button

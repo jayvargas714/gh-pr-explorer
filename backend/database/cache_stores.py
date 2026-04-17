@@ -332,3 +332,74 @@ class RepoLOCCacheDB:
             updated = datetime.strptime(row["updated_at"], "%Y-%m-%d %H:%M:%S")
             age_hours = (datetime.now() - updated).total_seconds() / 3600
             return age_hours > ttl_hours
+
+
+class TimelineCacheDB:
+    """Cache for per-PR timeline events in SQLite.
+
+    Key: (repo, pr_number). Closed/Merged PRs are immutable, so callers pass
+    ttl_minutes=None to treat them as never stale.
+    """
+
+    def __init__(self, db):
+        self.db = db
+
+    def get_cached(self, repo: str, pr_number: int) -> Optional[Dict[str, Any]]:
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT data, pr_state, updated_at FROM pr_timeline_cache "
+                "WHERE repo = ? AND pr_number = ?",
+                (repo, pr_number)
+            )
+            row = cursor.fetchone()
+            if row:
+                try:
+                    return {
+                        "data": json.loads(row["data"]),
+                        "pr_state": row["pr_state"],
+                        "updated_at": row["updated_at"],
+                    }
+                except json.JSONDecodeError:
+                    logger.warning(
+                        f"Corrupt timeline cache for {repo}#{pr_number}, treating as miss"
+                    )
+                    return None
+            return None
+
+    def save_cache(self, repo: str, pr_number: int, pr_state: str, data: Any) -> None:
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO pr_timeline_cache (repo, pr_number, pr_state, data, updated_at)
+                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(repo, pr_number) DO UPDATE SET
+                   pr_state = excluded.pr_state,
+                   data = excluded.data,
+                   updated_at = CURRENT_TIMESTAMP""",
+                (repo, pr_number, pr_state, json.dumps(data))
+            )
+
+    def is_stale(self, repo: str, pr_number: int, ttl_minutes: Optional[int]) -> bool:
+        """Return True when there is no cache entry, or when the entry is older
+        than ttl_minutes. A ttl_minutes of None means 'never stale' (used for
+        closed/merged PRs)."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT updated_at FROM pr_timeline_cache WHERE repo = ? AND pr_number = ?",
+                (repo, pr_number)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return True
+            if ttl_minutes is None:
+                return False
+            updated = datetime.strptime(row["updated_at"], "%Y-%m-%d %H:%M:%S")
+            age_minutes = (datetime.now() - updated).total_seconds() / 60
+            return age_minutes > ttl_minutes
+
+    def clear(self) -> None:
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM pr_timeline_cache")

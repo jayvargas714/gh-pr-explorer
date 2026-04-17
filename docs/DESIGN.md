@@ -139,6 +139,7 @@ The backend is organized as a Python package with clear separation of concerns:
 | `workflow_service.py` | `fetch_workflow_data()` |
 | `activity_service.py` | `fetch_code_activity_data()` |
 | `contributor_service.py` | `fetch_contributor_timeseries()` |
+| `timeline_service.py` | `normalize_timeline_events()`, `fetch_pr_timeline_from_api()`, `get_timeline()` |
 | `review_schema.py` | `validate_review_json()`, `json_to_markdown()`, `markdown_to_json()`, `get_section_display_names()`, `SCHEMA_VERSION` |
 
 **Filters** (`backend/filters/`):
@@ -171,7 +172,7 @@ The backend is organized as a Python package with clear separation of concerns:
 | `static_bp` | `/`, `/assets/<path>` |
 | `auth_bp` | `/api/user`, `/api/orgs` |
 | `repo_bp` | `/api/repos`, contributors, labels, branches, milestones, teams |
-| `pr_bp` | `/api/repos/.../prs`, `/api/repos/.../prs/divergence` |
+| `pr_bp` | `/api/repos/.../prs`, `/api/repos/.../prs/divergence` + /prs/:n/timeline |
 | `analytics_bp` | `/api/repos/.../stats`, lifecycle-metrics, review-responsiveness, code-activity, contributor-timeseries |
 | `workflow_bp` | `/api/repos/.../workflow-runs` |
 | `queue_bp` | `/api/merge-queue` CRUD, reorder, notes |
@@ -201,6 +202,7 @@ The database module provides SQLite-based persistence for reviews and merge queu
 | `CodeActivityCacheDB` | Caches full 52-week code activity data with 24-hour TTL for stale-while-revalidate serving |
 | `RepoStatsCacheDB` | Caches aggregated repository statistics with 4-hour TTL |
 | `RepoLOCCacheDB` | Caches lines-of-code analysis results with 24-hour TTL |
+| `TimelineCacheDB` | Caches per-PR timeline events with state-aware TTL (no TTL for closed/merged, 5-min for open) |
 
 #### Database Schema
 
@@ -333,6 +335,17 @@ CREATE TABLE IF NOT EXISTS repo_loc_cache (
     data TEXT NOT NULL,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- PR timeline cache table: Caches normalized issue-timeline events per (repo, pr_number)
+CREATE TABLE IF NOT EXISTS pr_timeline_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    pr_state TEXT,
+    data TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(repo, pr_number)
+);
 ```
 
 #### ReviewsDB Methods
@@ -404,6 +417,15 @@ CREATE TABLE IF NOT EXISTS repo_loc_cache (
 | `save_cache()` | Saves code activity data with upsert (INSERT ON CONFLICT UPDATE) |
 | `is_stale()` | Checks if cached data is older than TTL (default 24 hours) |
 | `clear()` | Removes all code activity cache entries |
+
+#### TimelineCacheDB Methods
+
+| Method | Description |
+|--------|-------------|
+| `get_cached()` | Returns cached timeline data (events + pr_state) for a (repo, pr_number) key |
+| `save_cache()` | Upserts timeline data and pr_state |
+| `is_stale()` | Checks staleness; ttl_minutes=None means "never stale" (closed/merged) |
+| `clear()` | Removes all timeline cache entries |
 
 **Note**: When returning cached stats, the backend transforms field names to match the frontend expectations:
 - `username` → `login`
@@ -954,6 +976,80 @@ The modal displays full review content with:
 - Link to original review file
 - **Copy Markdown Button**: Copies raw review content to clipboard for easy sharing
 
+### PR Timelines
+
+The PR Timelines feature provides a focused, single-PR deep-dive view showing every lifecycle event as a vertical animated timeline.
+
+#### How It Works
+
+1. User clicks the ⏱ (Timeline) button on any PR card or merge queue card.
+2. A full-screen modal opens and fetches the PR's normalized event timeline via `GET /api/repos/:owner/:repo/prs/:n/timeline`.
+3. Events are rendered as a vertical rail with color-coded dots and expandable, markdown-rendered bodies.
+4. Filter chips toggle groups of event types on/off (Commits, Reviews, Comments, State).
+5. Closed/merged PRs are served from indefinite SQLite cache; open PRs use a 5-minute TTL with stale-while-revalidate and manual refresh.
+
+#### Event Types
+
+| Event | Dot color | Source |
+|-------|-----------|--------|
+| opened | indigo | Synthesized from PR `createdAt` |
+| committed | emerald | `committed` |
+| commented | amber | `commented` |
+| reviewed (APPROVED) | emerald | `reviewed` with state APPROVED |
+| reviewed (CHANGES_REQUESTED) | red | `reviewed` with state CHANGES_REQUESTED |
+| reviewed (COMMENTED) | amber | `reviewed` with state COMMENTED |
+| review_requested | slate | `review_requested` |
+| ready_for_review / convert_to_draft | sky | `ready_for_review` / `convert_to_draft` |
+| closed | red | `closed` |
+| reopened | indigo | `reopened` |
+| merged | violet | `merged` |
+| head_ref_force_pushed | amber | `head_ref_force_pushed` |
+
+#### UI Components
+
+| Component | Responsibility |
+|-----------|----------------|
+| `TimelineModal` | Overlay + shell, keyboard handling, scroll lock |
+| `TimelineHeader` | PR title, refresh, updated indicator, close |
+| `TimelineFilters` | Event-type chip toggles |
+| `TimelineView` | Vertical rail, stagger-in animation, empty/error states |
+| `TimelineEventRow` | Card shell, dot, expand/collapse, body dispatch |
+| `eventBodies/*` | Per-type renderers (Commit, Comment, Review, StateChange, ReviewRequested, ForcePush) |
+
+#### Interaction Model
+
+- **Expand**: click the dot OR the card header. Any number of events can be expanded simultaneously (multi-expand).
+- **Filter**: click a chip to hide/show that event group.
+- **Refresh**: click the ↻ button in the header to force a fresh fetch.
+- **Close**: click outside the shell, press Esc, or click ×.
+
+#### Animations
+
+All use Framer Motion spring physics:
+- **Modal enter/exit**: fade + slide + scale spring.
+- **Stagger-in**: events fade+slide from below with 40ms stagger (first 20 only).
+- **Expand/collapse**: AnimatePresence height spring.
+- **Refresh indicator**: opacity pulse while `refreshing === true`.
+
+#### Dependencies
+
+- `framer-motion@^11.0.0` — animations
+- `react-markdown` + `remark-gfm` + `rehype-highlight` (existing) — comment and review body rendering
+
+#### Live Updates
+
+- While the modal is open AND the PR is `OPEN`, the timeline is re-fetched every 45 seconds in the background. Closed/Merged PRs do not poll (their history is immutable).
+- When the modal opens, if the cached entry is older than 5 minutes and the PR is open, a forced refresh is triggered immediately (optimistic invalidation) so a PR opened hours ago doesn't show stale events on reopen.
+- A `Refresh` button in the header forces an immediate refresh at any time.
+- The `Updated X ago` indicator pulses when a refresh is in progress.
+
+#### Entry Points
+
+| Location | Button |
+|----------|--------|
+| PR card in the PR list | ⏱ Timeline |
+| Merge queue card | ⏱ Timeline |
+
 ### Merge Queue
 
 The Merge Queue feature allows users to organize PRs they intend to review or merge, providing a prioritized list across repositories.
@@ -1030,6 +1126,7 @@ The Merge Queue feature allows users to organize PRs they intend to review or me
 | PR State Badge | Queue Item | Shows current PR state (open/closed/merged) |
 | Review Score Badge | Queue Item | Shows review score if PR has been reviewed |
 | New Commits Badge | Queue Item | Indicates new commits since last review |
+| Timeline Button | Queue Item | Opens the PR Timelines modal for this PR |
 
 ### Code Review System (Claude CLI Integration)
 
@@ -1512,6 +1609,40 @@ Batch-fetches branch ahead/behind information for open PRs using the GitHub comp
 **Error Responses**:
 - `400`: Missing `prs` in request body
 - `500`: Failed to fetch divergence data
+
+---
+
+**GET** `/api/repos/<owner>/<repo>/prs/<pr_number>/timeline`
+
+Returns a normalized chronological event timeline for a single PR. Cached in SQLite with state-aware TTL — closed/merged PRs cached indefinitely (immutable), open PRs cached 5 minutes with stale-while-revalidate.
+
+**Query Parameters**:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `refresh` | string | Set to "true" to bypass cache and force a fresh fetch |
+
+**Response**:
+```json
+{
+  "events": [
+    { "id": "opened-...", "type": "opened", "created_at": "...", "actor": {...} },
+    { "id": "committed-...", "type": "committed", "sha": "...", "short_sha": "abc1234", "message": "...", ... }
+  ],
+  "pr_state": "OPEN",
+  "last_updated": "2026-04-16T14:02:11Z",
+  "cached": false,
+  "stale": false,
+  "refreshing": false
+}
+```
+
+**Event Types**: `opened`, `committed`, `commented`, `reviewed`, `review_requested`, `ready_for_review`, `convert_to_draft`, `closed`, `reopened`, `merged`, `head_ref_force_pushed`.
+
+**Error Responses**:
+- `404`: PR not found
+- `503`: GitHub API error (falls back to stale cache if available)
+- `500`: Internal server error
 
 ---
 
@@ -2705,6 +2836,7 @@ The formal JSON Schema specification is available at `backend/services/review_sc
 - Vite (build tool)
 - Zustand (state management)
 - Recharts (interactive line charts)
+- Framer Motion (timeline modal animations)
 - Node.js 18+
 
 ### File Structure
@@ -2736,7 +2868,7 @@ gh-pr-explorer/
 │   │   ├── merge_queue.py          # MergeQueueDB
 │   │   ├── settings.py             # SettingsDB
 │   │   ├── dev_stats.py            # DeveloperStatsDB
-│   │   └── cache_stores.py         # LifecycleCacheDB, WorkflowCacheDB, ContributorTSCacheDB, CodeActivityCacheDB
+│   │   └── cache_stores.py         # LifecycleCacheDB, WorkflowCacheDB, ContributorTSCacheDB, CodeActivityCacheDB, TimelineCacheDB
 │   │
 │   ├── services/                   # Business logic layer
 │   │   ├── github_service.py       # gh CLI wrapper: run_command, parse_json, fetch_stats_api
@@ -2748,6 +2880,7 @@ gh-pr-explorer/
 │   │   ├── workflow_service.py     # Parallel batch workflow data fetching
 │   │   ├── activity_service.py     # Code activity data from 3 stats APIs
 │   │   ├── contributor_service.py  # Contributor time series transform
+│   │   ├── timeline_service.py     # PR timeline: normalize + fetch + cache-aware get
 │   │   ├── review_schema.py        # Review JSON schema, validation, JSON<->markdown conversion
 │   │   ├── review_schema_spec.json # Formal JSON Schema file for external tools/agents
 │   │   └── repo_stats_service.py       # Parallel repo stats fetching + LOC analysis
@@ -2778,14 +2911,38 @@ gh-pr-explorer/
 │       ├── settings_routes.py      # /api/settings CRUD
 │       ├── cache_routes.py         # /api/clear-cache
 │       └── repo_stats_routes.py        # /api/repos/.../repo-stats, repo-stats/loc
+│   │
+│   └── tests/                      # Pytest suite
+│       ├── __init__.py
+│       ├── conftest.py             # Adds project root to sys.path
+│       ├── test_timeline_cache_db.py
+│       ├── test_timeline_service.py
+│       └── fixtures/
+│           └── timeline_raw.json
 │
 ├── frontend/                       # React + TypeScript frontend
 │   ├── src/
 │   │   ├── api/                    # Type-safe API modules
+│   │   │   └── timeline.ts         # fetchTimeline()
 │   │   ├── components/             # React components by feature
 │   │   │   ├── /repo-stats       # RepoStatsView
+│   │   │   └── timeline/           # PR Timelines modal
+│   │   │       ├── TimelineModal.tsx
+│   │   │       ├── TimelineHeader.tsx
+│   │   │       ├── TimelineFilters.tsx
+│   │   │       ├── TimelineView.tsx
+│   │   │       ├── TimelineEventRow.tsx
+│   │   │       └── eventBodies/
+│   │   │           ├── CommitBody.tsx
+│   │   │           ├── CommentBody.tsx
+│   │   │           ├── ReviewBody.tsx
+│   │   │           ├── StateChangeBody.tsx
+│   │   │           ├── ReviewRequestedBody.tsx
+│   │   │           └── ForcePushBody.tsx
 │   │   ├── stores/                 # Zustand state management
+│   │   │   └── useTimelineStore.ts # Timeline modal state + timelineKey helper
 │   │   ├── styles/                 # CSS styles
+│   │   │   └── timeline.css        # Timeline modal styles
 │   │   ├── types/                  # TypeScript types
 │   │   ├── App.tsx                 # Root component
 │   │   └── main.tsx                # Entry point

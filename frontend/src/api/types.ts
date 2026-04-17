@@ -740,3 +740,110 @@ export interface VerdictResponse {
     minor?: { posted: number; found: number; failed_titles: string[] }
   }
 }
+
+// ============================================================================
+// PR Timeline types
+// ============================================================================
+
+export type TimelineEventType =
+  | 'opened'
+  | 'committed'
+  | 'commented'
+  | 'reviewed'
+  | 'review_requested'
+  | 'ready_for_review'
+  | 'convert_to_draft'
+  | 'closed'
+  | 'reopened'
+  | 'merged'
+  | 'head_ref_force_pushed'
+
+export interface TimelineActor {
+  login: string
+  avatar_url: string
+}
+
+export interface TimelineEventBase {
+  id: string
+  type: TimelineEventType
+  created_at: string
+  actor: TimelineActor | null
+}
+
+export interface OpenedEvent extends TimelineEventBase {
+  type: 'opened'
+}
+
+export interface CommittedEvent extends TimelineEventBase {
+  type: 'committed'
+  sha: string
+  short_sha: string
+  message: string
+}
+
+export interface CommentedEvent extends TimelineEventBase {
+  type: 'commented'
+  body: string
+  html_url: string
+}
+
+export interface ReviewedEvent extends TimelineEventBase {
+  type: 'reviewed'
+  state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED'
+  body: string
+  html_url: string
+}
+
+export interface ReviewRequestedEvent extends TimelineEventBase {
+  type: 'review_requested'
+  requested_reviewer: TimelineActor | null
+}
+
+export interface ReadyForReviewEvent extends TimelineEventBase {
+  type: 'ready_for_review'
+}
+
+export interface ConvertToDraftEvent extends TimelineEventBase {
+  type: 'convert_to_draft'
+}
+
+export interface ClosedEvent extends TimelineEventBase {
+  type: 'closed'
+}
+
+export interface ReopenedEvent extends TimelineEventBase {
+  type: 'reopened'
+}
+
+export interface MergedEvent extends TimelineEventBase {
+  type: 'merged'
+  sha: string
+}
+
+export interface ForcePushedEvent extends TimelineEventBase {
+  type: 'head_ref_force_pushed'
+  before: string
+  after: string
+}
+
+export type TimelineEvent =
+  | OpenedEvent
+  | CommittedEvent
+  | CommentedEvent
+  | ReviewedEvent
+  | ReviewRequestedEvent
+  | ReadyForReviewEvent
+  | ConvertToDraftEvent
+  | ClosedEvent
+  | ReopenedEvent
+  | MergedEvent
+  | ForcePushedEvent
+
+export interface TimelineResponse {
+  events: TimelineEvent[]
+  pr_state: 'OPEN' | 'CLOSED' | 'MERGED'
+  last_updated: string
+  cached: boolean
+  stale: boolean
+  refreshing: boolean
+}
