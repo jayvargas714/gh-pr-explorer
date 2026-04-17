@@ -976,6 +976,66 @@ The modal displays full review content with:
 - Link to original review file
 - **Copy Markdown Button**: Copies raw review content to clipboard for easy sharing
 
+### PR Timelines
+
+The PR Timelines feature provides a focused, single-PR deep-dive view showing every lifecycle event as a vertical animated timeline.
+
+#### How It Works
+
+1. User clicks the ⏱ (Timeline) button on any PR card.
+2. A full-screen modal opens and fetches the PR's normalized event timeline via `GET /api/repos/:owner/:repo/prs/:n/timeline`.
+3. Events are rendered as a vertical rail with color-coded dots and expandable, markdown-rendered bodies.
+4. Filter chips toggle groups of event types on/off (Commits, Reviews, Comments, State).
+5. Closed/merged PRs are served from indefinite SQLite cache; open PRs use a 5-minute TTL with stale-while-revalidate and manual refresh.
+
+#### Event Types
+
+| Event | Dot color | Source |
+|-------|-----------|--------|
+| opened | indigo | Synthesized from PR `createdAt` |
+| committed | emerald | `committed` |
+| commented | amber | `commented` |
+| reviewed (APPROVED) | emerald | `reviewed` with state APPROVED |
+| reviewed (CHANGES_REQUESTED) | red | `reviewed` with state CHANGES_REQUESTED |
+| reviewed (COMMENTED) | amber | `reviewed` with state COMMENTED |
+| review_requested | slate | `review_requested` |
+| ready_for_review / convert_to_draft | sky | `ready_for_review` / `convert_to_draft` |
+| closed | red | `closed` |
+| reopened | indigo | `reopened` |
+| merged | violet | `merged` |
+| head_ref_force_pushed | amber | `head_ref_force_pushed` |
+
+#### UI Components
+
+| Component | Responsibility |
+|-----------|----------------|
+| `TimelineModal` | Overlay + shell, keyboard handling, scroll lock |
+| `TimelineHeader` | PR title, refresh, updated indicator, close |
+| `TimelineFilters` | Event-type chip toggles |
+| `TimelineView` | Vertical rail, stagger-in animation, empty/error states |
+| `TimelineEventRow` | Card shell, dot, expand/collapse, body dispatch |
+| `eventBodies/*` | Per-type renderers (Commit, Comment, Review, StateChange, ReviewRequested, ForcePush) |
+
+#### Interaction Model
+
+- **Expand**: click the dot OR the card header. Any number of events can be expanded simultaneously (multi-expand).
+- **Filter**: click a chip to hide/show that event group.
+- **Refresh**: click the ↻ button in the header to force a fresh fetch.
+- **Close**: click outside the shell, press Esc, or click ×.
+
+#### Animations
+
+All use Framer Motion spring physics:
+- **Modal enter/exit**: fade + slide + scale spring.
+- **Stagger-in**: events fade+slide from below with 40ms stagger (first 20 only).
+- **Expand/collapse**: AnimatePresence height spring.
+- **Refresh indicator**: opacity pulse while `refreshing === true`.
+
+#### Dependencies
+
+- `framer-motion@^11.0.0` — animations
+- `react-markdown` + `remark-gfm` + `rehype-highlight` (existing) — comment and review body rendering
+
 ### Merge Queue
 
 The Merge Queue feature allows users to organize PRs they intend to review or merge, providing a prioritized list across repositories.
@@ -2761,6 +2821,7 @@ The formal JSON Schema specification is available at `backend/services/review_sc
 - Vite (build tool)
 - Zustand (state management)
 - Recharts (interactive line charts)
+- Framer Motion (timeline modal animations)
 - Node.js 18+
 
 ### File Structure
@@ -2847,10 +2908,26 @@ gh-pr-explorer/
 ├── frontend/                       # React + TypeScript frontend
 │   ├── src/
 │   │   ├── api/                    # Type-safe API modules
+│   │   │   └── timeline.ts         # fetchTimeline()
 │   │   ├── components/             # React components by feature
 │   │   │   ├── /repo-stats       # RepoStatsView
+│   │   │   └── timeline/           # PR Timelines modal
+│   │   │       ├── TimelineModal.tsx
+│   │   │       ├── TimelineHeader.tsx
+│   │   │       ├── TimelineFilters.tsx
+│   │   │       ├── TimelineView.tsx
+│   │   │       ├── TimelineEventRow.tsx
+│   │   │       └── eventBodies/
+│   │   │           ├── CommitBody.tsx
+│   │   │           ├── CommentBody.tsx
+│   │   │           ├── ReviewBody.tsx
+│   │   │           ├── StateChangeBody.tsx
+│   │   │           ├── ReviewRequestedBody.tsx
+│   │   │           └── ForcePushBody.tsx
 │   │   ├── stores/                 # Zustand state management
+│   │   │   └── useTimelineStore.ts # Timeline modal state + timelineKey helper
 │   │   ├── styles/                 # CSS styles
+│   │   │   └── timeline.css        # Timeline modal styles
 │   │   ├── types/                  # TypeScript types
 │   │   ├── App.tsx                 # Root component
 │   │   └── main.tsx                # Entry point
