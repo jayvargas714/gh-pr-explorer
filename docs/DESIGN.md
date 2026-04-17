@@ -982,7 +982,7 @@ The PR Timelines feature provides a focused, single-PR deep-dive view showing ev
 
 #### How It Works
 
-1. User clicks the ⏱ (Timeline) button on any PR card.
+1. User clicks the ⏱ (Timeline) button on any PR card or merge queue card.
 2. A full-screen modal opens and fetches the PR's normalized event timeline via `GET /api/repos/:owner/:repo/prs/:n/timeline`.
 3. Events are rendered as a vertical rail with color-coded dots and expandable, markdown-rendered bodies.
 4. Filter chips toggle groups of event types on/off (Commits, Reviews, Comments, State).
@@ -1035,6 +1035,20 @@ All use Framer Motion spring physics:
 
 - `framer-motion@^11.0.0` — animations
 - `react-markdown` + `remark-gfm` + `rehype-highlight` (existing) — comment and review body rendering
+
+#### Live Updates
+
+- While the modal is open AND the PR is `OPEN`, the timeline is re-fetched every 45 seconds in the background. Closed/Merged PRs do not poll (their history is immutable).
+- When the modal opens, if the cached entry is older than 5 minutes and the PR is open, a forced refresh is triggered immediately (optimistic invalidation) so a PR opened hours ago doesn't show stale events on reopen.
+- A `Refresh` button in the header forces an immediate refresh at any time.
+- The `Updated X ago` indicator pulses when a refresh is in progress.
+
+#### Entry Points
+
+| Location | Button |
+|----------|--------|
+| PR card in the PR list | ⏱ Timeline |
+| Merge queue card | ⏱ Timeline |
 
 ### Merge Queue
 
@@ -1112,6 +1126,7 @@ The Merge Queue feature allows users to organize PRs they intend to review or me
 | PR State Badge | Queue Item | Shows current PR state (open/closed/merged) |
 | Review Score Badge | Queue Item | Shows review score if PR has been reviewed |
 | New Commits Badge | Queue Item | Indicates new commits since last review |
+| Timeline Button | Queue Item | Opens the PR Timelines modal for this PR |
 
 ### Code Review System (Claude CLI Integration)
 
