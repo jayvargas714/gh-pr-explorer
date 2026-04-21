@@ -37,11 +37,12 @@ export function TimelineModal() {
     <AnimatePresence>
       {openFor && (
         <motion.div
+          key="timeline-modal"
           className="tl-modal__overlay"
           onClick={close}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
+          exit={{ opacity: 0, pointerEvents: 'none' }}
           transition={{ duration: 0.18 }}
           role="dialog"
           aria-modal="true"
