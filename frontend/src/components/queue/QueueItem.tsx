@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { useAccountStore } from '../../stores/useAccountStore'
 import { useReviewStore } from '../../stores/useReviewStore'
 import { useTimelineStore } from '../../stores/useTimelineStore'
 import { removeFromQueue } from '../../api/queue'
@@ -44,6 +45,9 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
   const [removing, setRemoving] = useState(false)
   const openReviewViewer = useReviewStore((state) => state.openReviewViewer)
   const openTimeline = useTimelineStore((state) => state.open)
+  const myLogin = useAccountStore((state) => state.accounts.find((a) => a.is_personal)?.login)
+  const approvedByMe =
+    !!myLogin && !!item.currentReviewers?.some((r) => r.login === myLogin && r.state === 'APPROVED')
 
   const {
     attributes,
@@ -125,7 +129,7 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
       <div
         ref={setNodeRef}
         style={style}
-        className={`mx-queue-item${isDragging ? ' mx-queue-item--dragging' : ''}`}
+        className={`mx-queue-item${isDragging ? ' mx-queue-item--dragging' : ''}${approvedByMe ? ' mx-queue-item--approved-by-me' : ''}`}
       >
         <div className="mx-queue-item__header">
           <button

@@ -35,6 +35,10 @@ export function PRCard({ pr }: PRCardProps) {
   const divergence = prDivergence[pr.number]
   const inQueue = isInQueue(pr.number, repoFullName)
 
+  const myLogin = useAccountStore((state) => state.accounts.find((a) => a.is_personal)?.login)
+  const approvedByMe =
+    !!myLogin && !!pr.currentReviewers?.some((r) => r.login === myLogin && r.state === 'APPROVED')
+
   const handleQueueToggle = async () => {
     if (queueLoading) return
     try {
@@ -103,7 +107,7 @@ export function PRCard({ pr }: PRCardProps) {
   }
 
   return (
-    <Card className="mx-pr-card" hover>
+    <Card className={`mx-pr-card${approvedByMe ? ' mx-pr-card--approved-by-me' : ''}`} hover>
       <div className="mx-pr-card__header">
         <div className="mx-pr-card__title-area">
           <a

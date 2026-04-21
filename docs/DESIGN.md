@@ -884,6 +884,17 @@ Shows how far behind the base branch each open PR's head branch is:
 
 Divergence data is automatically fetched after the PR list loads. The backend uses `ThreadPoolExecutor` (5 workers) to batch-fetch the GitHub compare API for all open PRs in parallel. The badge displays the `behind_by` count from the GitHub compare endpoint.
 
+#### Approved-by-Me Card Highlight
+
+PR cards in the Pull Requests list and merge queue items are tinted with a subtle neon-green background, border, and glow when the current user has an `APPROVED` review on the PR. Approval is detected by cross-referencing the personal account's `login` (from `useAccountStore.accounts.find(a => a.is_personal)`) against `currentReviewers[].login` with `state === 'APPROVED'`.
+
+| Surface | Modifier class |
+|---------|----------------|
+| PR card (list) | `mx-pr-card--approved-by-me` |
+| Queue item (merge queue) | `mx-queue-item--approved-by-me` |
+
+Tint colors derive from `--mx-color-success` / `--mx-color-success-bg`, so the highlight adapts to both dark and light themes.
+
 ### Settings Persistence
 
 User settings are automatically saved to the SQLite database and restored on page load:

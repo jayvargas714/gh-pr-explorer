@@ -1071,3 +1071,15 @@
     flex-direction: column;
   }
 }
+
+/* Neon-green tint for queue items approved by the current user */
+.mx-queue-item--approved-by-me {
+  background-color: var(--mx-color-success-bg);
+  border-color: color-mix(in srgb, var(--mx-color-success) 45%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--mx-color-success) 18%, transparent);
+}
+
+.mx-queue-item--approved-by-me:hover {
+  border-color: color-mix(in srgb, var(--mx-color-success) 70%, transparent);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--mx-color-success) 28%, transparent);
+}

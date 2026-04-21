@@ -429,3 +429,15 @@
     width: 100%;
   }
 }
+
+/* Neon-green tint for PRs approved by the current user */
+.mx-pr-card--approved-by-me {
+  background-color: var(--mx-color-success-bg);
+  border-color: color-mix(in srgb, var(--mx-color-success) 45%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--mx-color-success) 18%, transparent);
+}
+
+.mx-pr-card--approved-by-me.mx-card--hover:hover {
+  border-color: color-mix(in srgb, var(--mx-color-success) 70%, transparent);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--mx-color-success) 28%, transparent);
+}
