@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -13,6 +13,62 @@ import type {
   ReviewDetail,
   ReviewIssueJSON,
 } from '../../api/types'
+
+/** Build a markdown summary table of inline issues for the verdict body. */
+const buildInlineSummaryTable = (comments: VerdictInlineComment[]): string => {
+  if (comments.length === 0) return ''
+
+  const severityRank: Record<'critical' | 'major' | 'minor', number> = {
+    critical: 0,
+    major: 1,
+    minor: 2,
+  }
+  const severityLabel: Record<'critical' | 'major' | 'minor', string> = {
+    critical: 'Critical',
+    major: 'Major',
+    minor: 'Minor',
+  }
+
+  // Stable sort: critical → major → minor, preserving original order within each group
+  const indexed = comments.map((c, i) => ({ c, i }))
+  indexed.sort((a, b) => {
+    const aKey = (a.c.section ?? '') as 'critical' | 'major' | 'minor'
+    const bKey = (b.c.section ?? '') as 'critical' | 'major' | 'minor'
+    const ra = severityRank[aKey] ?? 99
+    const rb = severityRank[bKey] ?? 99
+    if (ra !== rb) return ra - rb
+    return a.i - b.i
+  })
+
+  const escapeCell = (s: string): string =>
+    s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').trim()
+
+  const formatLoc = (c: VerdictInlineComment): string => {
+    if (!c.path) return '—'
+    let loc = c.path
+    if (c.start_line != null && c.end_line != null && c.start_line !== c.end_line) {
+      loc += `:${c.start_line}-${c.end_line}`
+    } else if (c.start_line != null) {
+      loc += `:${c.start_line}`
+    }
+    return `\`${loc}\``
+  }
+
+  const rows = indexed.map(({ c }) => {
+    const sectionKey = (c.section ?? '') as 'critical' | 'major' | 'minor'
+    const sev = severityLabel[sectionKey] ?? '—'
+    const title = escapeCell(c.title ?? '(untitled)')
+    return `| ${sev} | ${title} | ${formatLoc(c)} |`
+  })
+
+  return [
+    `**Inline issues posted (${comments.length})**`,
+    '',
+    '| Severity | Issue | Location |',
+    '|----------|-------|----------|',
+    ...rows,
+  ].join('\n')
+}
 
 interface VerdictModalProps {
   reviewId: number
@@ -344,21 +400,6 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
     })
   }
 
-  /** Build the body text for the verdict (excludes inline sections). */
-  const composeBody = (): string => {
-    const parts: string[] = []
-    if (customText.trim()) {
-      parts.push(customText.trim())
-    }
-    for (const section of sections) {
-      if (enabledSections.has(section.key) && !inlineSections.has(section.key)) {
-        const content = editedContent[section.key] ?? section.content
-        parts.push(`**${section.heading}**\n\n${content}`)
-      }
-    }
-    return parts.join('\n\n---\n\n')
-  }
-
   /** Map section keys to backend section types. */
   const sectionKeyToType = (key: string): string | undefined => {
     if (key === 'critical-issues') return 'critical'
@@ -395,11 +436,37 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
     return comments
   }
 
+  const inlineCommentsMemo = useMemo(
+    () => buildInlineComments(),
+    [sections, enabledSections, inlineSections, structuredIssues]
+  )
+
+  /** Build the body text for the verdict (excludes inline sections). */
+  const composeBody = (): string => {
+    const parts: string[] = []
+
+    const table = buildInlineSummaryTable(inlineCommentsMemo)
+    if (table) {
+      parts.push(table)
+    }
+
+    if (customText.trim()) {
+      parts.push(customText.trim())
+    }
+    for (const section of sections) {
+      if (enabledSections.has(section.key) && !inlineSections.has(section.key)) {
+        const content = editedContent[section.key] ?? section.content
+        parts.push(`**${section.heading}**\n\n${content}`)
+      }
+    }
+    return parts.join('\n\n---\n\n')
+  }
+
   const [inlineWarning, setInlineWarning] = useState<string | null>(null)
 
   const handleSubmit = async () => {
     const body = composeBody()
-    const inlineComments = buildInlineComments()
+    const inlineComments = inlineCommentsMemo
 
     if (!body && inlineComments.length === 0) {
       setError('Please add custom text, enable a review section, or mark sections for inline posting')
@@ -797,7 +864,7 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
                   </ReactMarkdown>
                   {hasInlineContent && (
                     <div className="mx-verdict-modal__preview-inline-note">
-                      + {buildInlineComments().length} inline comment(s) will be posted on specific lines
+                      + {inlineCommentsMemo.length} inline comment(s) will be posted on specific lines
                     </div>
                   )}
                 </>

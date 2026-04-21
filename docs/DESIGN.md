@@ -1309,9 +1309,12 @@ Each section can be individually toggled on/off and previewed before submission.
 
 #### Composed Body Format
 
-The final review body is assembled from:
-1. Custom text (if provided)
-2. Enabled review sections (each preceded by a `---` separator and bold heading)
+The final review body is assembled from (joined by `\n\n---\n\n`):
+1. **Inline issues summary table** (prepended automatically when one or more inline comments will be posted) — a GFM markdown table with `Severity | Issue | Location` columns, sorted critical → major → minor with stable ordering within each severity. Heading: `**Inline issues posted (N)**`. Omitted entirely when no inline comments are selected.
+2. Custom text (if provided)
+3. Enabled review sections (each preceded by a bold heading)
+
+The summary table gives the GitHub review entry a quick index into the diff comments so an Approve/Request-Changes/Comment verdict is not effectively empty when all content has been posted inline.
 
 ---
 
