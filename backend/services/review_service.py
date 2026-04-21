@@ -8,7 +8,13 @@ from pathlib import Path
 
 from backend.config import get_reviews_dir
 from backend.services.github_service import fetch_pr_head_sha, fetch_pr_state
-from backend.services.review_schema import markdown_to_json, validate_review_json, json_to_markdown, SCHEMA_VERSION
+from backend.services.review_schema import (
+    extract_markdown_summary,
+    markdown_to_json,
+    validate_review_json,
+    json_to_markdown,
+    SCHEMA_VERSION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +87,18 @@ def save_review_to_db(key, review, status, reviews_db):
                         logger.info(f"Converted markdown review to JSON for {key}")
                     except Exception as e:
                         logger.warning(f"Could not read/convert review file {review_file}: {e}")
+
+                # Override JSON summary with verbatim markdown summary when both
+                # files exist. The agent produces the two files independently
+                # and often reworks the JSON summary; the markdown is canonical.
+                if review_json_data is not None and review_path.exists():
+                    try:
+                        md_content = review_path.read_text(encoding="utf-8")
+                        md_summary = extract_markdown_summary(md_content)
+                        if md_summary:
+                            review_json_data["summary"] = md_summary
+                    except Exception as e:
+                        logger.warning(f"Could not extract markdown summary for {key}: {e}")
 
             # Build content_json string
             if review_json_data is None:

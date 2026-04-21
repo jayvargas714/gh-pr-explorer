@@ -452,8 +452,23 @@ def _parse_metadata(content: str, overrides: Optional[Dict[str, Any]] = None) ->
 
 
 def _parse_summary(content: str) -> str:
-    """Extract the summary paragraph."""
-    # Look for **Summary** section
+    """Extract the summary paragraph verbatim from the markdown.
+
+    Handles three heading styles the reviewer agent produces:
+        **Summary**
+        ## Summary
+        ### Summary
+    """
+    # Heading-style: "## Summary" or "### Summary" — terminator is any
+    # subsequent section heading or horizontal rule.
+    m = re.search(
+        r'^#{2,6}\s*Summary\s*\n+(.*?)(?=\n#{2,6}\s|\n---\s*\n|\n\*\*(?:Critical|Major|Minor|Positive|Score|Recommendations)\*\*)',
+        content, re.DOTALL | re.IGNORECASE | re.MULTILINE
+    )
+    if m:
+        return m.group(1).strip()
+
+    # Bold-style: **Summary**
     m = re.search(
         r'\*\*Summary\*\*\s*\n+(.*?)(?=\n---|\n\*\*(?:Critical|Major|Minor|Positive|Score|Recommendations))',
         content, re.DOTALL | re.IGNORECASE
@@ -467,11 +482,16 @@ def _parse_summary(content: str) -> str:
         candidate = parts[1].strip()
         # Skip if it starts with a section heading
         if candidate and not re.match(r'\*\*(?:Critical|Major|Minor)', candidate, re.IGNORECASE):
-            # Remove leading **Summary** if present
-            candidate = re.sub(r'^\*\*Summary\*\*\s*\n*', '', candidate).strip()
+            # Remove leading **Summary** or ## Summary if present
+            candidate = re.sub(r'^(?:\*\*Summary\*\*|#{2,6}\s*Summary)\s*\n*', '', candidate).strip()
             return candidate
 
     return ""
+
+
+def extract_markdown_summary(md_content: str) -> str:
+    """Public wrapper around _parse_summary for use by other services."""
+    return _parse_summary(md_content)
 
 
 # Section heading patterns and their types
