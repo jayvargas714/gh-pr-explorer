@@ -4,7 +4,7 @@ import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
 
 export function Header() {
-  const { darkMode, toggleTheme, toggleQueuePanel, toggleHistoryPanel } = useUIStore()
+  const { darkMode, toggleTheme, toggleQueuePanel, toggleHistoryPanel, toggleSwimlaneBoard } = useUIStore()
   const queueCount = useQueueStore((state) => state.getQueueCount())
 
   return (
@@ -31,6 +31,17 @@ export function Header() {
               {queueCount}
             </Badge>
           )}
+        </Button>
+
+        {/* Swimlane Board Toggle */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={toggleSwimlaneBoard}
+          className="mx-header__action"
+          data-tooltip="Swimlane Board"
+        >
+          <span className="mx-icon">📊</span>
         </Button>
 
         {/* History Toggle */}

@@ -62,7 +62,18 @@ class MergeQueueDB:
                 "SELECT * FROM merge_queue WHERE pr_number = ? AND repo = ?",
                 (pr_number, repo)
             )
-            return dict(cursor.fetchone())
+            row = dict(cursor.fetchone())
+
+        # Auto-assign the new card to the default swimlane.
+        # Imported lazily to avoid circular imports at module load.
+        try:
+            from backend.database import get_swimlanes_db
+            get_swimlanes_db().auto_assign_new_card(row["id"])
+        except Exception as e:
+            logger.warning("Failed to auto-assign queue item %s to default swimlane: %s",
+                           row["id"], e)
+
+        return row
 
     def update_pr_state(self, pr_number: int, repo: str, pr_state: str):
         """Update the PR state for a queue item."""

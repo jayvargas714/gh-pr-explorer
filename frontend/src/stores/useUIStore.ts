@@ -21,6 +21,10 @@ interface UIState {
   setShowHistoryPanel: (show: boolean) => void
   toggleHistoryPanel: () => void
 
+  showSwimlaneBoard: boolean
+  setShowSwimlaneBoard: (show: boolean) => void
+  toggleSwimlaneBoard: () => void
+
   // Global loading/error
   globalLoading: boolean
   setGlobalLoading: (loading: boolean) => void
@@ -55,6 +59,10 @@ export const useUIStore = create<UIState>((set) => ({
   showHistoryPanel: false,
   setShowHistoryPanel: (show) => set({ showHistoryPanel: show }),
   toggleHistoryPanel: () => set((state) => ({ showHistoryPanel: !state.showHistoryPanel })),
+
+  showSwimlaneBoard: false,
+  setShowSwimlaneBoard: (show) => set({ showSwimlaneBoard: show }),
+  toggleSwimlaneBoard: () => set((state) => ({ showSwimlaneBoard: !state.showSwimlaneBoard })),
 
   // Global loading/error
   globalLoading: false,

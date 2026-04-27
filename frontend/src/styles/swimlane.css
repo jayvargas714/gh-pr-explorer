@@ -1,0 +1,296 @@
+/* ============================================================================
+   Swimlane Board (Trello-style Kanban view of merge queue)
+   ============================================================================ */
+
+/* Color tokens for lane accents (matrix UI palette) */
+.mx-swl-color--success { --swl-accent: var(--mx-color-success); }
+.mx-swl-color--warning { --swl-accent: var(--mx-color-warning); }
+.mx-swl-color--error   { --swl-accent: var(--mx-color-error); }
+.mx-swl-color--info    { --swl-accent: var(--mx-color-info); }
+.mx-swl-color--primary { --swl-accent: var(--mx-color-primary); }
+.mx-swl-color--accent  { --swl-accent: var(--mx-color-accent); }
+.mx-swl-color--violet  { --swl-accent: #a78bfa; }
+.mx-swl-color--slate   { --swl-accent: var(--mx-color-text-muted); }
+
+/* Modal overlay + shell (slide-from-right). Mirrors timeline.css conventions. */
+.mx-swl-modal__overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  z-index: 1000;
+}
+
+.mx-swl-modal__shell {
+  background: var(--mx-color-surface, #131d2a);
+  border-left: 1px solid var(--mx-color-border, #2a2a2a);
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: -10px 0 40px rgba(0, 0, 0, 0.5);
+}
+
+.mx-swl-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--mx-color-border, #2a2a2a);
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.mx-swl-modal__title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.mx-swl-modal__title h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--mx-color-text, #e5e7eb);
+}
+
+.mx-swl-modal__count {
+  font-size: 12px;
+  color: var(--mx-color-text-muted);
+}
+
+.mx-swl-modal__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.mx-swl-modal__body {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.mx-swl-modal__loading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--mx-color-text-muted);
+}
+
+/* Add-lane form in header */
+.mx-swl-add-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--mx-color-border);
+  border-radius: 8px;
+  background: var(--mx-color-surface-hover, rgba(255, 255, 255, 0.03));
+}
+
+.mx-swl-add-form__name {
+  background: transparent;
+  border: 0;
+  color: var(--mx-color-text);
+  font-size: 13px;
+  outline: none;
+  width: 160px;
+}
+
+.mx-swl-add-form__name::placeholder {
+  color: var(--mx-color-text-muted);
+}
+
+/* Color picker swatches */
+.mx-swl-color-picker {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.mx-swl-color-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--swl-accent, var(--mx-color-info));
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+
+.mx-swl-color-swatch:hover {
+  transform: scale(1.12);
+}
+
+.mx-swl-color-swatch--active {
+  border-color: var(--mx-color-text, #e5e7eb);
+  box-shadow: 0 0 0 2px var(--mx-color-surface);
+}
+
+/* Make swatch pickers in the header inherit per-color via class */
+.mx-swl-color-swatch.mx-swl-color-swatch--success { background: var(--mx-color-success); }
+.mx-swl-color-swatch.mx-swl-color-swatch--warning { background: var(--mx-color-warning); }
+.mx-swl-color-swatch.mx-swl-color-swatch--error   { background: var(--mx-color-error); }
+.mx-swl-color-swatch.mx-swl-color-swatch--info    { background: var(--mx-color-info); }
+.mx-swl-color-swatch.mx-swl-color-swatch--primary { background: var(--mx-color-primary); }
+.mx-swl-color-swatch.mx-swl-color-swatch--accent  { background: var(--mx-color-accent); }
+.mx-swl-color-swatch.mx-swl-color-swatch--violet  { background: #a78bfa; }
+.mx-swl-color-swatch.mx-swl-color-swatch--slate   { background: var(--mx-color-text-muted); }
+
+/* Board: horizontal flex of columns with horizontal scroll */
+.mx-swl-board {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  gap: 16px;
+  padding: 18px 24px 28px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.mx-swl-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mx-color-text-muted);
+  padding: 40px;
+}
+
+/* Column */
+.mx-swl-column {
+  --swl-accent: var(--mx-color-info);
+  flex: 0 0 360px;
+  width: 360px;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--swl-accent) 6%, var(--mx-color-surface));
+  border: 1px solid var(--mx-color-border);
+  border-left: 3px solid var(--swl-accent);
+  border-radius: 12px;
+  overflow: hidden;
+  max-height: 100%;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.mx-swl-column--success { --swl-accent: var(--mx-color-success); }
+.mx-swl-column--warning { --swl-accent: var(--mx-color-warning); }
+.mx-swl-column--error   { --swl-accent: var(--mx-color-error); }
+.mx-swl-column--info    { --swl-accent: var(--mx-color-info); }
+.mx-swl-column--primary { --swl-accent: var(--mx-color-primary); }
+.mx-swl-column--accent  { --swl-accent: var(--mx-color-accent); }
+.mx-swl-column--violet  { --swl-accent: #a78bfa; }
+.mx-swl-column--slate   { --swl-accent: var(--mx-color-text-muted); }
+
+.mx-swl-column--over {
+  box-shadow: 0 0 0 2px var(--swl-accent), 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.mx-swl-column__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--swl-accent) 14%, transparent);
+  border-bottom: 1px solid var(--mx-color-border);
+  position: relative;
+}
+
+.mx-swl-column__color {
+  flex-shrink: 0;
+  --swl-accent: var(--swl-accent);
+}
+
+.mx-swl-column__name {
+  flex: 1;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--mx-color-text);
+  cursor: text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mx-swl-column__default-tag {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--swl-accent);
+  background: color-mix(in srgb, var(--swl-accent) 16%, transparent);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.mx-swl-column__name-input {
+  flex: 1;
+  background: var(--mx-color-surface);
+  border: 1px solid var(--swl-accent);
+  border-radius: 6px;
+  color: var(--mx-color-text);
+  font-size: 13px;
+  padding: 4px 8px;
+  outline: none;
+}
+
+.mx-swl-column__count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--mx-color-text-muted);
+  background: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  min-width: 24px;
+  text-align: center;
+}
+
+.mx-swl-column__color-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 8px;
+  z-index: 5;
+  padding: 8px;
+  background: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.mx-swl-column__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 80px;
+}
+
+.mx-swl-column__empty {
+  text-align: center;
+  color: var(--mx-color-text-muted);
+  font-size: 12px;
+  padding: 18px 8px;
+  border: 1px dashed var(--mx-color-border);
+  border-radius: 8px;
+  opacity: 0.7;
+}
+
+/* Light mode tweaks: rely on CSS-vars; no overrides needed since all colors are tokens. */

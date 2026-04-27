@@ -15,6 +15,7 @@ import { ReviewViewer } from './components/reviews/ReviewViewer'
 import { HistoryPanel } from './components/reviews/HistoryPanel'
 import { ReviewPollingManager } from './components/reviews/ReviewPollingManager'
 import { TimelineModal } from './components/timeline/TimelineModal'
+import { SwimlaneModal } from './components/swimlane/SwimlaneModal'
 import { TooltipProvider } from './components/common/Tooltip'
 import { useAccountStore } from './stores/useAccountStore'
 import { useUIStore } from './stores/useUIStore'
@@ -79,6 +80,7 @@ function App() {
       <ReviewViewer />
       <ReviewPollingManager />
       <TimelineModal />
+      <SwimlaneModal />
       <TooltipProvider />
     </>
   )

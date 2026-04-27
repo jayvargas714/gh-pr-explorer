@@ -19,6 +19,7 @@ from backend.routes.pr_routes import pr_bp
 from backend.routes.analytics_routes import analytics_bp
 from backend.routes.workflow_routes import workflow_bp
 from backend.routes.queue_routes import queue_bp
+from backend.routes.swimlane_routes import swimlane_bp
 from backend.routes.review_routes import review_bp
 from backend.routes.history_routes import history_bp
 from backend.routes.settings_routes import settings_bp
@@ -35,6 +36,7 @@ def register_blueprints(app):
     app.register_blueprint(analytics_bp)
     app.register_blueprint(workflow_bp)
     app.register_blueprint(queue_bp)
+    app.register_blueprint(swimlane_bp)
     app.register_blueprint(review_bp)
     app.register_blueprint(history_bp)
     app.register_blueprint(settings_bp)

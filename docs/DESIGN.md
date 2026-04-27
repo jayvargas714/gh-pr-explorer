@@ -176,6 +176,7 @@ The backend is organized as a Python package with clear separation of concerns:
 | `analytics_bp` | `/api/repos/.../stats`, lifecycle-metrics, review-responsiveness, code-activity, contributor-timeseries |
 | `workflow_bp` | `/api/repos/.../workflow-runs` |
 | `queue_bp` | `/api/merge-queue` CRUD, reorder, notes |
+| `swimlane_bp` | `/api/swimlanes` lane CRUD, reorder, default, board, cards/move |
 | `review_bp` | `/api/reviews` CRUD, status, inline-comments, check-new-commits |
 | `history_bp` | `/api/review-history` list, detail, PR reviews, stats, check |
 | `settings_bp` | `/api/settings` CRUD |
@@ -195,6 +196,7 @@ The database module provides SQLite-based persistence for reviews and merge queu
 | `Database` | Base class managing SQLite connection and schema initialization |
 | `ReviewsDB` | Handles review storage, retrieval, and search operations |
 | `MergeQueueDB` | Manages merge queue persistence and ordering |
+| `SwimlanesDB` | Manages swimlane definitions and per-card lane assignments for the Kanban view of the merge queue |
 | `DevStatsDB` | Caches developer statistics with 4-hour TTL for improved performance |
 | `LifecycleCacheDB` | Caches PR lifecycle and review timing data with 2-hour TTL |
 | `WorkflowCacheDB` | Caches workflow runs data with configurable TTL (default 1 hour) for stale-while-revalidate serving |
@@ -346,6 +348,29 @@ CREATE TABLE IF NOT EXISTS pr_timeline_cache (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(repo, pr_number)
 );
+
+-- Swimlanes table: User-defined columns for the Kanban view of the merge queue
+CREATE TABLE IF NOT EXISTS swimlanes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL,            -- one of: success, warning, error, info, primary, accent, violet, slate
+    position INTEGER NOT NULL,
+    is_default INTEGER DEFAULT 0,   -- exactly one row may have is_default=1
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_swimlanes_position ON swimlanes(position);
+
+-- Swimlane assignments table: Which lane each merge queue card sits in
+CREATE TABLE IF NOT EXISTS swimlane_assignments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    queue_item_id INTEGER NOT NULL UNIQUE,
+    swimlane_id INTEGER,
+    position_in_lane INTEGER NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (queue_item_id) REFERENCES merge_queue(id) ON DELETE CASCADE,
+    FOREIGN KEY (swimlane_id) REFERENCES swimlanes(id) ON DELETE SET NULL
+);
+CREATE INDEX idx_swl_assign_lane ON swimlane_assignments(swimlane_id);
 ```
 
 #### ReviewsDB Methods
@@ -1138,6 +1163,58 @@ The Merge Queue feature allows users to organize PRs they intend to review or me
 | Review Score Badge | Queue Item | Shows review score if PR has been reviewed |
 | New Commits Badge | Queue Item | Indicates new commits since last review |
 | Timeline Button | Queue Item | Opens the PR Timelines modal for this PR |
+
+### Swimlane Board (Kanban view of merge queue)
+
+A Trello-style alternative view of the merge queue. Cards displayed inside swimlanes are the *same records* as the merge queue — opening either view shows the same PRs. Lanes express workflow state (e.g., "Reviewing", "Blocked", "Ready to merge"), are user-defined, and are color-coded.
+
+#### How It Works
+
+1. The user clicks the 📊 button in the header. A full-screen overlay slides in from the right (Framer Motion spring, mirroring the Timeline modal pattern).
+2. The board shows all user-defined lanes horizontally. The default lane (`Unassigned`) is seeded on first run and always exists.
+3. Cards can be dragged within a lane (reorder) or between lanes (workflow transition). Both go through `PUT /api/swimlanes/cards/move` with optimistic local state and revert on failure.
+4. New PRs added to the merge queue automatically land in the default lane (auto-assigned by `MergeQueueDB.add_to_queue` via `SwimlanesDB.auto_assign_new_card`).
+5. Removing a PR from the merge queue deletes its swimlane assignment via SQLite `ON DELETE CASCADE`.
+
+#### Lane Properties
+
+| Property | Description |
+|----------|-------------|
+| `id` | DB primary key |
+| `name` | Editable label (double-click the column header to rename) |
+| `color` | One of 8 palette keys: `success`, `warning`, `error`, `info`, `primary`, `accent`, `violet`, `slate`. Each maps to a Matrix UI CSS custom property |
+| `position` | 1-based ordering across lanes |
+| `isDefault` | Exactly one lane is the default; new merge queue items land here |
+
+#### UI Components
+
+| Component | Responsibility |
+|-----------|----------------|
+| `SwimlaneModal` | Full-screen slide-from-right overlay shell, ESC handling, scroll lock |
+| `SwimlaneHeader` | Title, card count, "+ Add Lane" inline form, refresh, close |
+| `SwimlaneBoard` | `DndContext` orchestrating cross-column and within-column DnD |
+| `SwimlaneColumn` | Single lane: colored header, name (inline-editable on double-click), color swatch popover, count badge, `−` delete button, droppable + sortable body |
+| `LaneColorPicker` | 8-swatch grid for color selection |
+| `QueueItem` (reused) | Renders the same card component used in the merge queue panel — verdict, inline comments, notes, timeline, badges, review actions all work identically |
+
+#### Drag-and-drop
+
+Built on dnd-kit (already used by the merge queue panel — no new dependencies). One `DndContext` at the board level, one `useDroppable` per column with id `lane-{id}`, one `SortableContext` per column over its card ids (numeric `merge_queue.id`). `onDragEnd` discriminates by `over.id` shape:
+- numeric → dropped on a card; locate the card's lane and use its index
+- string `lane-{id}` → dropped on empty column space; append to that lane
+
+Lane deletion behavior: if the lane is empty, deletion is silent. If it has cards, a confirm dialog warns the cards will move to the default lane. The backend `SwimlanesDB.delete_lane` then re-homes orphaned cards (whose `swimlane_id` was set to NULL by `ON DELETE SET NULL`) to the new default. The last remaining lane cannot be deleted.
+
+#### Persistence
+
+Two SQLite tables:
+
+```sql
+swimlanes (id, name, color, position, is_default, created_at)
+swimlane_assignments (id, queue_item_id UNIQUE, swimlane_id, position_in_lane, updated_at)
+```
+
+`swimlane_assignments.queue_item_id` cascades from `merge_queue(id)`. `swimlane_assignments.swimlane_id` is `ON DELETE SET NULL`, with `delete_lane()` re-homing orphans to the default. On startup, `create_app()` invokes `ensure_default_lane()` and `reconcile_assignments()` to handle drift and bootstrap the feature on existing databases.
 
 ### Code Review System (Claude CLI Integration)
 
@@ -2030,6 +2107,94 @@ Deletes a note from a queue item.
 {
   "message": "Note deleted"
 }
+```
+
+---
+
+### Swimlane Board
+
+**GET** `/api/swimlanes/board`
+
+Returns the full swimlane board: lanes plus enriched cards grouped by lane id. Cards use the same enrichment as `/api/merge-queue` so the frontend can reuse the `QueueItem` component.
+
+**Response**:
+```json
+{
+  "lanes": [
+    { "id": 1, "name": "Unassigned", "color": "info", "position": 1, "isDefault": true, "createdAt": "..." }
+  ],
+  "cardsByLane": {
+    "1": [ /* MergeQueueItem-shaped objects (see /api/merge-queue) */ ]
+  }
+}
+```
+
+---
+
+**POST** `/api/swimlanes`
+
+Create a lane.
+
+**Request Body**:
+```json
+{ "name": "Reviewing", "color": "warning" }
+```
+
+`color` must be one of: `success`, `warning`, `error`, `info`, `primary`, `accent`, `violet`, `slate`.
+
+**Response** (201):
+```json
+{ "lane": { "id": 5, "name": "Reviewing", "color": "warning", "position": 2, "isDefault": false, "createdAt": "..." } }
+```
+
+---
+
+**PATCH** `/api/swimlanes/<lane_id>`
+
+Rename and/or recolor a lane. Body may contain `name` and/or `color`.
+
+---
+
+**DELETE** `/api/swimlanes/<lane_id>`
+
+Delete a lane. Orphaned cards are re-homed to the (potentially new) default lane and the response includes the current default. Refuses to delete the last remaining lane.
+
+**Response**:
+```json
+{ "message": "Lane deleted", "defaultLane": { "id": 1, "name": "Unassigned", "color": "info", "position": 1, "isDefault": true, "createdAt": "..." } }
+```
+
+---
+
+**PUT** `/api/swimlanes/reorder`
+
+Reorder lanes by ID.
+
+**Request Body**:
+```json
+{ "order": [3, 1, 2] }
+```
+
+---
+
+**PUT** `/api/swimlanes/<lane_id>/default`
+
+Mark the given lane as the default. New merge queue items land here.
+
+---
+
+**PUT** `/api/swimlanes/cards/move`
+
+Move a card to a target lane and 1-based position. Compacts the source and destination lanes atomically.
+
+**Request Body**:
+```json
+{ "queueItemId": 42, "toLaneId": 3, "toPosition": 1 }
+```
+
+**Response**:
+```json
+{ "assignment": { "queueItemId": 42, "swimlaneId": 3, "positionInLane": 1 } }
 ```
 
 ---

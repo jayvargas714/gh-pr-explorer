@@ -847,3 +847,65 @@ export interface TimelineResponse {
   stale: boolean
   refreshing: boolean
 }
+
+// ============================================================================
+// Swimlane Board types
+// ============================================================================
+
+export type SwimlaneColor =
+  | 'success'
+  | 'warning'
+  | 'error'
+  | 'info'
+  | 'primary'
+  | 'accent'
+  | 'violet'
+  | 'slate'
+
+export const SWIMLANE_COLORS: SwimlaneColor[] = [
+  'info',
+  'primary',
+  'success',
+  'warning',
+  'error',
+  'accent',
+  'violet',
+  'slate',
+]
+
+export interface Swimlane {
+  id: number
+  name: string
+  color: SwimlaneColor
+  position: number
+  isDefault: boolean
+  createdAt: string
+}
+
+export interface SwimlaneBoardResponse {
+  lanes: Swimlane[]
+  cardsByLane: { [laneId: string]: MergeQueueItem[] }
+}
+
+export interface SwimlaneResponse {
+  lane: Swimlane
+}
+
+export interface SwimlanesListResponse {
+  lanes: Swimlane[]
+}
+
+export interface SwimlaneDeleteResponse {
+  message: string
+  defaultLane: Swimlane
+}
+
+export interface SwimlaneAssignment {
+  queueItemId: number
+  swimlaneId: number
+  positionInLane: number
+}
+
+export interface SwimlaneMoveResponse {
+  assignment: SwimlaneAssignment
+}

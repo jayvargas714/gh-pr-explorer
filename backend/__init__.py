@@ -9,7 +9,7 @@ from flask import Flask
 
 from backend.config import get_config, PROJECT_ROOT
 from backend.extensions import logger
-from backend.database import get_workflow_cache_db, get_dev_stats_db
+from backend.database import get_workflow_cache_db, get_dev_stats_db, get_swimlanes_db
 from backend.routes import register_blueprints
 
 
@@ -17,6 +17,15 @@ def create_app():
     """Create and configure the Flask application."""
     app = Flask(__name__)
     register_blueprints(app)
+
+    # Seed default swimlane and reconcile any merge_queue rows that predate the feature.
+    try:
+        swimlanes = get_swimlanes_db()
+        swimlanes.ensure_default_lane()
+        swimlanes.reconcile_assignments()
+    except Exception as e:
+        logger.error(f"Failed to initialize swimlanes: {e}")
+
     return app
 
 

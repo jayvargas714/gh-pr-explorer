@@ -6,6 +6,7 @@ from typing import Optional
 from backend.database.base import Database
 from backend.database.reviews import ReviewsDB
 from backend.database.merge_queue import MergeQueueDB
+from backend.database.swimlanes import SwimlanesDB
 from backend.database.settings import SettingsDB
 from backend.database.dev_stats import DeveloperStatsDB
 from backend.database.cache_stores import (
@@ -24,6 +25,7 @@ _db_lock = threading.Lock()
 _db_instance: Optional[Database] = None
 _reviews_db: Optional[ReviewsDB] = None
 _queue_db: Optional[MergeQueueDB] = None
+_swimlanes_db: Optional[SwimlanesDB] = None
 _settings_db: Optional[SettingsDB] = None
 _dev_stats_db: Optional[DeveloperStatsDB] = None
 _lifecycle_cache_db: Optional[LifecycleCacheDB] = None
@@ -62,6 +64,16 @@ def get_queue_db() -> MergeQueueDB:
             if _queue_db is None:
                 _queue_db = MergeQueueDB(db)
     return _queue_db
+
+
+def get_swimlanes_db() -> SwimlanesDB:
+    global _swimlanes_db
+    if _swimlanes_db is None:
+        db = get_database()
+        with _db_lock:
+            if _swimlanes_db is None:
+                _swimlanes_db = SwimlanesDB(db)
+    return _swimlanes_db
 
 
 def get_settings_db() -> SettingsDB:
@@ -155,13 +167,13 @@ def get_timeline_cache_db() -> TimelineCacheDB:
 
 
 __all__ = [
-    "Database", "ReviewsDB", "MergeQueueDB", "SettingsDB",
+    "Database", "ReviewsDB", "MergeQueueDB", "SwimlanesDB", "SettingsDB",
     "DeveloperStatsDB", "LifecycleCacheDB", "WorkflowCacheDB",
     "ContributorTimeSeriesCacheDB", "CodeActivityCacheDB",
     "RepoStatsCacheDB", "RepoLOCCacheDB", "TimelineCacheDB",
-    "get_database", "get_reviews_db", "get_queue_db", "get_settings_db",
-    "get_dev_stats_db", "get_lifecycle_cache_db", "get_workflow_cache_db",
-    "get_contributor_ts_cache_db", "get_code_activity_cache_db",
-    "get_repo_stats_cache_db", "get_repo_loc_cache_db",
-    "get_timeline_cache_db",
+    "get_database", "get_reviews_db", "get_queue_db", "get_swimlanes_db",
+    "get_settings_db", "get_dev_stats_db", "get_lifecycle_cache_db",
+    "get_workflow_cache_db", "get_contributor_ts_cache_db",
+    "get_code_activity_cache_db", "get_repo_stats_cache_db",
+    "get_repo_loc_cache_db", "get_timeline_cache_db",
 ]

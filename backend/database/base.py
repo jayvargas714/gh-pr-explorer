@@ -252,6 +252,41 @@ class Database:
                 ON pr_timeline_cache(repo, pr_number)
             """)
 
+            # Create swimlanes table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS swimlanes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    color TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    is_default INTEGER DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_swimlanes_position
+                ON swimlanes(position)
+            """)
+
+            # Create swimlane_assignments table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS swimlane_assignments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    queue_item_id INTEGER NOT NULL UNIQUE,
+                    swimlane_id INTEGER,
+                    position_in_lane INTEGER NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (queue_item_id) REFERENCES merge_queue(id) ON DELETE CASCADE,
+                    FOREIGN KEY (swimlane_id) REFERENCES swimlanes(id) ON DELETE SET NULL
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_swl_assign_lane
+                ON swimlane_assignments(swimlane_id)
+            """)
+
             # Migration: Add section-posted columns to reviews for existing databases
             cursor.execute("PRAGMA table_info(reviews)")
             reviews_columns = {row[1] for row in cursor.fetchall()}
