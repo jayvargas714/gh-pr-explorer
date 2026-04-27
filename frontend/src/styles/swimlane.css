@@ -21,7 +21,7 @@
   display: flex;
   align-items: stretch;
   justify-content: flex-end;
-  z-index: 1000;
+  z-index: var(--mx-z-modal, 1040);
 }
 
 .mx-swl-modal__shell {
