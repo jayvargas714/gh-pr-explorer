@@ -33,3 +33,6 @@ docs/superpowers/
 .superpowers/
 .worktrees/
 pr_explorer.db*
+
+# Playwright MCP
+.playwright-mcp/
