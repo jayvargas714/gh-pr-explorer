@@ -68,13 +68,18 @@ def _normalize_reviewed(raw: Dict[str, Any], idx: int) -> Optional[Dict[str, Any
     actor = _actor_from(raw.get("user"))
     created_at = raw.get("submitted_at") or raw.get("created_at") or ""
     state = (raw.get("state") or "").upper()
+    body = raw.get("body") or ""
+    # Drop COMMENTED reviews with no body — these are just inline-comment containers
+    # (the actual code comments live on a separate endpoint) and add noise to the timeline.
+    if state == "COMMENTED" and not body.strip():
+        return None
     return {
         "id": _stable_id("reviewed", created_at, actor["login"] if actor else "", idx),
         "type": "reviewed",
         "created_at": created_at,
         "actor": actor,
         "state": state,
-        "body": raw.get("body") or "",
+        "body": body,
         "html_url": raw.get("html_url", ""),
     }
 
@@ -82,12 +87,15 @@ def _normalize_reviewed(raw: Dict[str, Any], idx: int) -> Optional[Dict[str, Any
 def _normalize_commented(raw: Dict[str, Any], idx: int) -> Optional[Dict[str, Any]]:
     actor = _actor_from(raw.get("user") or raw.get("actor"))
     created_at = raw.get("created_at") or ""
+    body = raw.get("body") or ""
+    if not body.strip():
+        return None
     return {
         "id": _stable_id("commented", created_at, actor["login"] if actor else "", idx),
         "type": "commented",
         "created_at": created_at,
         "actor": actor,
-        "body": raw.get("body") or "",
+        "body": body,
         "html_url": raw.get("html_url", ""),
     }
 
@@ -230,6 +238,20 @@ def _now_iso_z() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _strip_empty_body_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Filter out empty-body noise from already-cached timelines."""
+    cleaned: List[Dict[str, Any]] = []
+    for e in events or []:
+        etype = e.get("type")
+        body = (e.get("body") or "").strip()
+        if etype == "commented" and not body:
+            continue
+        if etype == "reviewed" and (e.get("state") or "").upper() == "COMMENTED" and not body:
+            continue
+        cleaned.append(e)
+    return cleaned
+
+
 def _ttl_for_state(pr_state: Optional[str]) -> Optional[int]:
     """Return the TTL (in minutes) for a given PR state.
 
@@ -287,7 +309,7 @@ def get_timeline(
 
         if not is_stale:
             return {
-                "events": cached["data"],
+                "events": _strip_empty_body_events(cached["data"]),
                 "pr_state": cached["pr_state"],
                 "last_updated": cached["updated_at"],
                 "cached": True,
@@ -309,7 +331,7 @@ def get_timeline(
             t.start()
 
         return {
-            "events": cached["data"],
+            "events": _strip_empty_body_events(cached["data"]),
             "pr_state": cached["pr_state"],
             "last_updated": cached["updated_at"],
             "cached": True,
