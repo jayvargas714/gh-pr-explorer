@@ -10,7 +10,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: var(--mx-z-popover, 1050);
   padding: 2.5vh 2.5vw;
 }
 

@@ -99,11 +99,18 @@ export const useSwimlaneStore = create<SwimlaneState>((set, get) => ({
     }
   },
 
+  // Reorder only among non-default lanes; default lane stays pinned at position 1.
   reorderLanesLocal: async (fromIndex, toIndex) => {
     const prevLanes = get().lanes
-    const next = [...prevLanes]
-    const [moved] = next.splice(fromIndex, 1)
-    next.splice(toIndex, 0, moved)
+    const defaultLane = prevLanes.find((l) => l.isDefault)
+    const others = prevLanes.filter((l) => !l.isDefault)
+    if (fromIndex < 0 || fromIndex >= others.length || toIndex < 0 || toIndex >= others.length) {
+      return
+    }
+    const reordered = [...others]
+    const [moved] = reordered.splice(fromIndex, 1)
+    reordered.splice(toIndex, 0, moved)
+    const next = defaultLane ? [defaultLane, ...reordered] : reordered
     set({ lanes: next.map((l, i) => ({ ...l, position: i + 1 })) })
     try {
       await reorderSwimlanes(next.map((l) => l.id))

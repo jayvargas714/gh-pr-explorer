@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useDroppable } from '@dnd-kit/core'
-import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { MergeQueueItem, Swimlane, SwimlaneColor } from '../../api/types'
 import { useSwimlaneStore } from '../../stores/useSwimlaneStore'
 import { QueueItem } from '../queue/QueueItem'
@@ -11,10 +12,14 @@ interface SwimlaneColumnProps {
   lane: Swimlane
   cards: MergeQueueItem[]
   canDelete: boolean
+  /** When true, the column header exposes a drag handle for left/right reordering. */
+  sortable: boolean
+  /** Resolved at the board level: true when the cursor is over this lane (or a card it owns). */
+  isHighlighted: boolean
   onRefresh: () => void
 }
 
-export function SwimlaneColumn({ lane, cards, canDelete, onRefresh }: SwimlaneColumnProps) {
+export function SwimlaneColumn({ lane, cards, canDelete, sortable, isHighlighted, onRefresh }: SwimlaneColumnProps) {
   const renameLane = useSwimlaneStore((s) => s.renameLane)
   const recolorLane = useSwimlaneStore((s) => s.recolorLane)
   const deleteLane = useSwimlaneStore((s) => s.deleteLane)
@@ -25,10 +30,32 @@ export function SwimlaneColumn({ lane, cards, canDelete, onRefresh }: SwimlaneCo
   const inputRef = useRef<HTMLInputElement>(null)
   const colorPickerRef = useRef<HTMLDivElement>(null)
 
-  const { setNodeRef, isOver } = useDroppable({
+  // Card destination droppable — id has `lane-` prefix so it never collides with card numeric ids.
+  // Note: we don't use isOver here for highlighting; the board computes overLaneId for us
+  // so the lane stays highlighted even when the cursor is over a child card.
+  const { setNodeRef: setBodyRef } = useDroppable({
     id: `lane-${lane.id}`,
     data: { laneId: lane.id, type: 'lane' },
   })
+
+  // Column reordering — the column itself is a sortable item among other columns.
+  const {
+    attributes: sortAttrs,
+    listeners: sortListeners,
+    setNodeRef: setColumnRef,
+    transform: columnTransform,
+    transition: columnTransition,
+    isDragging: isColumnDragging,
+  } = useSortable({
+    id: `swl-${lane.id}`,
+    data: { type: 'lane-handle', laneId: lane.id },
+    disabled: !sortable,
+  })
+
+  const columnStyle = {
+    transform: CSS.Transform.toString(columnTransform),
+    transition: columnTransition,
+  }
 
   useEffect(() => {
     setDraftName(lane.name)
@@ -76,12 +103,30 @@ export function SwimlaneColumn({ lane, cards, canDelete, onRefresh }: SwimlaneCo
     if (confirmed) deleteLane(lane.id)
   }
 
+  const className = [
+    'mx-swl-column',
+    `mx-swl-column--${lane.color}`,
+    isHighlighted ? 'mx-swl-column--over' : '',
+    isColumnDragging ? 'mx-swl-column--reordering' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
   return (
-    <div
-      ref={setNodeRef}
-      className={`mx-swl-column mx-swl-column--${lane.color}${isOver ? ' mx-swl-column--over' : ''}`}
-    >
+    <div ref={setColumnRef} style={columnStyle} className={className}>
       <header className="mx-swl-column__header">
+        {sortable && (
+          <button
+            type="button"
+            className="mx-swl-column__drag-handle"
+            {...sortAttrs}
+            {...sortListeners}
+            aria-label="Drag to reorder lane"
+            data-tooltip="Drag to reorder lane"
+          >
+            ⋮⋮
+          </button>
+        )}
         <button
           type="button"
           className={`mx-swl-color-swatch mx-swl-color-swatch--${lane.color} mx-swl-column__color`}
@@ -132,7 +177,7 @@ export function SwimlaneColumn({ lane, cards, canDelete, onRefresh }: SwimlaneCo
         )}
       </header>
 
-      <div className="mx-swl-column__body">
+      <div ref={setBodyRef} className="mx-swl-column__body">
         <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           {cards.length === 0 ? (
             <div className="mx-swl-column__empty">Drop cards here</div>

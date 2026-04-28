@@ -21,7 +21,10 @@
   display: flex;
   align-items: stretch;
   justify-content: flex-end;
-  z-index: var(--mx-z-modal, 1040);
+  /* Sit between the sticky app header (1020) and the modal layer (1040), so
+     any modal opened from a card inside the board (review viewer, verdict,
+     notes, error, etc.) naturally layers on top without per-modal overrides. */
+  z-index: var(--mx-z-overlay, 1030);
 }
 
 .mx-swl-modal__shell {
@@ -194,7 +197,48 @@
 .mx-swl-column--slate   { --swl-accent: var(--mx-color-text-muted); }
 
 .mx-swl-column--over {
-  box-shadow: 0 0 0 2px var(--swl-accent), 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    0 0 0 2px var(--swl-accent),
+    0 0 22px color-mix(in srgb, var(--swl-accent) 45%, transparent),
+    0 8px 24px rgba(0, 0, 0, 0.35);
+  background: color-mix(in srgb, var(--swl-accent) 10%, var(--mx-color-surface));
+  transform: translateY(-1px);
+}
+
+.mx-swl-column--over .mx-swl-column__empty {
+  border-color: var(--swl-accent);
+  color: var(--swl-accent);
+  opacity: 1;
+}
+
+/* Column being dragged across the row: lift it visually, fade source slot */
+.mx-swl-column--reordering {
+  opacity: 0.55;
+  z-index: 5;
+}
+
+/* Lane drag handle (only rendered for non-default lanes) */
+.mx-swl-column__drag-handle {
+  background: transparent;
+  border: 0;
+  color: var(--mx-color-text-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: grab;
+  letter-spacing: -2px;
+  transition: color 0.12s ease, background 0.12s ease;
+  flex-shrink: 0;
+}
+
+.mx-swl-column__drag-handle:hover {
+  color: var(--mx-color-text);
+  background: color-mix(in srgb, var(--swl-accent) 18%, transparent);
+}
+
+.mx-swl-column__drag-handle:active {
+  cursor: grabbing;
 }
 
 .mx-swl-column__header {
@@ -291,6 +335,19 @@
   border: 1px dashed var(--mx-color-border);
   border-radius: 8px;
   opacity: 0.7;
+}
+
+/* DragOverlay preview: floating clone of the card the user is dragging.
+   Renders in a portal at the cursor and ignores parent overflow clipping,
+   which is what makes the card visible while crossing column boundaries. */
+.mx-swl-drag-preview {
+  width: 336px;            /* matches column body width minus padding */
+  cursor: grabbing;
+  border-color: var(--mx-color-primary);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--mx-color-primary);
+  transform: rotate(1.2deg);
+  pointer-events: none;
+  background: var(--mx-color-surface);
 }
 
 /* Light mode tweaks: rely on CSS-vars; no overrides needed since all colors are tokens. */
