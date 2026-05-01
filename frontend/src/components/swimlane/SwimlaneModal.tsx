@@ -7,10 +7,16 @@ import { SwimlaneBoard } from './SwimlaneBoard'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 
+// Background poll cadence. 45s mirrors the timeline modal — each refresh hits
+// `gh pr view` once per queued PR, so a tighter cadence (e.g. 15s) would burn
+// through GitHub's authenticated rate limit on large queues.
+const POLL_INTERVAL_MS = 45_000
+
 export function SwimlaneModal() {
   const isOpen = useUIStore((s) => s.showSwimlaneBoard)
   const close = useUIStore((s) => s.setShowSwimlaneBoard)
   const loadBoard = useSwimlaneStore((s) => s.loadBoard)
+  const refreshBoard = useSwimlaneStore((s) => s.refreshBoard)
   const loading = useSwimlaneStore((s) => s.loading)
   const error = useSwimlaneStore((s) => s.error)
   const lanes = useSwimlaneStore((s) => s.lanes)
@@ -31,6 +37,26 @@ export function SwimlaneModal() {
       document.body.style.overflow = originalOverflow
     }
   }, [isOpen, loadBoard, handleClose])
+
+  // Background polling while the modal is open. Skips when the tab is hidden
+  // or while a drag/mutation has paused polling. Refreshes immediately when
+  // the tab regains visibility so a returning user doesn't stare at stale data.
+  useEffect(() => {
+    if (!isOpen) return
+    const tick = () => {
+      if (document.visibilityState !== 'visible') return
+      refreshBoard()
+    }
+    const timer = window.setInterval(tick, POLL_INTERVAL_MS)
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refreshBoard()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [isOpen, refreshBoard])
 
   return (
     <AnimatePresence>

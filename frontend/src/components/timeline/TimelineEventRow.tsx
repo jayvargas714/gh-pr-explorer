@@ -21,7 +21,7 @@ interface StyleVars extends React.CSSProperties {
 const DOT_COLOR: Record<TimelineEventType, string> = {
   opened: '#6366f1',
   committed: '#10b981',
-  commented: '#f59e0b',
+  commented: '#06b6d4',
   reviewed: '#f59e0b',
   review_requested: '#94a3b8',
   ready_for_review: '#0ea5e9',

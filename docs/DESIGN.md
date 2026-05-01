@@ -1030,7 +1030,7 @@ The PR Timelines feature provides a focused, single-PR deep-dive view showing ev
 |-------|-----------|--------|
 | opened | indigo | Synthesized from PR `createdAt` |
 | committed | emerald | `committed` |
-| commented | amber | `commented` |
+| commented | cyan | `commented` |
 | reviewed (APPROVED) | emerald | `reviewed` with state APPROVED |
 | reviewed (CHANGES_REQUESTED) | red | `reviewed` with state CHANGES_REQUESTED |
 | reviewed (COMMENTED) | amber | `reviewed` with state COMMENTED |
@@ -1215,6 +1215,17 @@ swimlane_assignments (id, queue_item_id UNIQUE, swimlane_id, position_in_lane, u
 ```
 
 `swimlane_assignments.queue_item_id` cascades from `merge_queue(id)`. `swimlane_assignments.swimlane_id` is `ON DELETE SET NULL`, with `delete_lane()` re-homing orphans to the default. On startup, `create_app()` invokes `ensure_default_lane()` and `reconcile_assignments()` to handle drift and bootstrap the feature on existing databases.
+
+#### Live Updates
+
+While the swimlane modal is open, the board silently re-fetches `/api/swimlanes/board` every 45 seconds so card state (PR draft toggles, new commits, CI status, review decisions) stays in sync with GitHub without requiring the user to close and re-open the board. The cadence matches the timeline modal — each refresh enriches every queued PR via `gh pr view`, so a tighter interval would burn through the GitHub rate limit on large queues.
+
+The poll is suspended whenever:
+- The browser tab is hidden (no work for an unviewed UI; resumes immediately on `visibilitychange`)
+- The user is mid-drag (a refetch would yank cards out from under the cursor)
+- A mutation is in flight (`moveCard`, `reorderLanesLocal`) — pollPause is reference-counted so concurrent drag + mutation both contribute and resume independently
+
+The header shows a `CacheTimestamp` indicator ("Updated X ago" / "refreshing…") sourced from `lastUpdated` and `refreshing` flags on the swimlane store. Background refreshes do not flip the modal's `loading` flag and silently swallow transient errors so a brief network blip doesn't surface a banner mid-session.
 
 ### Code Review System (Claude CLI Integration)
 

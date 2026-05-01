@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useSwimlaneStore } from '../../stores/useSwimlaneStore'
 import { SwimlaneColor } from '../../api/types'
 import { Button } from '../common/Button'
+import { CacheTimestamp } from '../common/CacheTimestamp'
 import { LaneColorPicker } from './LaneColorPicker'
 
 interface SwimlaneHeaderProps {
@@ -15,6 +16,8 @@ export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
   const totalCards = useSwimlaneStore((s) =>
     Object.values(s.cardsByLane).reduce((sum, list) => sum + list.length, 0)
   )
+  const lastUpdated = useSwimlaneStore((s) => s.lastUpdated)
+  const refreshing = useSwimlaneStore((s) => s.refreshing)
 
   const [showAddForm, setShowAddForm] = useState(false)
   const [name, setName] = useState('')
@@ -34,6 +37,7 @@ export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
       <div className="mx-swl-modal__title">
         <h2>Swimlane Board</h2>
         <span className="mx-swl-modal__count">{totalCards} cards</span>
+        <CacheTimestamp lastUpdated={lastUpdated} refreshing={refreshing} stale={refreshing} />
       </div>
 
       <div className="mx-swl-modal__actions">

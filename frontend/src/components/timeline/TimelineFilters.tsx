@@ -10,7 +10,7 @@ interface Props {
 const FILTER_GROUPS: Array<{ label: string; types: TimelineEventType[]; color: string }> = [
   { label: 'Commits', types: ['committed', 'head_ref_force_pushed'], color: '#10b981' },
   { label: 'Reviews', types: ['reviewed', 'review_requested'], color: '#f59e0b' },
-  { label: 'Comments', types: ['commented'], color: '#f59e0b' },
+  { label: 'Comments', types: ['commented'], color: '#06b6d4' },
   { label: 'State', types: ['opened', 'closed', 'reopened', 'merged', 'ready_for_review', 'convert_to_draft'], color: '#8b5cf6' },
 ]
 

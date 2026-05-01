@@ -31,6 +31,8 @@ export function SwimlaneBoard({ onRefresh }: SwimlaneBoardProps) {
   const cardsByLane = useSwimlaneStore((s) => s.cardsByLane)
   const moveCard = useSwimlaneStore((s) => s.moveCard)
   const reorderLanesLocal = useSwimlaneStore((s) => s.reorderLanesLocal)
+  const pausePolling = useSwimlaneStore((s) => s.pausePolling)
+  const resumePolling = useSwimlaneStore((s) => s.resumePolling)
 
   // Track the currently-dragged card so DragOverlay can render a floating preview.
   const [activeCard, setActiveCard] = useState<MergeQueueItem | null>(null)
@@ -55,6 +57,10 @@ export function SwimlaneBoard({ onRefresh }: SwimlaneBoardProps) {
   }
 
   const handleDragStart = (event: DragStartEvent) => {
+    // Hold off background polling while the user is interacting — a refetch
+    // mid-drag would re-render the source/destination lists from server state
+    // and yank cards out from under the cursor.
+    pausePolling()
     const id = event.active.id
     if (typeof id === 'number') {
       for (const list of Object.values(cardsByLane)) {
@@ -93,6 +99,10 @@ export function SwimlaneBoard({ onRefresh }: SwimlaneBoardProps) {
   const handleDragEnd = async (event: DragEndEvent) => {
     setActiveCard(null)
     setOverLaneId(null)
+    // Match the pause taken in handleDragStart. Note: moveCard/reorderLanesLocal
+    // also pause around their own network requests, so the depth-counter still
+    // suspends polling during the in-flight mutation.
+    resumePolling()
     const { active, over } = event
     if (!over) return
 
@@ -163,6 +173,7 @@ export function SwimlaneBoard({ onRefresh }: SwimlaneBoardProps) {
       onDragCancel={() => {
         setActiveCard(null)
         setOverLaneId(null)
+        resumePolling()
       }}
     >
       <div className="mx-swl-board">
