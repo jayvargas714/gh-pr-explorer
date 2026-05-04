@@ -1,5 +1,5 @@
 import { api } from './client'
-import { PRsResponse, DivergenceResponse } from './types'
+import { PRsResponse, DivergenceResponse, PullRequest } from './types'
 
 /**
  * Fetch PRs with filters
@@ -27,6 +27,20 @@ export async function fetchPRs(
   const endpoint = `/repos/${owner}/${repo}/prs${queryString ? `?${queryString}` : ''}`
 
   return api.get<PRsResponse>(endpoint)
+}
+
+/**
+ * Fetch a single PR's full details (body, labels, assignees, branches, etc.)
+ */
+export async function fetchPRDetails(
+  owner: string,
+  repo: string,
+  prNumber: number
+): Promise<PullRequest | null> {
+  const response = await api.get<PRsResponse>(
+    `/repos/${owner}/${repo}/prs?prNumber=${prNumber}`
+  )
+  return response.prs[0] ?? null
 }
 
 /**

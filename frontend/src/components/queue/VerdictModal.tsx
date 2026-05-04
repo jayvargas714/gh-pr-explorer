@@ -7,6 +7,7 @@ import { Alert } from '../common/Alert'
 import { Spinner } from '../common/Spinner'
 import { getReviewDetail, postVerdict } from '../../api/reviews'
 import { getReviewSections, type ReviewSection } from '../../utils/reviewSections'
+import { SectionEditModal, type EditableIssue } from './SectionEditModal'
 import type {
   VerdictEvent,
   VerdictInlineComment,
@@ -87,15 +88,6 @@ const EVENT_OPTIONS: { value: VerdictEvent; label: string }[] = [
 // Section keys that support inline posting (have file locations)
 const INLINE_ELIGIBLE_KEYS = new Set(['critical-issues', 'major-concerns', 'minor-issues'])
 
-/** Editable issue — location is read-only, problem/fix are editable */
-interface EditableIssue {
-  title: string
-  location: { file: string; start_line: number | null; end_line: number | null }
-  principle: string
-  problem: string
-  fix: string
-}
-
 const MIN_PANEL_WIDTH = 300
 const MIN_PANEL_HEIGHT = 250
 const MIN_PANEL_TOP = 60
@@ -110,8 +102,10 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
   const [sections, setSections] = useState<ReviewSection[]>([])
   const [editedContent, setEditedContent] = useState<Record<string, string>>({})
   const [enabledSections, setEnabledSections] = useState<Set<string>>(new Set())
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set())
+  const [editingSectionKey, setEditingSectionKey] = useState<string | null>(null)
   const [inlineSections, setInlineSections] = useState<Set<string>>(new Set())
+  const [manualBodyOverride, setManualBodyOverride] = useState<string | null>(null)
+  const [previewEditMode, setPreviewEditMode] = useState(false)
   const [structuredIssues, setStructuredIssues] = useState<Record<string, EditableIssue[]>>({})
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -368,18 +362,6 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
     })
   }
 
-  const toggleExpanded = (key: string) => {
-    setExpandedSections((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) {
-        next.delete(key)
-      } else {
-        next.add(key)
-      }
-      return next
-    })
-  }
-
   const toggleInline = (key: string) => {
     setInlineSections((prev) => {
       const next = new Set(prev)
@@ -464,8 +446,12 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
 
   const [inlineWarning, setInlineWarning] = useState<string | null>(null)
 
+  /** Returns the manually-edited body if set, otherwise the composed body. */
+  const getEffectiveBody = (): string =>
+    manualBodyOverride !== null ? manualBodyOverride : composeBody()
+
   const handleSubmit = async () => {
-    const body = composeBody()
+    const body = getEffectiveBody()
     const inlineComments = inlineCommentsMemo
 
     if (!body && inlineComments.length === 0) {
@@ -542,81 +528,12 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
     }
   }
 
-  const hasBodyContent = customText.trim() || [...enabledSections].some((k) => !inlineSections.has(k))
+  const hasOverride = manualBodyOverride !== null && manualBodyOverride.trim().length > 0
+  const hasBodyContent = hasOverride || customText.trim() || [...enabledSections].some((k) => !inlineSections.has(k))
   const hasInlineContent = [...enabledSections].some((k) => inlineSections.has(k) && structuredIssues[k]?.length)
   const hasContent = hasBodyContent || hasInlineContent
 
-  const formatLocation = (loc: EditableIssue['location']) => {
-    let s = loc.file
-    if (loc.start_line != null && loc.end_line != null && loc.start_line !== loc.end_line) {
-      s += `:${loc.start_line}-${loc.end_line}`
-    } else if (loc.start_line != null) {
-      s += `:${loc.start_line}`
-    }
-    return s
-  }
-
   const isInlineEligible = (key: string) => INLINE_ELIGIBLE_KEYS.has(key) && !!structuredIssues[key]?.length
-
-  const renderSectionContent = (section: ReviewSection) => {
-    const isInline = inlineSections.has(section.key)
-    const issues = structuredIssues[section.key]
-
-    // If inline is toggled and we have structured issues, show per-issue editor
-    if (isInline && issues?.length) {
-      return (
-        <div className="mx-verdict-modal__issue-list">
-          {issues.map((issue, idx) => (
-            <div key={idx} className="mx-verdict-modal__issue-item">
-              <div className="mx-verdict-modal__issue-header">
-                <span className="mx-verdict-modal__issue-number">{idx + 1}.</span>
-                <span className="mx-verdict-modal__issue-title">{issue.title}</span>
-              </div>
-              <code className="mx-verdict-modal__issue-location">
-                {formatLocation(issue.location)}
-              </code>
-              {issue.principle && (
-                <div className="mx-verdict-modal__issue-principle">
-                  {issue.principle}
-                </div>
-              )}
-              <div className="mx-verdict-modal__issue-fields">
-                <label className="mx-verdict-modal__issue-field-label">Problem</label>
-                <textarea
-                  className="mx-verdict-modal__issue-field"
-                  value={issue.problem}
-                  onChange={(e) => updateIssueField(section.key, idx, 'problem', e.target.value)}
-                  disabled={submitting}
-                  rows={2}
-                />
-                <label className="mx-verdict-modal__issue-field-label">Fix</label>
-                <textarea
-                  className="mx-verdict-modal__issue-field"
-                  value={issue.fix}
-                  onChange={(e) => updateIssueField(section.key, idx, 'fix', e.target.value)}
-                  disabled={submitting}
-                  rows={2}
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-      )
-    }
-
-    // Default: editable markdown textarea
-    return (
-      <textarea
-        className="mx-verdict-modal__section-preview mx-verdict-modal__section-preview--editable"
-        value={editedContent[section.key] ?? section.content}
-        onChange={(e) => setEditedContent((prev) => ({
-          ...prev,
-          [section.key]: e.target.value,
-        }))}
-        disabled={submitting}
-      />
-    )
-  }
 
   // Compute inline styles for draggable verdict modal
   const verdictStyle: React.CSSProperties = {
@@ -742,13 +659,12 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
                             )}
                             <button
                               className="mx-verdict-modal__expand-btn"
-                              onClick={() => toggleExpanded(section.key)}
+                              onClick={() => setEditingSectionKey(section.key)}
                             >
-                              {expandedSections.has(section.key) ? 'Hide' : 'Edit'}
+                              Edit
                             </button>
                           </div>
                         </div>
-                        {expandedSections.has(section.key) && renderSectionContent(section)}
                       </div>
                     ))}
                   </div>
@@ -844,23 +760,69 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
                 <span className="mx-verdict-modal__preview-event-badge" data-event={event}>
                   {EVENT_OPTIONS.find((o) => o.value === event)?.label}
                 </span>
+                {manualBodyOverride !== null && (
+                  <span className="mx-verdict-modal__preview-edited-badge">manually edited</span>
+                )}
               </h3>
-              <button
-                className="mx-verdict-preview-panel__close"
-                onClick={() => setShowPreview(false)}
-                aria-label="Close preview"
-              >
-                ×
-              </button>
+              <div className="mx-verdict-preview-panel__header-actions">
+                {previewEditMode ? (
+                  <button
+                    className="mx-verdict-preview-panel__action-btn"
+                    onClick={() => setPreviewEditMode(false)}
+                  >
+                    Done
+                  </button>
+                ) : (
+                  <button
+                    className="mx-verdict-preview-panel__action-btn"
+                    onClick={() => {
+                      if (manualBodyOverride === null) {
+                        setManualBodyOverride(composeBody())
+                      }
+                      setPreviewEditMode(true)
+                    }}
+                  >
+                    Edit
+                  </button>
+                )}
+                {manualBodyOverride !== null && (
+                  <button
+                    className="mx-verdict-preview-panel__action-btn"
+                    onClick={() => {
+                      setManualBodyOverride(null)
+                      setPreviewEditMode(false)
+                    }}
+                    title="Discard manual edits and rebuild body from custom text + sections"
+                  >
+                    Recompose
+                  </button>
+                )}
+                <button
+                  className="mx-verdict-preview-panel__close"
+                  onClick={() => setShowPreview(false)}
+                  aria-label="Close preview"
+                >
+                  ×
+                </button>
+              </div>
             </div>
             <div className="mx-verdict-preview-panel__content mx-markdown-body">
-              {hasContent ? (
+              {previewEditMode ? (
+                <textarea
+                  className="mx-verdict-preview-panel__textarea"
+                  value={manualBodyOverride ?? ''}
+                  onChange={(e) => setManualBodyOverride(e.target.value)}
+                  disabled={submitting}
+                  placeholder="Edit the verdict body markdown directly. Click Recompose to discard and rebuild from sections."
+                  autoFocus
+                />
+              ) : hasContent ? (
                 <>
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     rehypePlugins={[rehypeHighlight]}
                   >
-                    {composeBody() || '*No body text — inline comments only*'}
+                    {getEffectiveBody() || '*No body text — inline comments only*'}
                   </ReactMarkdown>
                   {hasInlineContent && (
                     <div className="mx-verdict-modal__preview-inline-note">
@@ -879,6 +841,26 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
           </div>
         </div>
       )}
+
+      {editingSectionKey && (() => {
+        const editingSection = sections.find((s) => s.key === editingSectionKey)
+        if (!editingSection) return null
+        return (
+          <SectionEditModal
+            section={editingSection}
+            editedContent={editedContent[editingSectionKey] ?? editingSection.content}
+            isInline={inlineSections.has(editingSectionKey)}
+            issues={structuredIssues[editingSectionKey] as EditableIssue[] | undefined}
+            submitting={submitting}
+            onContentChange={(value) => setEditedContent((prev) => ({
+              ...prev,
+              [editingSectionKey]: value,
+            }))}
+            onIssueFieldChange={(idx, field, value) => updateIssueField(editingSectionKey, idx, field, value)}
+            onClose={() => setEditingSectionKey(null)}
+          />
+        )
+      })()}
     </>
   )
 }

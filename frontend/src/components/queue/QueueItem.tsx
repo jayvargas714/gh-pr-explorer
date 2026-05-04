@@ -7,6 +7,7 @@ import { useTimelineStore } from '../../stores/useTimelineStore'
 import { removeFromQueue } from '../../api/queue'
 import { NotesModal } from './NotesModal'
 import { VerdictModal } from './VerdictModal'
+import { QueueDescriptionModal } from './QueueDescriptionModal'
 import { QueueReviewButton } from '../reviews/QueueReviewButton'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
@@ -42,6 +43,7 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
   const [showNotes, setShowNotes] = useState(false)
   const [showVerdict, setShowVerdict] = useState(false)
   const [showChangesModal, setShowChangesModal] = useState(false)
+  const [showDescription, setShowDescription] = useState(false)
   const [removing, setRemoving] = useState(false)
   const openReviewViewer = useReviewStore((state) => state.openReviewViewer)
   const openTimeline = useTimelineStore((state) => state.open)
@@ -246,6 +248,14 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
           >
             ⏱
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowDescription(true)}
+            data-tooltip="View description"
+          >
+            📝
+          </Button>
           <Button variant="ghost" size="sm" onClick={() => setShowNotes(true)}>
             Notes {item.notesCount > 0 && `(${item.notesCount})`}
           </Button>
@@ -280,6 +290,20 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
           onClose={() => setShowChangesModal(false)}
         />
       )}
+
+      {showDescription && (() => {
+        const [owner, repo] = item.repo.split('/')
+        return (
+          <QueueDescriptionModal
+            owner={owner}
+            repo={repo}
+            prNumber={item.number}
+            prTitle={item.title}
+            isOpen={showDescription}
+            onClose={() => setShowDescription(false)}
+          />
+        )
+      })()}
     </>
   )
 }

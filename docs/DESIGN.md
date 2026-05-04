@@ -1157,6 +1157,7 @@ The Merge Queue feature allows users to organize PRs they intend to review or me
 | Post Inline Comments | Queue Item | Post critical issues to GitHub (appears when review exists) |
 | Verdict Button | Queue Item | Submit formal PR review verdict to GitHub (appears when review exists) |
 | Verdict Modal | Overlay | Modal with event selector, custom text, section toggles, and submit |
+| View Description | Queue Item | 📝 button that opens the same draggable description modal used by the main PR list. Lazy-fetches the PR via `GET /api/repos/.../prs?prNumber=N`. |
 | Notes Toggle | Queue Item | Expand/collapse notes for the PR |
 | Add Note Button | Queue Item | Add a new note to the PR |
 | PR State Badge | Queue Item | Shows current PR state (open/closed/merged) |
@@ -1385,7 +1386,9 @@ The Review Verdict feature allows users to submit a formal GitHub PR review verd
 | Verdict Button | Merge Queue Card | Appears when PR has a completed review |
 | VerdictModal | Overlay | Modal with event selector, textarea, section toggles, and submit |
 | Event Selector | VerdictModal | Three side-by-side buttons for Approve/Request Changes/Comment |
-| Section Toggles | VerdictModal | Checkboxes with collapsible preview for each review section |
+| Section Toggles | VerdictModal | Checkbox per review section. Clicking **Edit** opens the section in `SectionEditModal` rather than expanding inline. |
+| SectionEditModal | Floating overlay | Standalone draggable/resizable modal for editing a single section's body (or per-issue Problem/Fix fields when the section is marked Inline). One section open at a time. |
+| Preview Panel | Floating overlay | Draggable/resizable preview of the composed body. Header has **Edit** / **Done** / **Recompose** buttons that flip the body between rendered markdown and a freeform textarea bound to a manual override. |
 
 #### Verdict Button Visibility
 
@@ -1404,7 +1407,7 @@ The modal parses the completed review content to extract named sections:
 | Minor Issues | Style, naming, or minor code issues |
 | Recommendations | Suggested improvements |
 
-Each section can be individually toggled on/off and previewed before submission.
+Each section can be individually toggled on/off and previewed before submission. Clicking **Edit** on a row opens `SectionEditModal` — a floating, draggable, resizable editor for that section's content (or per-issue Problem/Fix fields when the section is marked Inline).
 
 #### Composed Body Format
 
@@ -1414,6 +1417,19 @@ The final review body is assembled from (joined by `\n\n---\n\n`):
 3. Enabled review sections (each preceded by a bold heading)
 
 The summary table gives the GitHub review entry a quick index into the diff comments so an Approve/Request-Changes/Comment verdict is not effectively empty when all content has been posted inline.
+
+#### Editable Preview (Manual Override)
+
+The preview panel can switch into edit mode, allowing the user to hand-edit the assembled markdown body in one large freeform textarea instead of bouncing between the per-section editors:
+
+| Action | Effect |
+|--------|--------|
+| **Edit** (preview header) | Captures the current `composeBody()` output into `manualBodyOverride` and switches the preview into a textarea bound to that override. |
+| **Done** | Returns the preview to rendered-markdown view. The override is preserved and used on submit. |
+| **Recompose** | Discards the override (`manualBodyOverride = null`) and rebuilds the body from custom text + enabled sections. Visible only while an override is active. |
+| **manually edited** badge | Shown in the preview header whenever `manualBodyOverride !== null` so it's visible at a glance that section toggles will not modify the body until Recompose is clicked. |
+
+When an override is active, the final submitted body uses the override verbatim. Inline comments and the inline summary table are independent of the override and continue to come from the section toggles.
 
 ---
 
