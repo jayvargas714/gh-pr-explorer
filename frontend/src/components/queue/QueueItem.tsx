@@ -20,6 +20,12 @@ interface QueueItemProps {
   item: MergeQueueItem
   index: number
   onRefresh: () => void
+  /**
+   * Optional search-highlight state. Set by the swimlane board when a search
+   * query is active so matching cards glow and non-matches dim. Undefined =
+   * no search context (default rendering — used by the merge queue panel).
+   */
+  searchMatch?: 'match' | 'dim'
 }
 
 function buildInlineTooltip(
@@ -39,7 +45,7 @@ function buildInlineTooltip(
   return parts.join('\n')
 }
 
-export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
+export function QueueItem({ item, index, onRefresh, searchMatch }: QueueItemProps) {
   const [showNotes, setShowNotes] = useState(false)
   const [showVerdict, setShowVerdict] = useState(false)
   const [showChangesModal, setShowChangesModal] = useState(false)
@@ -131,7 +137,17 @@ export function QueueItem({ item, index, onRefresh }: QueueItemProps) {
       <div
         ref={setNodeRef}
         style={style}
-        className={`mx-queue-item${isDragging ? ' mx-queue-item--dragging' : ''}${approvedByMe ? ' mx-queue-item--approved-by-me' : ''}`}
+        data-pr-number={item.number}
+        data-search-match={searchMatch ?? 'none'}
+        className={[
+          'mx-queue-item',
+          isDragging ? 'mx-queue-item--dragging' : '',
+          approvedByMe ? 'mx-queue-item--approved-by-me' : '',
+          searchMatch === 'match' ? 'mx-queue-item--search-match' : '',
+          searchMatch === 'dim' ? 'mx-queue-item--search-dim' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
       >
         <div className="mx-queue-item__header">
           <button

@@ -351,3 +351,88 @@
 }
 
 /* Light mode tweaks: rely on CSS-vars; no overrides needed since all colors are tokens. */
+
+/* Swimlane search input — between the title block and the action buttons.
+   When a query is active, matching cards glow and non-matches fade. */
+.mx-swl-modal__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 240px;
+  min-width: 200px;
+  max-width: 420px;
+}
+
+.mx-swl-search__input {
+  flex: 1;
+  height: 32px;
+  padding: 0 12px;
+  background: var(--mx-color-bg-input);
+  border: 1px solid var(--mx-color-border);
+  border-radius: 6px;
+  color: var(--mx-color-text-primary);
+  font: inherit;
+  font-size: 13px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.mx-swl-search__input::placeholder {
+  color: var(--mx-color-text-muted);
+}
+
+.mx-swl-search__input:focus {
+  outline: none;
+  border-color: var(--mx-color-border-focus);
+  box-shadow: 0 0 0 2px rgba(0, 255, 157, 0.18);
+}
+
+.mx-swl-search__count {
+  font-size: 12px;
+  color: var(--mx-color-text-secondary);
+  white-space: nowrap;
+}
+
+.mx-swl-search__clear {
+  background: transparent;
+  border: 0;
+  color: var(--mx-color-text-secondary);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.mx-swl-search__clear:hover {
+  background: var(--mx-color-surface-hover);
+  color: var(--mx-color-text-primary);
+}
+
+/* Card highlight states when a swimlane search is active. */
+.mx-queue-item--search-dim {
+  opacity: 0.32;
+  filter: saturate(0.6);
+  transition: opacity 160ms ease, filter 160ms ease;
+}
+
+.mx-queue-item--search-match {
+  position: relative;
+  border-color: var(--mx-color-primary, #00ff9d) !important;
+  box-shadow:
+    0 0 0 1px var(--mx-color-primary, #00ff9d),
+    0 0 18px 2px rgba(0, 255, 157, 0.38);
+  animation: mx-swl-search-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes mx-swl-search-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 1px var(--mx-color-primary, #00ff9d),
+      0 0 14px 1px rgba(0, 255, 157, 0.32);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px var(--mx-color-primary, #00ff9d),
+      0 0 22px 4px rgba(0, 255, 157, 0.52);
+  }
+}

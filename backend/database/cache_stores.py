@@ -403,3 +403,12 @@ class TimelineCacheDB:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM pr_timeline_cache")
+
+    def invalidate(self, repo: str, pr_number: int) -> None:
+        """Delete the cached timeline for a single (repo, pr_number)."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM pr_timeline_cache WHERE repo = ? AND pr_number = ?",
+                (repo, pr_number)
+            )

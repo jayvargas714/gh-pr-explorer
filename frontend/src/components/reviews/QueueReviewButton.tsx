@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useReviewStore } from '../../stores/useReviewStore'
-import { startReview, cancelReview } from '../../api/reviews'
+import { startReview, cancelReview, type ReviewerType } from '../../api/reviews'
 import { InlineIssuePickerModal } from './InlineIssuePickerModal'
+import { ReviewerPickerMenu } from './ReviewerPickerMenu'
 import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
 import type { MergeQueueItem } from '../../api/types'
@@ -13,6 +14,7 @@ interface QueueReviewButtonProps {
 
 export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
   const [starting, setStarting] = useState(false)
+  const [reviewerPickerOpen, setReviewerPickerOpen] = useState(false)
   const [pickerSection, setPickerSection] = useState<string | null>(null)
   const { activeReviews, updateReview, removeReview, showReviewError } = useReviewStore()
 
@@ -32,8 +34,9 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
     }
   }, [review?.status, onRefresh])
 
-  const handleStartReview = async () => {
+  const handleStartReview = async (reviewerType: ReviewerType) => {
     if (starting || !owner || !repo) return
+    setReviewerPickerOpen(false)
 
     try {
       setStarting(true)
@@ -46,6 +49,7 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
         author: item.author,
         is_followup: item.hasReview,
         previous_review_id: item.reviewId ?? undefined,
+        reviewer_type: reviewerType,
       })
       updateReview(reviewKey, {
         key: reviewKey,
@@ -114,14 +118,28 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
 
   return (
     <>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={handleStartReview}
-        disabled={starting}
-      >
-        {starting ? <Spinner size="sm" /> : item.hasReview ? '🔄 Re-review' : '📋 Review'}
-      </Button>
+      <div className="mx-reviewer-picker__wrapper">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setReviewerPickerOpen((open) => !open)}
+          disabled={starting}
+        >
+          {starting ? (
+            <Spinner size="sm" />
+          ) : item.hasReview ? (
+            '🔄 Re-review ▾'
+          ) : (
+            '📋 Review ▾'
+          )}
+        </Button>
+        {reviewerPickerOpen && (
+          <ReviewerPickerMenu
+            onSelect={handleStartReview}
+            onClose={() => setReviewerPickerOpen(false)}
+          />
+        )}
+      </div>
 
       {item.hasReview && item.reviewId && !item.inlineCommentsPosted && (
         <Button

@@ -3,6 +3,7 @@
 import json
 import logging
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -127,7 +128,24 @@ def save_review_to_db(key, review, status, reviews_db):
             if not pr_title:
                 pr_title = f"PR #{pr_number} Review"
 
+            # The head SHA is critical for the "new commits since review" badge
+            # in the merge queue and swimlane views. fetch_pr_head_sha already
+            # retries transient errors via run_gh_command, but if it still comes
+            # back empty (because gh succeeded but returned no SHA, or a rare
+            # double failure), retry with a short delay before giving up — a
+            # review without a SHA permanently loses its follow-up signal.
             head_commit_sha = fetch_pr_head_sha(owner, repo, pr_number)
+            if not head_commit_sha:
+                for delay in (2, 5):
+                    time.sleep(delay)
+                    head_commit_sha = fetch_pr_head_sha(owner, repo, pr_number)
+                    if head_commit_sha:
+                        break
+                if not head_commit_sha:
+                    logger.warning(
+                        f"Could not capture head SHA for {key} after retries — the "
+                        f"'new commits' badge will not work until the PR is re-reviewed."
+                    )
             pr_state_at_review = fetch_pr_state(owner, repo, pr_number)
 
             reviews_db.save_review(
@@ -186,15 +204,24 @@ def check_review_status(key, active_reviews, reviews_lock, reviews_db):
         return review
 
 
-def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, previous_review_content=None):
+VALID_REVIEWER_TYPES = ("default", "pb")
+
+
+def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, previous_review_content=None, reviewer_type="default"):
     """Start a Claude CLI review process in the background.
 
     Args:
         previous_review_content: For follow-ups, the JSON string of the previous review's content_json.
+        reviewer_type: Which reviewer agent to use. One of:
+            - "default": elite-code-reviewer (general code review)
+            - "pb": product-brief-reviewer (PB-000 product brief review)
 
     Returns:
         tuple: (process, review_file_path_or_error, is_followup)
     """
+    if reviewer_type not in VALID_REVIEWER_TYPES:
+        reviewer_type = "default"
+
     reviews_dir = get_reviews_dir()
     reviews_dir.mkdir(parents=True, exist_ok=True)
 
@@ -208,6 +235,18 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
 
     json_file = str(review_file).replace(".md", ".json")
 
+    agent_name = "product-brief-reviewer" if reviewer_type == "pb" else "elite-code-reviewer"
+
+    if reviewer_type == "pb":
+        pb_context = (
+            "This PR adds or modifies a product brief (a PB-NNN-*.md file under briefs/). "
+            "Identify the brief file(s) touched in the PR diff and review them against the PB-000 template "
+            "and the rules embedded in the product-brief-reviewer agent. Quote evidence verbatim and keep "
+            "all fixes in user-observable, product-level language. "
+        )
+    else:
+        pb_context = ""
+
     if is_followup and previous_review_content:
         # Convert raw JSON to readable markdown for the prompt
         previous_review_markdown = previous_review_content
@@ -219,6 +258,7 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
 
         prompt = (
             f"Review PR #{pr_number} at {pr_url}. "
+            f"{pb_context}"
             f"This is a FOLLOW-UP review. Previous review:\n\n"
             f"---PREVIOUS REVIEW---\n{previous_review_markdown[:8000]}\n---END PREVIOUS REVIEW---\n\n"
             f"Focus on: changes since last review, whether previous issues were addressed. "
@@ -228,7 +268,7 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
             f'"status" (one of: resolved, partially_addressed, not_addressed, wont_fix), '
             f'"notes" (string — brief explanation of what changed or why). '
             f'Do NOT use "title", "details", or "id" as alternative field names. '
-            f"Use the elite-code-reviewer agent. "
+            f"Use the {agent_name} agent. "
             f"Write the review to {review_file}. "
             f"ALSO write a structured JSON version to {json_file} following this schema: "
             f"{_SCHEMA_INSTRUCTIONS} "
@@ -237,7 +277,8 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
     else:
         prompt = (
             f"Review PR #{pr_number} at {pr_url}. "
-            f"Use the elite-code-reviewer agent. "
+            f"{pb_context}"
+            f"Use the {agent_name} agent. "
             f"Write the review to {review_file}. "
             f"ALSO write a structured JSON version to {json_file} following this schema: "
             f"{_SCHEMA_INSTRUCTIONS} "
@@ -260,7 +301,7 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
     ]
 
     review_type = "follow-up " if is_followup else ""
-    logger.info(f"Starting {review_type}review for PR #{pr_number} ({owner}/{repo})")
+    logger.info(f"Starting {review_type}review for PR #{pr_number} ({owner}/{repo}) using {agent_name}")
     logger.debug(f"Review command: {' '.join(cmd)}")
 
     try:

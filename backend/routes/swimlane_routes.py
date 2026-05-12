@@ -2,9 +2,10 @@
 
 from flask import Blueprint, jsonify, request
 
-from backend.database import get_queue_db, get_swimlanes_db
+from backend.database import get_queue_db, get_swimlanes_db, get_timeline_cache_db
 from backend.services.queue_enrichment import enrich_queue_items
 from backend.routes import error_response
+from backend.extensions import logger
 
 swimlane_bp = Blueprint("swimlanes", __name__)
 
@@ -22,7 +23,13 @@ def _format_lane(lane):
 
 @swimlane_bp.route("/api/swimlanes/board", methods=["GET"])
 def get_board():
-    """Return the full swimlane board: lanes + cards-by-lane (enriched)."""
+    """Return the full swimlane board: lanes + cards-by-lane (enriched).
+
+    Card data is already live-fetched on every call (no caching). When
+    ``?refresh=true`` is passed, the per-PR timeline cache is also invalidated
+    for every queue item so that opening a card's timeline modal afterward
+    serves fresh events instead of up-to-5-minute-stale ones.
+    """
     try:
         swimlanes_db = get_swimlanes_db()
         queue_db = get_queue_db()
@@ -34,6 +41,19 @@ def get_board():
         lanes = swimlanes_db.list_lanes()
         assignments = swimlanes_db.get_assignments()
         queue_rows = queue_db.get_queue()
+
+        if request.args.get("refresh") == "true":
+            timeline_cache = get_timeline_cache_db()
+            invalidated = 0
+            for row in queue_rows:
+                try:
+                    timeline_cache.invalidate(row["repo"], row["pr_number"])
+                    invalidated += 1
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to invalidate timeline cache for {row['repo']}#{row['pr_number']}: {e}"
+                    )
+            logger.info(f"Swimlane board refresh: invalidated {invalidated} timeline cache entries")
 
         enriched = enrich_queue_items(queue_rows)
         enriched_by_id = {c["id"]: c for c in enriched}

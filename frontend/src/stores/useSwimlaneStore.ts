@@ -23,8 +23,11 @@ interface SwimlaneState {
   // Counter-based pause: incremented on drag start / mutation start, decremented on end.
   // Polling is suspended while > 0 to avoid clobbering optimistic state mid-drag.
   pollPauseDepth: number
+  // Free-text search across cards (PR number, title, author, repo). Empty string = no filter.
+  searchQuery: string
+  setSearchQuery: (q: string) => void
 
-  loadBoard: () => Promise<void>
+  loadBoard: (opts?: { force?: boolean }) => Promise<void>
   refreshBoard: () => Promise<void>
   createLane: (name: string, color: SwimlaneColor) => Promise<void>
   renameLane: (id: number, name: string) => Promise<void>
@@ -51,6 +54,27 @@ function normalize(cardsByLane: Record<string, MergeQueueItem[]>): CardsByLane {
   return out
 }
 
+/**
+ * Match a swimlane card against the search query. Matches:
+ *  - exact PR number (when query is all digits)
+ *  - any substring of PR number, title, author, repo (case-insensitive)
+ * Empty / whitespace-only query → always false (caller decides what to do).
+ */
+export function cardMatchesQuery(card: MergeQueueItem, query: string): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return false
+  if (/^\d+$/.test(q) && String(card.number) === q) return true
+  const haystack = [
+    String(card.number),
+    card.title || '',
+    card.author || '',
+    card.repo || '',
+  ]
+    .join(' ')
+    .toLowerCase()
+  return haystack.includes(q)
+}
+
 export const useSwimlaneStore = create<SwimlaneState>((set, get) => ({
   lanes: [],
   cardsByLane: {},
@@ -59,11 +83,15 @@ export const useSwimlaneStore = create<SwimlaneState>((set, get) => ({
   lastUpdated: null,
   refreshing: false,
   pollPauseDepth: 0,
+  searchQuery: '',
+  setSearchQuery: (q) => set({ searchQuery: q }),
 
-  loadBoard: async () => {
+  loadBoard: async (opts = {}) => {
     set({ loading: true, error: null })
     try {
-      const data = await fetchSwimlaneBoard()
+      // force=true also invalidates per-PR timeline caches on the backend so
+      // a subsequent timeline-modal open shows fresh events, not <=5min stale.
+      const data = await fetchSwimlaneBoard({ refresh: opts.force })
       set({
         lanes: data.lanes,
         cardsByLane: normalize(data.cardsByLane),

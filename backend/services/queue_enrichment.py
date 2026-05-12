@@ -94,10 +94,18 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db) -> Dict[str, Any]:
             minor_posted_count = latest_review.get("minor_posted_count")
             minor_found_count = latest_review.get("minor_found_count")
             is_followup = bool(latest_review.get("is_followup", False))
-            if latest_review.get("head_commit_sha"):
-                last_reviewed_sha = latest_review["head_commit_sha"]
+            stored_sha = latest_review.get("head_commit_sha")
+            if stored_sha:
+                last_reviewed_sha = stored_sha
                 if current_sha and last_reviewed_sha:
                     has_new_commits = current_sha != last_reviewed_sha
+            elif current_sha:
+                # Review exists but no SHA was captured (typically because GitHub
+                # returned a 5xx during the original fetch_pr_head_sha call).
+                # Treat this as "potentially has new commits" so the follow-up
+                # signal still surfaces — losing the badge entirely defeats the
+                # whole point of the indicator.
+                has_new_commits = True
 
             critical_issue_titles, major_issue_titles, minor_issue_titles = \
                 _extract_issue_titles(latest_review.get("content_json"))

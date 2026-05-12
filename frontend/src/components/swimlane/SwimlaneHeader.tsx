@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useSwimlaneStore } from '../../stores/useSwimlaneStore'
+import { useMemo, useState } from 'react'
+import { cardMatchesQuery, useSwimlaneStore } from '../../stores/useSwimlaneStore'
 import { SwimlaneColor } from '../../api/types'
 import { Button } from '../common/Button'
 import { CacheTimestamp } from '../common/CacheTimestamp'
@@ -13,11 +13,24 @@ interface SwimlaneHeaderProps {
 export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
   const createLane = useSwimlaneStore((s) => s.createLane)
   const loading = useSwimlaneStore((s) => s.loading)
-  const totalCards = useSwimlaneStore((s) =>
-    Object.values(s.cardsByLane).reduce((sum, list) => sum + list.length, 0)
+  const cardsByLane = useSwimlaneStore((s) => s.cardsByLane)
+  const totalCards = useMemo(
+    () => Object.values(cardsByLane).reduce((sum, list) => sum + list.length, 0),
+    [cardsByLane],
   )
   const lastUpdated = useSwimlaneStore((s) => s.lastUpdated)
   const refreshing = useSwimlaneStore((s) => s.refreshing)
+  const searchQuery = useSwimlaneStore((s) => s.searchQuery)
+  const setSearchQuery = useSwimlaneStore((s) => s.setSearchQuery)
+
+  const matchCount = useMemo(() => {
+    if (!searchQuery.trim()) return 0
+    let n = 0
+    for (const list of Object.values(cardsByLane)) {
+      for (const card of list) if (cardMatchesQuery(card, searchQuery)) n++
+    }
+    return n
+  }, [cardsByLane, searchQuery])
 
   const [showAddForm, setShowAddForm] = useState(false)
   const [name, setName] = useState('')
@@ -38,6 +51,35 @@ export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
         <h2>Swimlane Board</h2>
         <span className="mx-swl-modal__count">{totalCards} cards</span>
         <CacheTimestamp lastUpdated={lastUpdated} refreshing={refreshing} stale={refreshing} />
+      </div>
+
+      <div className="mx-swl-modal__search">
+        <input
+          type="search"
+          className="mx-swl-search__input"
+          placeholder="Search PR # or text…"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setSearchQuery('')
+          }}
+          aria-label="Search cards"
+        />
+        {searchQuery && (
+          <>
+            <span className="mx-swl-search__count" aria-live="polite">
+              {matchCount} match{matchCount === 1 ? '' : 'es'}
+            </span>
+            <button
+              type="button"
+              className="mx-swl-search__clear"
+              onClick={() => setSearchQuery('')}
+              aria-label="Clear search"
+            >
+              ×
+            </button>
+          </>
+        )}
       </div>
 
       <div className="mx-swl-modal__actions">

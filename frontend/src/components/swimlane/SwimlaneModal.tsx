@@ -23,6 +23,11 @@ export function SwimlaneModal() {
 
   const handleClose = useCallback(() => close(false), [close])
 
+  // The header refresh button is an explicit user action — bust per-PR timeline
+  // caches alongside the live board fetch so subsequent timeline modal opens
+  // also show fresh events, not 5-min-stale cached ones.
+  const handleManualRefresh = useCallback(() => loadBoard({ force: true }), [loadBoard])
+
   useEffect(() => {
     if (!isOpen) return
     loadBoard()
@@ -81,7 +86,7 @@ export function SwimlaneModal() {
             exit={{ opacity: 0, x: 60, scale: 0.98 }}
             transition={{ type: 'spring', damping: 28, stiffness: 320 }}
           >
-            <SwimlaneHeader onClose={handleClose} onRefresh={loadBoard} />
+            <SwimlaneHeader onClose={handleClose} onRefresh={handleManualRefresh} />
 
             <div className="mx-swl-modal__body">
               {error && <Alert variant="error">{error}</Alert>}
@@ -91,7 +96,7 @@ export function SwimlaneModal() {
                   <p>Loading board…</p>
                 </div>
               ) : (
-                <SwimlaneBoard onRefresh={loadBoard} />
+                <SwimlaneBoard onRefresh={handleManualRefresh} />
               )}
             </div>
           </motion.div>

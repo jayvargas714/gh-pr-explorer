@@ -70,11 +70,12 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
   open(target) {
     const key = keyFor(target.owner, target.repo, target.prNumber)
     const existing = get().timelines[key]
-    let shouldForce = false
-    if (existing && existing.lastUpdated && existing.prState === 'OPEN') {
-      const age = Date.now() - new Date(existing.lastUpdated).getTime()
-      if (age > 5 * 60_000) shouldForce = true
-    }
+    // OPEN PRs: always force-refresh on open. Opening the modal is an explicit
+    // user signal that they want current state — serving up-to-5-min-stale
+    // cached events here masks fresh pushes and review activity. Closed/Merged
+    // PRs are immutable, so the cache is still authoritative for them.
+    const isOpenPR = !existing || existing.prState === 'OPEN'
+    const shouldForce = isOpenPR
     set((state) => ({
       openFor: target,
       timelines: state.timelines[key]

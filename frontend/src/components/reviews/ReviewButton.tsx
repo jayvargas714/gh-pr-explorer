@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useReviewStore } from '../../stores/useReviewStore'
 import { useAccountStore } from '../../stores/useAccountStore'
-import { startReview, cancelReview } from '../../api/reviews'
+import { startReview, cancelReview, type ReviewerType } from '../../api/reviews'
 import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
+import { ReviewerPickerMenu } from './ReviewerPickerMenu'
 import type { PullRequest } from '../../api/types'
 
 interface ReviewButtonProps {
@@ -12,6 +13,7 @@ interface ReviewButtonProps {
 
 export function ReviewButton({ pr }: ReviewButtonProps) {
   const [starting, setStarting] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const { activeReviews, updateReview, removeReview, showReviewError } =
     useReviewStore()
   const selectedRepo = useAccountStore((state) => state.selectedRepo)
@@ -21,8 +23,9 @@ export function ReviewButton({ pr }: ReviewButtonProps) {
   const reviewKey = `${owner}/${repo}/${pr.number}`
   const review = activeReviews[reviewKey]
 
-  const handleStartReview = async () => {
+  const handleStartReview = async (reviewerType: ReviewerType) => {
     if (starting || !owner || !repo) return
+    setPickerOpen(false)
 
     try {
       setStarting(true)
@@ -31,6 +34,7 @@ export function ReviewButton({ pr }: ReviewButtonProps) {
         url: pr.url,
         owner,
         repo,
+        reviewer_type: reviewerType,
       })
       updateReview(reviewKey, {
         key: reviewKey,
@@ -77,9 +81,22 @@ export function ReviewButton({ pr }: ReviewButtonProps) {
   // No review running
   if (!review) {
     return (
-      <Button variant="ghost" size="sm" onClick={handleStartReview} disabled={starting}>
-        {starting ? <Spinner size="sm" /> : '📋 Review'}
-      </Button>
+      <div className="mx-reviewer-picker__wrapper">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setPickerOpen((open) => !open)}
+          disabled={starting}
+        >
+          {starting ? <Spinner size="sm" /> : '📋 Review ▾'}
+        </Button>
+        {pickerOpen && (
+          <ReviewerPickerMenu
+            onSelect={handleStartReview}
+            onClose={() => setPickerOpen(false)}
+          />
+        )}
+      </div>
     )
   }
 

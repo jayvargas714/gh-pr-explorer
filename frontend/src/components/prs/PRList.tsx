@@ -4,6 +4,7 @@ import { useAccountStore } from '../../stores/useAccountStore'
 import { useFilterStore, getFilterParams } from '../../stores/useFilterStore'
 import { usePolling } from '../../hooks/usePolling'
 import { fetchPRs, fetchDivergence } from '../../api/prs'
+import { APIError } from '../../api/client'
 import { fetchReviewHistory } from '../../api/reviews'
 import { PRCard } from './PRCard'
 import { Pagination } from '../common/Pagination'
@@ -45,11 +46,27 @@ export function PRList() {
         setError(null)
       }
 
-      const response = await fetchPRs(
-        selectedRepo.owner.login,
-        selectedRepo.name,
-        filters
-      )
+      let response
+      try {
+        response = await fetchPRs(
+          selectedRepo.owner.login,
+          selectedRepo.name,
+          filters
+        )
+      } catch (err) {
+        // Auto-retry once on transient upstream errors (GitHub 5xx) before
+        // surfacing the banner. The backend already retries with backoff;
+        // this gives one more pass after a short pause.
+        const isTransient =
+          err instanceof APIError && (err.status === 503 || err.status === 502 || err.status === 504)
+        if (!isTransient) throw err
+        await new Promise((resolve) => setTimeout(resolve, 2000))
+        response = await fetchPRs(
+          selectedRepo.owner.login,
+          selectedRepo.name,
+          filters
+        )
+      }
 
       // On silent refresh, preserve current page position
       setPRs(response.prs, !silent)
@@ -66,7 +83,13 @@ export function PRList() {
     } catch (err) {
       // Only show errors for user-initiated loads, not silent refreshes
       if (!silent) {
-        setError(err instanceof Error ? err.message : 'Failed to load pull requests')
+        const friendly =
+          err instanceof APIError && (err.status === 503 || err.status === 502 || err.status === 504)
+            ? 'GitHub is having a moment (upstream 5xx). Try again in a few seconds.'
+            : err instanceof Error
+              ? err.message
+              : 'Failed to load pull requests'
+        setError(friendly)
       }
     } finally {
       if (!silent) {

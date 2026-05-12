@@ -20,6 +20,8 @@ export async function fetchActiveReviews(): Promise<ReviewsResponse> {
 /**
  * Start a code review
  */
+export type ReviewerType = 'default' | 'pb'
+
 export async function startReview(data: {
   number: number
   url: string
@@ -29,6 +31,7 @@ export async function startReview(data: {
   author?: string
   is_followup?: boolean
   previous_review_id?: number
+  reviewer_type?: ReviewerType
 }): Promise<{ message: string; key: string; status: string }> {
   return api.post('/reviews', data)
 }

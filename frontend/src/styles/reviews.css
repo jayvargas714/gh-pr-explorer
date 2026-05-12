@@ -284,3 +284,64 @@
     flex-direction: column;
   }
 }
+
+/* Reviewer Picker Menu (Default vs Product Brief reviewer) */
+.mx-reviewer-picker__wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+.mx-reviewer-picker {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  min-width: 240px;
+  background: var(--mx-color-bg-elevated);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md, 6px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: var(--mx-spacing-1, 4px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mx-reviewer-picker__option {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-spacing-2, 8px);
+  width: 100%;
+  padding: var(--mx-spacing-2, 8px) var(--mx-spacing-3, 12px);
+  background: transparent;
+  border: 0;
+  border-radius: var(--mx-radius-sm, 4px);
+  cursor: pointer;
+  text-align: left;
+  color: var(--mx-color-text-primary);
+  font: inherit;
+  transition: background-color 120ms ease;
+}
+
+.mx-reviewer-picker__option:hover,
+.mx-reviewer-picker__option:focus-visible {
+  background: var(--mx-color-surface-hover);
+  outline: none;
+}
+
+.mx-reviewer-picker__icon {
+  font-size: 1.1em;
+  line-height: 1;
+}
+
+.mx-reviewer-picker__label {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.mx-reviewer-picker__label small {
+  font-family: var(--mx-font-family-mono);
+  font-size: var(--mx-font-size-xs, 11px);
+  color: var(--mx-color-text-secondary);
+}

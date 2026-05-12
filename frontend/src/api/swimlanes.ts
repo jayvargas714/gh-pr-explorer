@@ -8,8 +8,9 @@ import {
   SwimlanesListResponse,
 } from './types'
 
-export function fetchSwimlaneBoard(): Promise<SwimlaneBoardResponse> {
-  return api.get<SwimlaneBoardResponse>('/swimlanes/board')
+export function fetchSwimlaneBoard(opts: { refresh?: boolean } = {}): Promise<SwimlaneBoardResponse> {
+  const qs = opts.refresh ? '?refresh=true' : ''
+  return api.get<SwimlaneBoardResponse>(`/swimlanes/board${qs}`)
 }
 
 export function createSwimlane(name: string, color: SwimlaneColor): Promise<SwimlaneResponse> {

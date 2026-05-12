@@ -9,7 +9,7 @@ from backend.extensions import logger
 from backend.filters.pr_filter_builder import PRFilterParams, PRFilterBuilder
 from backend.routes import error_response
 from backend.database import get_timeline_cache_db
-from backend.services.github_service import run_gh_command, parse_json_output
+from backend.services.github_service import run_gh_command, parse_json_output, TransientGitHubError
 from backend.services.pr_service import get_review_status, get_ci_status, get_current_reviewers
 from backend.services.timeline_service import get_timeline
 
@@ -113,6 +113,12 @@ def get_prs(owner, repo):
 
         return jsonify({"prs": prs})
 
+    except TransientGitHubError as e:
+        logger.warning(f"GitHub upstream error fetching PRs for {owner}/{repo}: {e}")
+        return jsonify({
+            "error": "GitHub is having a moment (upstream 5xx). Try again in a few seconds.",
+            "transient": True,
+        }), 503
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 500
 

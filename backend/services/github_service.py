@@ -15,10 +15,25 @@ _TRANSIENT_ERRORS = (
 )
 
 
-def run_gh_command(args, check=True, max_retries=2, retry_delay=1):
+class TransientGitHubError(RuntimeError):
+    """Raised when gh CLI fails with a transient upstream error after all retries."""
+    pass
+
+
+def is_transient_gh_error(message):
+    """True if the error string looks like a transient GitHub/HTTP error."""
+    if not message:
+        return False
+    return any(err in message for err in _TRANSIENT_ERRORS)
+
+
+def run_gh_command(args, check=True, max_retries=3, retry_delay=1):
     """Run a gh CLI command and return the output.
 
-    Retries automatically on transient HTTP/2 stream errors.
+    Retries automatically on transient HTTP/2 stream errors and 5xx responses
+    with exponential backoff (retry_delay, 2x, 4x, ...). If all retries are
+    exhausted on a transient error, raises TransientGitHubError so callers can
+    distinguish upstream flakiness from genuine 4xx/auth errors.
     """
     for attempt in range(max_retries + 1):
         try:
@@ -31,10 +46,14 @@ def run_gh_command(args, check=True, max_retries=2, retry_delay=1):
             return result.stdout.strip()
         except subprocess.CalledProcessError as e:
             stderr = e.stderr or ""
-            if attempt < max_retries and any(err in stderr for err in _TRANSIENT_ERRORS):
-                logger.warning(f"Transient gh error (attempt {attempt + 1}), retrying: {stderr.strip()}")
-                time.sleep(retry_delay)
+            transient = is_transient_gh_error(stderr)
+            if attempt < max_retries and transient:
+                backoff = retry_delay * (2 ** attempt)
+                logger.warning(f"Transient gh error (attempt {attempt + 1}/{max_retries + 1}), retrying in {backoff}s: {stderr.strip()}")
+                time.sleep(backoff)
                 continue
+            if transient:
+                raise TransientGitHubError(f"gh command failed: {stderr}")
             raise RuntimeError(f"gh command failed: {stderr}")
         except FileNotFoundError:
             raise RuntimeError("gh CLI not found. Please install GitHub CLI.")

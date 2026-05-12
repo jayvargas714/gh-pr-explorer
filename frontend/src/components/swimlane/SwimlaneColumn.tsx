@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { MergeQueueItem, Swimlane, SwimlaneColor } from '../../api/types'
-import { useSwimlaneStore } from '../../stores/useSwimlaneStore'
+import { cardMatchesQuery, useSwimlaneStore } from '../../stores/useSwimlaneStore'
 import { QueueItem } from '../queue/QueueItem'
 import { Button } from '../common/Button'
 import { LaneColorPicker } from './LaneColorPicker'
@@ -23,12 +23,35 @@ export function SwimlaneColumn({ lane, cards, canDelete, sortable, isHighlighted
   const renameLane = useSwimlaneStore((s) => s.renameLane)
   const recolorLane = useSwimlaneStore((s) => s.recolorLane)
   const deleteLane = useSwimlaneStore((s) => s.deleteLane)
+  const searchQuery = useSwimlaneStore((s) => s.searchQuery)
 
   const [editing, setEditing] = useState(false)
   const [draftName, setDraftName] = useState(lane.name)
   const [showColorPicker, setShowColorPicker] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const colorPickerRef = useRef<HTMLDivElement>(null)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+
+  const searchActive = searchQuery.trim().length > 0
+  const matchByCardId = useMemo(() => {
+    const m: Record<number, boolean> = {}
+    if (!searchActive) return m
+    for (const c of cards) m[c.id] = cardMatchesQuery(c, searchQuery)
+    return m
+  }, [cards, searchQuery, searchActive])
+
+  // Scroll the first match in this column into view whenever the query
+  // changes. Without this, a matching card past the column's scroll fold
+  // would light up but stay invisible.
+  useEffect(() => {
+    if (!searchActive || !bodyRef.current) return
+    const firstMatch = cards.find((c) => matchByCardId[c.id])
+    if (!firstMatch) return
+    const el = bodyRef.current.querySelector<HTMLElement>(
+      `[data-pr-number="${firstMatch.number}"]`,
+    )
+    if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [searchQuery, searchActive, cards, matchByCardId])
 
   // Card destination droppable — id has `lane-` prefix so it never collides with card numeric ids.
   // Note: we don't use isOver here for highlighting; the board computes overLaneId for us
@@ -177,13 +200,27 @@ export function SwimlaneColumn({ lane, cards, canDelete, sortable, isHighlighted
         )}
       </header>
 
-      <div ref={setBodyRef} className="mx-swl-column__body">
+      <div
+        ref={(node) => {
+          setBodyRef(node)
+          bodyRef.current = node
+        }}
+        className="mx-swl-column__body"
+      >
         <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           {cards.length === 0 ? (
             <div className="mx-swl-column__empty">Drop cards here</div>
           ) : (
             cards.map((card, idx) => (
-              <QueueItem key={card.id} item={card} index={idx} onRefresh={onRefresh} />
+              <QueueItem
+                key={card.id}
+                item={card}
+                index={idx}
+                onRefresh={onRefresh}
+                searchMatch={
+                  searchActive ? (matchByCardId[card.id] ? 'match' : 'dim') : undefined
+                }
+              />
             ))
           )}
         </SortableContext>

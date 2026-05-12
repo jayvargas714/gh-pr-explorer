@@ -76,8 +76,11 @@ def start_review():
         previous_review_id = data.get("previous_review_id")
         pr_title = data.get("title")
         pr_author = data.get("author")
+        reviewer_type = data.get("reviewer_type", "default")
+        if reviewer_type not in ("default", "pb"):
+            return jsonify({"error": f"Invalid reviewer_type: {reviewer_type}"}), 400
 
-        logger.info(f"Received {'follow-up ' if is_followup else ''}review request for {key}")
+        logger.info(f"Received {'follow-up ' if is_followup else ''}review request for {key} (reviewer={reviewer_type})")
 
         with reviews_lock:
             if key in active_reviews:
@@ -108,7 +111,8 @@ def start_review():
         process, result, is_followup = start_review_process(
             pr_url, owner, repo, pr_number,
             is_followup=is_followup,
-            previous_review_content=previous_review_content
+            previous_review_content=previous_review_content,
+            reviewer_type=reviewer_type,
         )
 
         if process is None:
