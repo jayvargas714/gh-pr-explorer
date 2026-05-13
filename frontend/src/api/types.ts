@@ -93,8 +93,17 @@ export interface ReviewRequest {
 }
 
 export interface StatusCheck {
-  status: string
-  conclusion: string | null
+  status?: string
+  conclusion?: string | null
+  state?: string
+  name?: string
+  context?: string
+  workflowName?: string
+  description?: string | null
+  detailsUrl?: string | null
+  targetUrl?: string | null
+  startedAt?: string | null
+  completedAt?: string | null
 }
 
 export interface Milestone {
@@ -337,6 +346,7 @@ export interface MergeQueueItem {
   ciStatus: string | null
   isDraft: boolean
   currentReviewers: Reviewer[]
+  statusCheckRollup?: StatusCheck[] | null
 }
 
 export interface QueueNote {

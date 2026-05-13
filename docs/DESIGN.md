@@ -887,6 +887,8 @@ Shows the status of CI/CD checks (GitHub Actions, etc.):
 
 The CI status is derived from the `statusCheckRollup` field which aggregates all check runs and status contexts for the PR.
 
+When the badge shows **CI failed**, hovering it opens a portal-rendered popover listing the individual checks that failed. Each row displays the check name, an optional workflow/description subtitle, the failure type (`Failed` / `Timed out` / `Action required`), an optional duration, and — when GitHub provides a `detailsUrl` or `targetUrl` — the entire row becomes a clickable link to the failing run on GitHub. Checks are deduplicated client-side using the same "latest run per check name" rule the backend uses to compute `ciStatus`, so superseded reruns never appear. The same component (`CIStatusBadge`) is shared by the PR list, the merge queue panel, and the swimlane board, and the merge queue API now includes `statusCheckRollup` on each enriched queue item to power it.
+
 #### Other PR Card Badges
 
 | Badge | Description |

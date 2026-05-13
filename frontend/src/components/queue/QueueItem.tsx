@@ -11,6 +11,7 @@ import { QueueDescriptionModal } from './QueueDescriptionModal'
 import { QueueReviewButton } from '../reviews/QueueReviewButton'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
+import { CIStatusBadge } from '../common/CIStatusBadge'
 import { ChangesRequestedModal } from '../common/ChangesRequestedModal'
 import { formatNumber, formatRelativeTime } from '../../utils/formatters'
 import { ReviewersBadge } from '../common/ReviewersBadge'
@@ -120,16 +121,9 @@ export function QueueItem({ item, index, onRefresh, searchMatch }: QueueItemProp
 
   const getCIStatusBadge = () => {
     if (!item.ciStatus) return null
-    switch (item.ciStatus.toLowerCase()) {
-      case 'success':
-        return <Badge variant="success">✓ CI Passed</Badge>
-      case 'failure':
-        return <Badge variant="error">✗ CI Failed</Badge>
-      case 'pending':
-        return <Badge variant="warning">⏳ CI Running</Badge>
-      default:
-        return <Badge variant="neutral">CI Skipped</Badge>
-    }
+    return (
+      <CIStatusBadge ciStatus={item.ciStatus} statusCheckRollup={item.statusCheckRollup} />
+    )
   }
 
   return (

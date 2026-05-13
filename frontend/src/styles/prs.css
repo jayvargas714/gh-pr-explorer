@@ -172,6 +172,107 @@
 }
 
 /* ============================================================================
+   CI Failed popover (shared by PRCard badges and QueueItem)
+   ============================================================================ */
+
+.mx-ci-badge-trigger {
+  display: inline-flex;
+  cursor: default;
+}
+
+.mx-ci-popup {
+  position: fixed;
+  transform: translateX(-50%);
+  z-index: 9999;
+  background: var(--mx-color-bg-elevated);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  box-shadow: var(--mx-shadow-lg);
+  min-width: 260px;
+  max-width: 380px;
+  animation: fadeIn 0.1s ease-out;
+  overflow: hidden;
+}
+
+.mx-ci-popup__header {
+  padding: var(--mx-space-2) var(--mx-space-3);
+  font-size: var(--mx-font-size-xs);
+  font-weight: var(--mx-font-weight-semibold);
+  color: var(--mx-color-error);
+  border-bottom: 1px solid var(--mx-color-border);
+  background: var(--mx-color-surface);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mx-ci-popup__list {
+  display: flex;
+  flex-direction: column;
+  padding: var(--mx-space-1) 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.mx-ci-popup__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--mx-space-3);
+  padding: var(--mx-space-2) var(--mx-space-3);
+  color: var(--mx-color-text-primary);
+  text-decoration: none;
+}
+
+.mx-ci-popup__item--link {
+  cursor: pointer;
+}
+
+.mx-ci-popup__item--link:hover {
+  background: var(--mx-color-surface-hover);
+}
+
+.mx-ci-popup__icon {
+  flex-shrink: 0;
+  width: 18px;
+  text-align: center;
+  font-size: var(--mx-font-size-sm);
+  color: var(--mx-color-error);
+  line-height: 1.3;
+}
+
+.mx-ci-popup__info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.mx-ci-popup__name {
+  font-size: var(--mx-font-size-sm);
+  font-weight: var(--mx-font-weight-semibold);
+  color: var(--mx-color-text-primary);
+  word-break: break-word;
+}
+
+.mx-ci-popup__subtitle {
+  font-size: var(--mx-font-size-xs);
+  color: var(--mx-color-text-secondary);
+  word-break: break-word;
+}
+
+.mx-ci-popup__meta {
+  font-size: var(--mx-font-size-xs);
+  color: var(--mx-color-text-tertiary, var(--mx-color-text-secondary));
+}
+
+.mx-ci-popup__arrow {
+  flex-shrink: 0;
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-sm);
+  margin-top: 1px;
+}
+
+/* ============================================================================
    Clickable Badge
    ============================================================================ */
 

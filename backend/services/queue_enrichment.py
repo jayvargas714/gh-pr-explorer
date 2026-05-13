@@ -58,6 +58,7 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db) -> Dict[str, Any]:
     is_followup = False
     review_decision: Optional[str] = None
     ci_status: Optional[str] = None
+    status_check_rollup: Optional[List[Dict[str, Any]]] = None
     is_draft = False
     current_reviewers: List[Dict[str, Any]] = []
 
@@ -76,6 +77,12 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db) -> Dict[str, Any]:
         }
         review_decision = status_to_decision.get(effective_status, queue_data["reviewDecision"])
         ci_status = get_ci_status(queue_data["statusCheckRollup"])
+        rollup = queue_data.get("statusCheckRollup")
+        if isinstance(rollup, list):
+            status_check_rollup = rollup
+        elif isinstance(rollup, dict):
+            contexts = rollup.get("contexts")
+            status_check_rollup = contexts if isinstance(contexts, list) else None
         is_draft = queue_data.get("isDraft", False)
         current_reviewers = get_current_reviewers(queue_reviews)
 
@@ -145,6 +152,7 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db) -> Dict[str, Any]:
         "isFollowup": is_followup,
         "reviewDecision": review_decision,
         "ciStatus": ci_status,
+        "statusCheckRollup": status_check_rollup,
         "isDraft": is_draft,
         "currentReviewers": current_reviewers,
     }

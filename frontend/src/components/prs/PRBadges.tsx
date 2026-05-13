@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { PullRequest, DivergenceInfo } from '../../api/types'
 import { Badge } from '../common/Badge'
 import { ReviewersBadge } from '../common/ReviewersBadge'
+import { CIStatusBadge } from '../common/CIStatusBadge'
 import { ChangesRequestedModal } from '../common/ChangesRequestedModal'
 
 interface PRBadgesProps {
@@ -48,33 +49,13 @@ export function PRBadges({ pr, divergence }: PRBadgesProps) {
 
   const getCIStatusBadge = () => {
     if (!pr.ciStatus) return null
-
-    switch (pr.ciStatus.toLowerCase()) {
-      case 'success':
-        return (
-          <Badge variant="success" key="ci">
-            ✓ CI Passed
-          </Badge>
-        )
-      case 'failure':
-        return (
-          <Badge variant="error" key="ci">
-            ✗ CI Failed
-          </Badge>
-        )
-      case 'pending':
-        return (
-          <Badge variant="warning" key="ci">
-            ⏳ CI Running
-          </Badge>
-        )
-      default:
-        return (
-          <Badge variant="neutral" key="ci">
-            CI Skipped
-          </Badge>
-        )
-    }
+    return (
+      <CIStatusBadge
+        key="ci"
+        ciStatus={pr.ciStatus}
+        statusCheckRollup={pr.statusCheckRollup}
+      />
+    )
   }
 
   const getDivergenceBadge = () => {
