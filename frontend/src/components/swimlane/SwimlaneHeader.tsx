@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
-import { cardMatchesQuery, useSwimlaneStore } from '../../stores/useSwimlaneStore'
+import { cardPassesFilters, useSwimlaneStore } from '../../stores/useSwimlaneStore'
 import { SwimlaneColor } from '../../api/types'
 import { Button } from '../common/Button'
 import { CacheTimestamp } from '../common/CacheTimestamp'
 import { LaneColorPicker } from './LaneColorPicker'
+import { BadgeFilterPopover } from './BadgeFilterPopover'
 
 interface SwimlaneHeaderProps {
   onClose: () => void
@@ -22,15 +23,26 @@ export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
   const refreshing = useSwimlaneStore((s) => s.refreshing)
   const searchQuery = useSwimlaneStore((s) => s.searchQuery)
   const setSearchQuery = useSwimlaneStore((s) => s.setSearchQuery)
+  const badgeFilters = useSwimlaneStore((s) => s.badgeFilters)
+  const badgeFilterMode = useSwimlaneStore((s) => s.badgeFilterMode)
+  const clearBadgeFilters = useSwimlaneStore((s) => s.clearBadgeFilters)
 
+  const resetAllFilters = () => {
+    setSearchQuery('')
+    clearBadgeFilters()
+  }
+
+  const filterActive = searchQuery.trim().length > 0 || badgeFilters.size > 0
   const matchCount = useMemo(() => {
-    if (!searchQuery.trim()) return 0
+    if (!filterActive) return 0
     let n = 0
     for (const list of Object.values(cardsByLane)) {
-      for (const card of list) if (cardMatchesQuery(card, searchQuery)) n++
+      for (const card of list) {
+        if (cardPassesFilters(card, searchQuery, badgeFilters, badgeFilterMode)) n++
+      }
     }
     return n
-  }, [cardsByLane, searchQuery])
+  }, [cardsByLane, searchQuery, badgeFilters, badgeFilterMode, filterActive])
 
   const [showAddForm, setShowAddForm] = useState(false)
   const [name, setName] = useState('')
@@ -66,19 +78,31 @@ export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
           aria-label="Search cards"
         />
         {searchQuery && (
-          <>
-            <span className="mx-swl-search__count" aria-live="polite">
-              {matchCount} match{matchCount === 1 ? '' : 'es'}
-            </span>
-            <button
-              type="button"
-              className="mx-swl-search__clear"
-              onClick={() => setSearchQuery('')}
-              aria-label="Clear search"
-            >
-              ×
-            </button>
-          </>
+          <button
+            type="button"
+            className="mx-swl-search__clear"
+            onClick={() => setSearchQuery('')}
+            aria-label="Clear search"
+          >
+            ×
+          </button>
+        )}
+        <BadgeFilterPopover />
+        {filterActive && (
+          <button
+            type="button"
+            className="mx-swl-filter-reset"
+            onClick={resetAllFilters}
+            data-tooltip="Clear search and badge filters"
+            aria-label="Clear all filters"
+          >
+            Clear all
+          </button>
+        )}
+        {filterActive && (
+          <span className="mx-swl-search__count" aria-live="polite">
+            {matchCount} match{matchCount === 1 ? '' : 'es'}
+          </span>
         )}
       </div>
 

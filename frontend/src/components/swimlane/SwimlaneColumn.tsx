@@ -3,7 +3,7 @@ import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { MergeQueueItem, Swimlane, SwimlaneColor } from '../../api/types'
-import { cardMatchesQuery, useSwimlaneStore } from '../../stores/useSwimlaneStore'
+import { cardPassesFilters, useSwimlaneStore } from '../../stores/useSwimlaneStore'
 import { QueueItem } from '../queue/QueueItem'
 import { Button } from '../common/Button'
 import { LaneColorPicker } from './LaneColorPicker'
@@ -24,6 +24,8 @@ export function SwimlaneColumn({ lane, cards, canDelete, sortable, isHighlighted
   const recolorLane = useSwimlaneStore((s) => s.recolorLane)
   const deleteLane = useSwimlaneStore((s) => s.deleteLane)
   const searchQuery = useSwimlaneStore((s) => s.searchQuery)
+  const badgeFilters = useSwimlaneStore((s) => s.badgeFilters)
+  const badgeFilterMode = useSwimlaneStore((s) => s.badgeFilterMode)
 
   const [editing, setEditing] = useState(false)
   const [draftName, setDraftName] = useState(lane.name)
@@ -32,26 +34,28 @@ export function SwimlaneColumn({ lane, cards, canDelete, sortable, isHighlighted
   const colorPickerRef = useRef<HTMLDivElement>(null)
   const bodyRef = useRef<HTMLDivElement | null>(null)
 
-  const searchActive = searchQuery.trim().length > 0
+  const filterActive = searchQuery.trim().length > 0 || badgeFilters.size > 0
   const matchByCardId = useMemo(() => {
     const m: Record<number, boolean> = {}
-    if (!searchActive) return m
-    for (const c of cards) m[c.id] = cardMatchesQuery(c, searchQuery)
+    if (!filterActive) return m
+    for (const c of cards) {
+      m[c.id] = cardPassesFilters(c, searchQuery, badgeFilters, badgeFilterMode)
+    }
     return m
-  }, [cards, searchQuery, searchActive])
+  }, [cards, searchQuery, badgeFilters, badgeFilterMode, filterActive])
 
-  // Scroll the first match in this column into view whenever the query
-  // changes. Without this, a matching card past the column's scroll fold
-  // would light up but stay invisible.
+  // Scroll the first match in this column into view whenever the active
+  // filters change. Without this, a matching card past the column's scroll
+  // fold would light up but stay invisible.
   useEffect(() => {
-    if (!searchActive || !bodyRef.current) return
+    if (!filterActive || !bodyRef.current) return
     const firstMatch = cards.find((c) => matchByCardId[c.id])
     if (!firstMatch) return
     const el = bodyRef.current.querySelector<HTMLElement>(
       `[data-pr-number="${firstMatch.number}"]`,
     )
     if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [searchQuery, searchActive, cards, matchByCardId])
+  }, [searchQuery, badgeFilters, badgeFilterMode, filterActive, cards, matchByCardId])
 
   // Card destination droppable — id has `lane-` prefix so it never collides with card numeric ids.
   // Note: we don't use isOver here for highlighting; the board computes overLaneId for us
@@ -218,7 +222,7 @@ export function SwimlaneColumn({ lane, cards, canDelete, sortable, isHighlighted
                 index={idx}
                 onRefresh={onRefresh}
                 searchMatch={
-                  searchActive ? (matchByCardId[card.id] ? 'match' : 'dim') : undefined
+                  filterActive ? (matchByCardId[card.id] ? 'match' : 'dim') : undefined
                 }
               />
             ))

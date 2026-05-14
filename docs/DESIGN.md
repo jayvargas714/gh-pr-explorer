@@ -1194,7 +1194,8 @@ A Trello-style alternative view of the merge queue. Cards displayed inside swiml
 | Component | Responsibility |
 |-----------|----------------|
 | `SwimlaneModal` | Full-screen slide-from-right overlay shell, ESC handling, scroll lock |
-| `SwimlaneHeader` | Title, card count, "+ Add Lane" inline form, refresh, close |
+| `SwimlaneHeader` | Title, card count, search input, badge-filter popover, "+ Add Lane" inline form, refresh, close |
+| `BadgeFilterPopover` | Funnel button next to the search input that opens a popover for badge-based card filtering (AND/OR toggle + grouped chips, see "Filtering" below) |
 | `SwimlaneBoard` | `DndContext` orchestrating cross-column and within-column DnD |
 | `SwimlaneColumn` | Single lane: colored header, name (inline-editable on double-click), color swatch popover, count badge, `−` delete button, droppable + sortable body |
 | `LaneColorPicker` | 8-swatch grid for color selection |
@@ -1218,6 +1219,33 @@ swimlane_assignments (id, queue_item_id UNIQUE, swimlane_id, position_in_lane, u
 ```
 
 `swimlane_assignments.queue_item_id` cascades from `merge_queue(id)`. `swimlane_assignments.swimlane_id` is `ON DELETE SET NULL`, with `delete_lane()` re-homing orphans to the default. On startup, `create_app()` invokes `ensure_default_lane()` and `reconcile_assignments()` to handle drift and bootstrap the feature on existing databases.
+
+#### Filtering
+
+The header carries two visibility filters that both drive the same "match glow + non-match dim + auto-scroll-to-first-match" visual treatment. Filters are AND'd with each other: a card is visible (highlighted) iff it passes the text search and the badge filter.
+
+| Filter | Surface | Behavior |
+|--------|---------|----------|
+| Text search | Search input | Substring match against PR number, title, author, repo (case-insensitive); exact match on digit-only queries against the PR number |
+| Badge filter | Funnel popover (`BadgeFilterPopover`) | Grouped chip selector with an OR / AND mode toggle |
+
+Badge filter dimensions:
+
+| Group | Chips |
+|-------|-------|
+| State | Open, Closed, Merged |
+| Draft | Draft |
+| Review | ✓ Approved, ✗ Changes Requested, 👀 Review Required |
+| CI | CI Passed, CI Failed, CI Running |
+| Review Score | Has review, Score ≥ 7, Score 4–6, Score < 4 |
+| Other | New Commits, Reviewers Requested, Follow-up |
+
+**Combinator semantics**
+
+- **OR mode** — a card matches if any selected chip's predicate is true.
+- **AND mode** — within a single dimension, picks are still OR'd (a card can't be both Open and Merged at the same time); across dimensions each non-empty dimension must have at least one matching chip. Example: `State ∈ {Open, Merged}` AND `CI = Failure`.
+
+Selections live on `useSwimlaneStore` as `badgeFilters: Set<BadgeFilterKey>` and `badgeFilterMode: 'OR' | 'AND'`. The pure helper `cardPassesFilters(card, query, badges, mode)` combines text and badge predicates and is consumed by `SwimlaneColumn` (to drive `searchMatch="match"|"dim"` on each `QueueItem`) and by `SwimlaneHeader` (to compute the live `N matches` count). The match-glow uses the existing `mx-queue-item--search-match` pulse animation; non-matches receive `mx-queue-item--search-dim`.
 
 #### Live Updates
 

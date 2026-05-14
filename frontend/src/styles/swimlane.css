@@ -436,3 +436,254 @@
       0 0 22px 4px rgba(0, 255, 157, 0.52);
   }
 }
+
+/* Fast reset for search + badge filters. Sits next to the funnel button
+   and is only mounted while at least one filter is active. */
+.mx-swl-filter-reset {
+  height: 32px;
+  padding: 0 12px;
+  background: transparent;
+  border: 1px solid var(--mx-color-border);
+  border-radius: 6px;
+  color: var(--mx-color-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 120ms ease, color 120ms ease, background-color 120ms ease;
+}
+
+.mx-swl-filter-reset:hover {
+  border-color: var(--mx-color-error, #ff5470);
+  color: var(--mx-color-error, #ff5470);
+}
+
+/* ===========================================================================
+   Badge filter popover — funnel button + chip groups, lives in the swimlane
+   header next to the search input. Selections drive the same dim/match
+   pulse visuals as the text search via cardPassesFilters().
+   =========================================================================== */
+.mx-swl-badge-filter {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.mx-swl-badge-filter__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  background: var(--mx-color-bg-input);
+  border: 1px solid var(--mx-color-border);
+  border-radius: 6px;
+  color: var(--mx-color-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+.mx-swl-badge-filter__trigger:hover {
+  color: var(--mx-color-text-primary);
+  border-color: var(--mx-color-border-focus, var(--mx-color-primary));
+}
+
+.mx-swl-badge-filter__trigger--active,
+.mx-swl-badge-filter__trigger--open {
+  color: var(--mx-color-primary, #00ff9d);
+  border-color: var(--mx-color-primary, #00ff9d);
+  box-shadow: 0 0 0 1px rgba(0, 255, 157, 0.18);
+}
+
+.mx-swl-badge-filter__icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.mx-swl-badge-filter__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--mx-color-primary, #00ff9d);
+  color: #0b1320;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.mx-swl-badge-filter__popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  width: 360px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--mx-color-surface, #131d2a);
+  border: 1px solid var(--mx-color-border, #2a2a2a);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  padding: 14px;
+  animation: mx-swl-badge-popover-in 140ms ease-out;
+}
+
+@keyframes mx-swl-badge-popover-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.mx-swl-badge-filter__mode-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--mx-color-border, #2a2a2a);
+}
+
+.mx-swl-badge-filter__mode-label {
+  font-size: 12px;
+  color: var(--mx-color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.mx-swl-badge-filter__mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--mx-color-border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--mx-color-bg-input);
+}
+
+.mx-swl-badge-filter__mode-btn {
+  background: transparent;
+  border: 0;
+  color: var(--mx-color-text-secondary);
+  padding: 5px 14px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.mx-swl-badge-filter__mode-btn + .mx-swl-badge-filter__mode-btn {
+  border-left: 1px solid var(--mx-color-border);
+}
+
+.mx-swl-badge-filter__mode-btn:hover {
+  color: var(--mx-color-text-primary);
+}
+
+.mx-swl-badge-filter__mode-btn--active {
+  background: var(--mx-color-primary, #00ff9d);
+  color: #0b1320;
+}
+
+.mx-swl-badge-filter__mode-btn--active:hover {
+  color: #0b1320;
+}
+
+.mx-swl-badge-filter__groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mx-swl-badge-filter__group-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--mx-color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+
+.mx-swl-badge-filter__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mx-swl-badge-filter__chip {
+  background: var(--mx-color-bg-input);
+  border: 1px solid var(--mx-color-border);
+  border-radius: 12px;
+  color: var(--mx-color-text-secondary);
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.mx-swl-badge-filter__chip:hover {
+  color: var(--mx-color-text-primary);
+  border-color: var(--mx-color-border-focus, var(--mx-color-primary));
+}
+
+.mx-swl-badge-filter__chip--on {
+  background: rgba(0, 255, 157, 0.12);
+  border-color: var(--mx-color-primary, #00ff9d);
+  color: var(--mx-color-primary, #00ff9d);
+  box-shadow: 0 0 0 1px rgba(0, 255, 157, 0.25);
+}
+
+.mx-swl-badge-filter__chip--on:hover {
+  color: var(--mx-color-primary, #00ff9d);
+}
+
+.mx-swl-badge-filter__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--mx-color-border, #2a2a2a);
+}
+
+.mx-swl-badge-filter__clear,
+.mx-swl-badge-filter__done {
+  background: transparent;
+  border: 1px solid var(--mx-color-border);
+  border-radius: 6px;
+  color: var(--mx-color-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background-color 120ms ease;
+}
+
+.mx-swl-badge-filter__clear:hover:not(:disabled),
+.mx-swl-badge-filter__done:hover {
+  border-color: var(--mx-color-primary, #00ff9d);
+  color: var(--mx-color-primary, #00ff9d);
+}
+
+.mx-swl-badge-filter__clear:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mx-swl-badge-filter__done {
+  background: var(--mx-color-primary, #00ff9d);
+  border-color: var(--mx-color-primary, #00ff9d);
+  color: #0b1320;
+}
+
+.mx-swl-badge-filter__done:hover {
+  color: #0b1320;
+  filter: brightness(1.05);
+}

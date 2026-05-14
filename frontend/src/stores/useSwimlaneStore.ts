@@ -11,6 +11,43 @@ import {
 
 type CardsByLane = Record<number, MergeQueueItem[]>
 
+// Badge filter keys grouped by visual dimension. Within a dimension, multiple
+// picks are OR'd (a single card can't be both Open and Merged); across
+// dimensions, the combinator is controlled by `badgeFilterMode`.
+export type BadgeFilterKey =
+  | 'state:open' | 'state:closed' | 'state:merged'
+  | 'draft'
+  | 'review:approved' | 'review:changes_requested' | 'review:review_required'
+  | 'ci:success' | 'ci:failure' | 'ci:pending'
+  | 'has_review' | 'score:good' | 'score:ok' | 'score:bad'
+  | 'new_commits' | 'reviewers_requested' | 'followup'
+
+type BadgeDimension =
+  | 'state' | 'draft' | 'review' | 'ci' | 'review_score'
+  | 'new_commits' | 'reviewers' | 'followup'
+
+export const BADGE_DIMENSION: Record<BadgeFilterKey, BadgeDimension> = {
+  'state:open': 'state',
+  'state:closed': 'state',
+  'state:merged': 'state',
+  draft: 'draft',
+  'review:approved': 'review',
+  'review:changes_requested': 'review',
+  'review:review_required': 'review',
+  'ci:success': 'ci',
+  'ci:failure': 'ci',
+  'ci:pending': 'ci',
+  has_review: 'review_score',
+  'score:good': 'review_score',
+  'score:ok': 'review_score',
+  'score:bad': 'review_score',
+  new_commits: 'new_commits',
+  reviewers_requested: 'reviewers',
+  followup: 'followup',
+}
+
+export type BadgeFilterMode = 'OR' | 'AND'
+
 interface SwimlaneState {
   lanes: Swimlane[]
   cardsByLane: CardsByLane
@@ -26,6 +63,12 @@ interface SwimlaneState {
   // Free-text search across cards (PR number, title, author, repo). Empty string = no filter.
   searchQuery: string
   setSearchQuery: (q: string) => void
+  // Badge-driven visibility filter. Empty set = no filter.
+  badgeFilters: Set<BadgeFilterKey>
+  badgeFilterMode: BadgeFilterMode
+  toggleBadgeFilter: (key: BadgeFilterKey) => void
+  setBadgeFilterMode: (mode: BadgeFilterMode) => void
+  clearBadgeFilters: () => void
 
   loadBoard: (opts?: { force?: boolean }) => Promise<void>
   refreshBoard: () => Promise<void>
@@ -75,6 +118,73 @@ export function cardMatchesQuery(card: MergeQueueItem, query: string): boolean {
   return haystack.includes(q)
 }
 
+// Per-key predicate. Field names mirror getStateBadge/getReviewStatusBadge/etc.
+// in QueueItem so a filter matches exactly the cards whose badge is rendered.
+function cardMatchesBadge(card: MergeQueueItem, key: BadgeFilterKey): boolean {
+  switch (key) {
+    case 'state:open':   return card.prState === 'OPEN'
+    case 'state:closed': return card.prState === 'CLOSED'
+    case 'state:merged': return card.prState === 'MERGED'
+    case 'draft':        return !!card.isDraft
+    case 'review:approved':          return card.reviewDecision === 'APPROVED'
+    case 'review:changes_requested': return card.reviewDecision === 'CHANGES_REQUESTED'
+    case 'review:review_required':   return card.reviewDecision === 'REVIEW_REQUIRED'
+    case 'ci:success': return card.ciStatus === 'success'
+    case 'ci:failure': return card.ciStatus === 'failure'
+    case 'ci:pending': return card.ciStatus === 'pending'
+    case 'has_review': return !!card.hasReview
+    case 'score:good': return !!card.hasReview && card.reviewScore != null && card.reviewScore >= 7
+    case 'score:ok':   return !!card.hasReview && card.reviewScore != null && card.reviewScore >= 4 && card.reviewScore <= 6
+    case 'score:bad':  return !!card.hasReview && card.reviewScore != null && card.reviewScore < 4
+    case 'new_commits':         return !!card.hasNewCommits
+    case 'reviewers_requested': return (card.currentReviewers?.length ?? 0) > 0
+    case 'followup':            return !!card.isFollowup
+  }
+}
+
+/**
+ * Visibility check for the badge filter. Returns true when no filters are
+ * active. With multiple filters: within a dimension picks are OR'd; across
+ * dimensions the combinator is `mode`.
+ */
+export function cardMatchesBadges(
+  card: MergeQueueItem,
+  filters: Set<BadgeFilterKey>,
+  mode: BadgeFilterMode,
+): boolean {
+  if (filters.size === 0) return true
+  if (mode === 'OR') {
+    for (const k of filters) if (cardMatchesBadge(card, k)) return true
+    return false
+  }
+  const byDim = new Map<BadgeDimension, BadgeFilterKey[]>()
+  for (const k of filters) {
+    const dim = BADGE_DIMENSION[k]
+    const arr = byDim.get(dim)
+    if (arr) arr.push(k)
+    else byDim.set(dim, [k])
+  }
+  for (const keys of byDim.values()) {
+    if (!keys.some((k) => cardMatchesBadge(card, k))) return false
+  }
+  return true
+}
+
+/**
+ * Combined visibility check: a card is "matching" iff it passes the text
+ * search (when active) AND the badge filter (when active). Both empty = match.
+ */
+export function cardPassesFilters(
+  card: MergeQueueItem,
+  query: string,
+  badges: Set<BadgeFilterKey>,
+  mode: BadgeFilterMode,
+): boolean {
+  const passesText = query.trim().length === 0 || cardMatchesQuery(card, query)
+  if (!passesText) return false
+  return cardMatchesBadges(card, badges, mode)
+}
+
 export const useSwimlaneStore = create<SwimlaneState>((set, get) => ({
   lanes: [],
   cardsByLane: {},
@@ -85,6 +195,16 @@ export const useSwimlaneStore = create<SwimlaneState>((set, get) => ({
   pollPauseDepth: 0,
   searchQuery: '',
   setSearchQuery: (q) => set({ searchQuery: q }),
+  badgeFilters: new Set<BadgeFilterKey>(),
+  badgeFilterMode: 'OR',
+  toggleBadgeFilter: (key) => set((s) => {
+    const next = new Set(s.badgeFilters)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    return { badgeFilters: next }
+  }),
+  setBadgeFilterMode: (mode) => set({ badgeFilterMode: mode }),
+  clearBadgeFilters: () => set({ badgeFilters: new Set<BadgeFilterKey>() }),
 
   loadBoard: async (opts = {}) => {
     set({ loading: true, error: null })
