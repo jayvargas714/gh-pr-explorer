@@ -224,6 +224,7 @@ export function SwimlaneColumn({ lane, cards, canDelete, sortable, isHighlighted
                 searchMatch={
                   filterActive ? (matchByCardId[card.id] ? 'match' : 'dim') : undefined
                 }
+                swimlaneContext={{ currentLaneId: lane.id }}
               />
             ))
           )}

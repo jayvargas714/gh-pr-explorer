@@ -4,6 +4,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { useAccountStore } from '../../stores/useAccountStore'
 import { useReviewStore } from '../../stores/useReviewStore'
 import { useTimelineStore } from '../../stores/useTimelineStore'
+import { useSwimlaneStore } from '../../stores/useSwimlaneStore'
 import { removeFromQueue } from '../../api/queue'
 import { NotesModal } from './NotesModal'
 import { VerdictModal } from './VerdictModal'
@@ -27,6 +28,12 @@ interface QueueItemProps {
    * no search context (default rendering — used by the merge queue panel).
    */
   searchMatch?: 'match' | 'dim'
+  /**
+   * Swimlane context: present only when the card is rendered inside the
+   * swimlane board. Triggers the lane-selector dropdown so users with many
+   * lanes don't have to drag cards across the whole board.
+   */
+  swimlaneContext?: { currentLaneId: number }
 }
 
 function buildInlineTooltip(
@@ -46,7 +53,7 @@ function buildInlineTooltip(
   return parts.join('\n')
 }
 
-export function QueueItem({ item, index, onRefresh, searchMatch }: QueueItemProps) {
+export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext }: QueueItemProps) {
   const [showNotes, setShowNotes] = useState(false)
   const [showVerdict, setShowVerdict] = useState(false)
   const [showChangesModal, setShowChangesModal] = useState(false)
@@ -54,6 +61,8 @@ export function QueueItem({ item, index, onRefresh, searchMatch }: QueueItemProp
   const [removing, setRemoving] = useState(false)
   const openReviewViewer = useReviewStore((state) => state.openReviewViewer)
   const openTimeline = useTimelineStore((state) => state.open)
+  const lanes = useSwimlaneStore((state) => state.lanes)
+  const moveCard = useSwimlaneStore((state) => state.moveCard)
   const myLogin = useAccountStore((state) => state.accounts.find((a) => a.is_personal)?.login)
   const approvedByMe =
     !!myLogin && !!item.currentReviewers?.some((r) => r.login === myLogin && r.state === 'APPROVED')
@@ -70,6 +79,13 @@ export function QueueItem({ item, index, onRefresh, searchMatch }: QueueItemProp
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
+  }
+
+  const handleLaneChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    if (!swimlaneContext) return
+    const toLaneId = Number(e.target.value)
+    if (!Number.isFinite(toLaneId) || toLaneId === swimlaneContext.currentLaneId) return
+    await moveCard(item.id, swimlaneContext.currentLaneId, toLaneId, 0)
   }
 
   const handleRemove = async () => {
@@ -175,6 +191,23 @@ export function QueueItem({ item, index, onRefresh, searchMatch }: QueueItemProp
               <span className="mx-queue-item__repo">{item.repo}</span>
               <span className="mx-queue-item__author">by {item.author}</span>
               <span className="mx-queue-item__time">{formatRelativeTime(item.addedAt)}</span>
+              {swimlaneContext && lanes.length > 1 && (
+                <select
+                  className="mx-queue-item__lane-select"
+                  value={swimlaneContext.currentLaneId}
+                  onChange={handleLaneChange}
+                  onClick={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  data-tooltip="Move to lane"
+                  aria-label="Move card to lane"
+                >
+                  {lanes.map((lane) => (
+                    <option key={lane.id} value={lane.id}>
+                      {lane.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
         </div>

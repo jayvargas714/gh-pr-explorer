@@ -1194,12 +1194,20 @@ A Trello-style alternative view of the merge queue. Cards displayed inside swiml
 | Component | Responsibility |
 |-----------|----------------|
 | `SwimlaneModal` | Full-screen slide-from-right overlay shell, ESC handling, scroll lock |
-| `SwimlaneHeader` | Title, card count, search input, badge-filter popover, "+ Add Lane" inline form, refresh, close |
+| `SwimlaneHeader` | Title, card count, search input, badge-filter popover, "Clear merged (N)" bulk-remove button, "+ Add Lane" inline form, refresh, close |
 | `BadgeFilterPopover` | Funnel button next to the search input that opens a popover for badge-based card filtering (AND/OR toggle + grouped chips, see "Filtering" below) |
 | `SwimlaneBoard` | `DndContext` orchestrating cross-column and within-column DnD |
 | `SwimlaneColumn` | Single lane: colored header, name (inline-editable on double-click), color swatch popover, count badge, `−` delete button, droppable + sortable body |
 | `LaneColorPicker` | 8-swatch grid for color selection |
-| `QueueItem` (reused) | Renders the same card component used in the merge queue panel — verdict, inline comments, notes, timeline, badges, review actions all work identically |
+| `QueueItem` (reused) | Renders the same card component used in the merge queue panel — verdict, inline comments, notes, timeline, badges, review actions all work identically. When rendered inside a swimlane column it also exposes a lane-selector dropdown (see "Lane selector dropdown" below) |
+
+#### Lane selector dropdown
+
+In addition to drag-and-drop, each card rendered inside the swimlane board includes a small native `<select>` in its meta row listing every lane by name with the card's current lane pre-selected. Selecting a different lane calls `useSwimlaneStore.moveCard(item.id, currentLaneId, toLaneId, 0)`, which optimistically inserts the card at the top of the destination lane and persists the move via `PUT /api/swimlanes/cards/move`. The dropdown is purely additive — drag-and-drop still works — and is intended as a shortcut for boards with many lanes where dragging across the full board width is awkward. It is fed live by `useSwimlaneStore.lanes`, so newly added or renamed lanes appear immediately. The dropdown is hidden when only one lane exists, and is only rendered when `QueueItem` receives the `swimlaneContext` prop (the merge queue panel does not).
+
+#### Clear merged shortcut
+
+The swimlane header carries a "Clear merged (N)" button in the actions row that bulk-removes every queued PR whose `prState === 'MERGED'`. Clicking it shows a `window.confirm` with the count, then fires `removeFromQueue(number, repo)` for each merged card in parallel via `useSwimlaneStore.clearMergedCards`, pausing polling for the duration and reloading the board on completion. Failures on individual PRs are swallowed so one bad delete doesn't block the rest. The button is disabled when no merged cards are present.
 
 #### Drag-and-drop
 

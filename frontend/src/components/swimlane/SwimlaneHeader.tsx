@@ -13,12 +13,35 @@ interface SwimlaneHeaderProps {
 
 export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
   const createLane = useSwimlaneStore((s) => s.createLane)
+  const clearMergedCards = useSwimlaneStore((s) => s.clearMergedCards)
   const loading = useSwimlaneStore((s) => s.loading)
   const cardsByLane = useSwimlaneStore((s) => s.cardsByLane)
   const totalCards = useMemo(
     () => Object.values(cardsByLane).reduce((sum, list) => sum + list.length, 0),
     [cardsByLane],
   )
+  const mergedCount = useMemo(
+    () => Object.values(cardsByLane).reduce(
+      (sum, list) => sum + list.filter((c) => c.prState === 'MERGED').length,
+      0,
+    ),
+    [cardsByLane],
+  )
+  const [clearing, setClearing] = useState(false)
+
+  const handleClearMerged = async () => {
+    if (clearing || mergedCount === 0) return
+    const ok = window.confirm(
+      `Remove ${mergedCount} merged PR${mergedCount === 1 ? '' : 's'} from the queue?`,
+    )
+    if (!ok) return
+    setClearing(true)
+    try {
+      await clearMergedCards()
+    } finally {
+      setClearing(false)
+    }
+  }
   const lastUpdated = useSwimlaneStore((s) => s.lastUpdated)
   const refreshing = useSwimlaneStore((s) => s.refreshing)
   const searchQuery = useSwimlaneStore((s) => s.searchQuery)
@@ -107,6 +130,15 @@ export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
       </div>
 
       <div className="mx-swl-modal__actions">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleClearMerged}
+          disabled={clearing || mergedCount === 0}
+          data-tooltip="Remove all merged PRs from the queue"
+        >
+          {clearing ? 'Clearing…' : `Clear merged${mergedCount > 0 ? ` (${mergedCount})` : ''}`}
+        </Button>
         {showAddForm ? (
           <div className="mx-swl-add-form">
             <input

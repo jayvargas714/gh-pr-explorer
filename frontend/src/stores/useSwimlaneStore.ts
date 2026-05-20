@@ -8,6 +8,7 @@ import {
   patchSwimlane,
   reorderSwimlanes,
 } from '../api/swimlanes'
+import { removeFromQueue } from '../api/queue'
 
 type CardsByLane = Record<number, MergeQueueItem[]>
 
@@ -87,6 +88,10 @@ interface SwimlaneState {
     toLaneId: number,
     toIndex: number
   ) => Promise<void>
+
+  // Bulk-remove all cards with prState === 'MERGED' from the merge queue.
+  // Returns the count of cards removed.
+  clearMergedCards: () => Promise<number>
 }
 
 function normalize(cardsByLane: Record<string, MergeQueueItem[]>): CardsByLane {
@@ -315,6 +320,22 @@ export const useSwimlaneStore = create<SwimlaneState>((set, get) => ({
     } finally {
       get().resumePolling()
     }
+  },
+
+  clearMergedCards: async () => {
+    const merged: MergeQueueItem[] = []
+    for (const list of Object.values(get().cardsByLane)) {
+      for (const c of list) if (c.prState === 'MERGED') merged.push(c)
+    }
+    if (merged.length === 0) return 0
+    get().pausePolling()
+    try {
+      await Promise.all(merged.map((c) => removeFromQueue(c.number, c.repo).catch(() => null)))
+      await get().loadBoard()
+    } finally {
+      get().resumePolling()
+    }
+    return merged.length
   },
 
   moveCard: async (queueItemId, fromLaneId, toLaneId, toIndex) => {
