@@ -57,6 +57,18 @@ export function ReviewerPickerMenu({ onSelect, onClose }: ReviewerPickerMenuProp
           <small>product-brief-reviewer</small>
         </span>
       </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="mx-reviewer-picker__option"
+        onClick={() => onSelect('ed')}
+      >
+        <span className="mx-reviewer-picker__icon">📐</span>
+        <span className="mx-reviewer-picker__label">
+          <strong>Engineering Design Reviewer</strong>
+          <small>ed-reviewer</small>
+        </span>
+      </button>
     </div>
   )
 }

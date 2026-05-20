@@ -20,7 +20,7 @@ export async function fetchActiveReviews(): Promise<ReviewsResponse> {
 /**
  * Start a code review
  */
-export type ReviewerType = 'default' | 'pb'
+export type ReviewerType = 'default' | 'pb' | 'ed'
 
 export async function startReview(data: {
   number: number

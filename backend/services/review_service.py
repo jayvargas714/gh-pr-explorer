@@ -204,7 +204,7 @@ def check_review_status(key, active_reviews, reviews_lock, reviews_db):
         return review
 
 
-VALID_REVIEWER_TYPES = ("default", "pb")
+VALID_REVIEWER_TYPES = ("default", "pb", "ed")
 
 
 def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, previous_review_content=None, reviewer_type="default"):
@@ -215,6 +215,7 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
         reviewer_type: Which reviewer agent to use. One of:
             - "default": elite-code-reviewer (general code review)
             - "pb": product-brief-reviewer (PB-000 product brief review)
+            - "ed": ed-reviewer (ED-000 engineering design review)
 
     Returns:
         tuple: (process, review_file_path_or_error, is_followup)
@@ -235,7 +236,12 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
 
     json_file = str(review_file).replace(".md", ".json")
 
-    agent_name = "product-brief-reviewer" if reviewer_type == "pb" else "elite-code-reviewer"
+    if reviewer_type == "pb":
+        agent_name = "product-brief-reviewer"
+    elif reviewer_type == "ed":
+        agent_name = "ed-reviewer"
+    else:
+        agent_name = "elite-code-reviewer"
 
     if reviewer_type == "pb":
         pb_context = (
@@ -243,6 +249,14 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
             "Identify the brief file(s) touched in the PR diff and review them against the PB-000 template "
             "and the rules embedded in the product-brief-reviewer agent. Quote evidence verbatim and keep "
             "all fixes in user-observable, product-level language. "
+        )
+    elif reviewer_type == "ed":
+        pb_context = (
+            "This PR adds or modifies an engineering design (an ED-NNN-*.md file under docs/designs/). "
+            "Identify the ED file(s) touched in the PR diff and review them against the ED-000 template "
+            "and the rules embedded in the ed-reviewer agent. Apply both lenses: SDLC conformance "
+            "(SPEC-AUTH-*, SPEC-REVIEW-*, SAFE-*) and the code-review lens for technical soundness. "
+            "Quote evidence verbatim from the ED and cite rule IDs where they apply. "
         )
     else:
         pb_context = ""

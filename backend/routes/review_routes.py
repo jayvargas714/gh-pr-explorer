@@ -77,7 +77,7 @@ def start_review():
         pr_title = data.get("title")
         pr_author = data.get("author")
         reviewer_type = data.get("reviewer_type", "default")
-        if reviewer_type not in ("default", "pb"):
+        if reviewer_type not in ("default", "pb", "ed"):
             return jsonify({"error": f"Invalid reviewer_type: {reviewer_type}"}), 400
 
         logger.info(f"Received {'follow-up ' if is_followup else ''}review request for {key} (reviewer={reviewer_type})")

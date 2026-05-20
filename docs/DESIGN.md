@@ -1273,17 +1273,18 @@ The Code Review feature integrates with Claude CLI to perform automated code rev
 #### How It Works
 
 1. User clicks "Review ▾" button on a PR card or queue item
-2. A small picker menu appears offering two reviewer agents:
+2. A small picker menu appears offering three reviewer agents:
    - **Default Reviewer** — `elite-code-reviewer` (general code review)
    - **Product Brief Reviewer** — `product-brief-reviewer` (PB-000 brief review)
+   - **Engineering Design Reviewer** — `ed-reviewer` (ED-000 engineering design review; applies both the SDLC-conformance and code-review lenses described in the agent's protocol)
 3. Backend spawns a Claude CLI subprocess with a prompt tailored to the selected reviewer
 4. UI shows spinner while review is in progress
-5. Both reviewer types produce output in the same dual format: a markdown file (`.md`) and a structured JSON file (`.json`) following the schema in `backend/services/review_schema.py`
+5. All reviewer types produce output in the same dual format: a markdown file (`.md`) and a structured JSON file (`.json`) following the schema in `backend/services/review_schema.py`
 6. Review metadata and `content_json` are saved to SQLite database; markdown is generated on the fly from `content_json` when needed
 7. UI updates to show completed/failed status with score badge
 8. Failed reviews display error details in a modal
 
-The reviewer choice is plumbed through the `reviewer_type` field on `POST /api/reviews` (`"default"` or `"pb"`). When `"pb"` is selected, the prompt invokes the `product-brief-reviewer` agent and asks it to identify and review the PB-NNN brief file(s) touched in the PR diff. Both reviewers must emit the same JSON schema and write to the same `.md` + `.json` paths so downstream parsing, inline-comment posting, and verdict composition are reviewer-agnostic.
+The reviewer choice is plumbed through the `reviewer_type` field on `POST /api/reviews` (`"default"`, `"pb"`, or `"ed"`). When `"pb"` is selected, the prompt invokes the `product-brief-reviewer` agent and asks it to identify and review the PB-NNN brief file(s) touched in the PR diff. When `"ed"` is selected, the prompt invokes the `ed-reviewer` agent and asks it to identify and review the ED-NNN engineering design file(s) under `docs/designs/` touched in the PR diff. All three reviewers must emit the same JSON schema and write to the same `.md` + `.json` paths so downstream parsing, inline-comment posting, and verdict composition are reviewer-agnostic.
 
 #### Claude CLI Command
 
@@ -2318,7 +2319,7 @@ Starts a new code review for a PR.
 | `url` | string | Yes | GitHub PR URL |
 | `owner` | string | Yes | Repository owner |
 | `repo` | string | Yes | Repository name |
-| `reviewer_type` | string | No | `"default"` (elite-code-reviewer, default) or `"pb"` (product-brief-reviewer) |
+| `reviewer_type` | string | No | `"default"` (elite-code-reviewer, default), `"pb"` (product-brief-reviewer), or `"ed"` (ed-reviewer) |
 | `is_followup` | boolean | No | If true, includes previous review content as context |
 | `previous_review_id` | integer | No | Specific review to use as the follow-up parent |
 | `title` | string | No | PR title (used for display in the active reviews list) |
