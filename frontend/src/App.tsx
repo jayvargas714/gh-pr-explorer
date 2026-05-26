@@ -19,11 +19,14 @@ import { SwimlaneModal } from './components/swimlane/SwimlaneModal'
 import { TooltipProvider } from './components/common/Tooltip'
 import { useAccountStore } from './stores/useAccountStore'
 import { useUIStore } from './stores/useUIStore'
+import { useQueueStore } from './stores/useQueueStore'
 import { useSettingsPersistence } from './hooks/useSettingsPersistence'
+import { fetchMergeQueue } from './api/queue'
 
 function App() {
   const { selectedAccount, selectedRepo } = useAccountStore()
   const activeView = useUIStore((state) => state.activeView)
+  const setMergeQueue = useQueueStore((state) => state.setMergeQueue)
 
   useSettingsPersistence()
 
@@ -34,6 +37,14 @@ function App() {
       document.documentElement.classList.add('matrix-light')
     }
   }, [])
+
+  useEffect(() => {
+    // Load the merge queue once on startup so PR-list queue buttons and the
+    // header count reflect real membership before the queue panel is opened.
+    fetchMergeQueue()
+      .then((response) => setMergeQueue(response.queue))
+      .catch((err) => console.error('Initial queue load failed:', err))
+  }, [setMergeQueue])
 
   const renderView = () => {
     if (!selectedRepo) return null
