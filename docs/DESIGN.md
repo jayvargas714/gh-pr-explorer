@@ -2652,6 +2652,8 @@ Clears the in-memory cache.
 | `workflow_cache_max_runs` | integer | 1000 | Maximum unfiltered workflow runs to cache per repo |
 | `review_sample_limit` | integer | 250 | Maximum PRs to sample for review statistics and lifecycle metrics |
 | `review_section_names` | object | `{"critical": "Critical Issues", "major": "Major Concerns", "minor": "Minor Issues"}` | Custom display names for review sections |
+| `reviews_dir` | string | `~/code-reviews` | Directory where Claude code reviews (`.md`/`.json`) are written. Supports `~` and `$VAR` expansion so it stays machine-agnostic. Falls back to `~/code-reviews` if omitted. |
+| `past_reviews_dir` | string | `<reviews_dir>/past-reviews` | Legacy reviews directory used only by the one-time `migrate_data.py` import. Supports `~`/`$VAR` expansion. |
 
 ### Example Configuration
 
@@ -2666,6 +2668,7 @@ Clears the in-memory cache.
   "workflow_cache_ttl_minutes": 60,
   "workflow_cache_max_runs": 1000,
   "review_sample_limit": 250,
+  "reviews_dir": "~/code-reviews",
   "review_section_names": {
     "critical": "Critical Issues",
     "major": "Major Concerns",

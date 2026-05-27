@@ -2,7 +2,8 @@
 """Data migration script for GitHub PR Explorer.
 
 Migrates existing data from:
-1. Past reviews in /Users/jvargas714/Documents/code-reviews/past-reviews/
+1. Past reviews in the configured past-reviews directory (config.json "past_reviews_dir",
+   defaults to "<reviews_dir>/past-reviews")
 2. Merge queue from MQ/merge_queue.json
 
 Run this script once to import existing data into the SQLite database.
@@ -17,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from database import Database, ReviewsDB, MergeQueueDB
+from backend.config import get_past_reviews_dir
 
 # Configure logging
 logging.basicConfig(
@@ -26,8 +28,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Source paths
-PAST_REVIEWS_DIR = Path("/Users/jvargas714/Documents/code-reviews/past-reviews")
+# Source paths (configurable via config.json: "past_reviews_dir")
+PAST_REVIEWS_DIR = get_past_reviews_dir()
 MERGE_QUEUE_FILE = Path(__file__).parent / "MQ" / "merge_queue.json"
 
 

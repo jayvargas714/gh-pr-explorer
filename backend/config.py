@@ -1,23 +1,45 @@
 """Application configuration loaded from config.json."""
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict
 
 # Project root is one level up from backend/
 PROJECT_ROOT = Path(__file__).parent.parent
 
-# Default code reviews directory (overridden by config.json "reviews_dir")
-REVIEWS_DIR = Path("/Users/jvargas714/Documents/code-reviews")
+# Default code reviews directory when config.json omits "reviews_dir".
+# Kept machine-agnostic via ~ expansion so it works on any host.
+DEFAULT_REVIEWS_DIR = "~/code-reviews"
+
+
+def _resolve_path(raw: str) -> Path:
+    """Expand ~ and environment variables in a configured path."""
+    return Path(os.path.expanduser(os.path.expandvars(raw)))
 
 
 def get_reviews_dir() -> Path:
-    """Get the reviews directory from config, with fallback to PROJECT_ROOT/reviews."""
+    """Get the reviews directory from config.
+
+    Reads config.json's "reviews_dir" (with ~ and $VAR expansion), falling back
+    to DEFAULT_REVIEWS_DIR so the app runs on any machine without edits.
+    """
     config = get_config()
-    reviews_path = config.get("reviews_dir")
-    if reviews_path:
-        return Path(reviews_path)
-    return PROJECT_ROOT / "reviews"
+    reviews_path = config.get("reviews_dir") or DEFAULT_REVIEWS_DIR
+    return _resolve_path(reviews_path)
+
+
+def get_past_reviews_dir() -> Path:
+    """Get the legacy past-reviews directory for one-time data migration.
+
+    Reads config.json's "past_reviews_dir" (with ~/$VAR expansion), defaulting
+    to a "past-reviews" subfolder of the configured reviews directory.
+    """
+    config = get_config()
+    past_path = config.get("past_reviews_dir")
+    if past_path:
+        return _resolve_path(past_path)
+    return get_reviews_dir() / "past-reviews"
 
 # Database file path
 DB_PATH = PROJECT_ROOT / "pr_explorer.db"
