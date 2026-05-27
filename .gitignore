@@ -36,3 +36,4 @@ pr_explorer.db*
 
 # Playwright MCP
 .playwright-mcp/
+*.pid
