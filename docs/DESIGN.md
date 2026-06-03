@@ -196,7 +196,7 @@ The database module provides SQLite-based persistence for reviews and merge queu
 | `Database` | Base class managing SQLite connection and schema initialization |
 | `ReviewsDB` | Handles review storage, retrieval, and search operations |
 | `MergeQueueDB` | Manages merge queue persistence and ordering |
-| `SwimlanesDB` | Manages swimlane definitions and per-card lane assignments for the Kanban view of the merge queue |
+| `SwimlanesDB` | Manages swimlane definitions and per-card lane assignments (including pin state) for the Kanban view of the merge queue |
 | `DevStatsDB` | Caches developer statistics with 4-hour TTL for improved performance |
 | `LifecycleCacheDB` | Caches PR lifecycle and review timing data with 2-hour TTL |
 | `WorkflowCacheDB` | Caches workflow runs data with configurable TTL (default 1 hour) for stale-while-revalidate serving |
@@ -366,6 +366,7 @@ CREATE TABLE IF NOT EXISTS swimlane_assignments (
     queue_item_id INTEGER NOT NULL UNIQUE,
     swimlane_id INTEGER,
     position_in_lane INTEGER NOT NULL,
+    is_pinned INTEGER NOT NULL DEFAULT 0,   -- pinned cards anchor to the top of their lane
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (queue_item_id) REFERENCES merge_queue(id) ON DELETE CASCADE,
     FOREIGN KEY (swimlane_id) REFERENCES swimlanes(id) ON DELETE SET NULL
@@ -1199,7 +1200,7 @@ A Trello-style alternative view of the merge queue. Cards displayed inside swiml
 | `SwimlaneBoard` | `DndContext` orchestrating cross-column and within-column DnD |
 | `SwimlaneColumn` | Single lane: colored header, name (inline-editable on double-click), color swatch popover, count badge, `−` delete button, droppable + sortable body |
 | `LaneColorPicker` | 8-swatch grid for color selection |
-| `QueueItem` (reused) | Renders the same card component used in the merge queue panel — verdict, inline comments, notes, timeline, badges, review actions all work identically. When rendered inside a swimlane column it also exposes a lane-selector dropdown (see "Lane selector dropdown" below) |
+| `QueueItem` (reused) | Renders the same card component used in the merge queue panel — verdict, inline comments, notes, timeline, badges, review actions all work identically. When rendered inside a swimlane column it also exposes a lane-selector dropdown (see "Lane selector dropdown" below) and a 📌 pin toggle (see "Pinned cards" below) |
 
 #### Lane selector dropdown
 
@@ -1208,6 +1209,18 @@ In addition to drag-and-drop, each card rendered inside the swimlane board inclu
 #### Clear merged shortcut
 
 The swimlane header carries a "Clear merged (N)" button in the actions row that bulk-removes every queued PR whose `prState === 'MERGED'`. Clicking it shows a `window.confirm` with the count, then fires `removeFromQueue(number, repo)` for each merged card in parallel via `useSwimlaneStore.clearMergedCards`, pausing polling for the duration and reloading the board on completion. Failures on individual PRs are swallowed so one bad delete doesn't block the rest. The button is disabled when no merged cards are present.
+
+#### Pinned cards
+
+Any card in a swimlane can be pinned via the 📌 toggle button in its action row. Pinning anchors a card so it stays put regardless of board churn:
+
+- **Anchored to the top** — pinned cards form a contiguous group at the top of their lane, above all unpinned cards. This is enforced by a single ordering invariant: everywhere a lane is read or compacted, cards are ordered `is_pinned DESC, position_in_lane ASC`, and `_compact_lane()` renumbers `position_in_lane` to `1..N` in that same order. New cards auto-assign to the bottom of the default lane (unpinned), so they can never displace a pinned card, and the 45-second background refresh never reshuffles them.
+- **Survives "Clear merged"** — `clearMergedCards` and the header's merged count exclude pinned cards. A pinned merged card stays on the board; only unpinned merged cards are removed.
+- **Still draggable, pin sticks** — a pinned card can be reordered among the other pinned cards or dragged to another lane (where it lands in that lane's pinned zone, still pinned), but a drag never crosses the pinned/unpinned boundary. `SwimlanesDB.move_card` clamps a pinned card's target into `[1, pinnedCount + 1]` and an unpinned card's into `[pinnedCount + 1, N + 1]` (computed in the destination lane, excluding the moving card). The same clamp (`pinZoneClamp`) is mirrored in `useSwimlaneStore.moveCard` so the optimistic UI matches the persisted result. Pin/unpin is only ever toggled by the button — dragging changes order and lane, never pin state.
+
+A pinned card shows a 📌 corner marker and a subtle accent border/tint (`mx-queue-item--pinned`, derived from `--mx-color-accent`). The pin button and treatment only appear when `QueueItem` is rendered inside the swimlane board (the merge queue panel does not pass `swimlaneContext`).
+
+Backend: `is_pinned` lives on `swimlane_assignments` (added via a tracked `ALTER TABLE` migration in `base.py`). `SwimlanesDB.set_pinned(queue_item_id, pinned)` flips the flag and repositions the card to the boundary (pin → bottom of pinned group; unpin → top of unpinned group). The board response and `move_card`/pin responses surface `isPinned` on each card/assignment.
 
 #### Drag-and-drop
 
@@ -1263,6 +1276,8 @@ The poll is suspended whenever:
 - The browser tab is hidden (no work for an unviewed UI; resumes immediately on `visibilitychange`)
 - The user is mid-drag (a refetch would yank cards out from under the cursor)
 - A mutation is in flight (`moveCard`, `reorderLanesLocal`) — pollPause is reference-counted so concurrent drag + mutation both contribute and resume independently
+
+Pause-suspension alone cannot catch a slow board fetch that *started before* a card move and *lands after* the move's pause window has already closed — applying its pre-move snapshot would visibly "snap" the card back to its original lane. To close that gap, the store carries a `boardEpoch` generation counter: every optimistic mutation (`moveCard`, `togglePin`, `reorderLanesLocal`) and every authoritative `loadBoard` increments it. A background `refreshBoard` stamps the epoch at fetch-start and discards its response if the epoch has advanced by the time it resolves (in addition to the pause-depth re-check). Since the move itself is already persisted server-side, the next clean poll renders the correct lane.
 
 The header shows a `CacheTimestamp` indicator ("Updated X ago" / "refreshing…") sourced from `lastUpdated` and `refreshing` flags on the swimlane store. Background refreshes do not flip the modal's `loading` flag and silently swallow transient errors so a brief network blip doesn't surface a banner mid-session.
 
@@ -2194,7 +2209,7 @@ Returns the full swimlane board: lanes plus enriched cards grouped by lane id. C
     { "id": 1, "name": "Unassigned", "color": "info", "position": 1, "isDefault": true, "createdAt": "..." }
   ],
   "cardsByLane": {
-    "1": [ /* MergeQueueItem-shaped objects (see /api/merge-queue) */ ]
+    "1": [ /* MergeQueueItem-shaped objects (see /api/merge-queue), each also carrying `isPinned: boolean` */ ]
   }
 }
 ```
@@ -2264,7 +2279,23 @@ Move a card to a target lane and 1-based position. Compacts the source and desti
 
 **Response**:
 ```json
-{ "assignment": { "queueItemId": 42, "swimlaneId": 3, "positionInLane": 1 } }
+{ "assignment": { "queueItemId": 42, "swimlaneId": 3, "positionInLane": 1, "isPinned": false } }
+```
+
+---
+
+**PUT** `/api/swimlanes/cards/<queue_item_id>/pin`
+
+Pin or unpin a card within its lane. Pinning moves it to the bottom of the lane's pinned group; unpinning moves it to the top of the unpinned group.
+
+**Request Body**:
+```json
+{ "pinned": true }
+```
+
+**Response**:
+```json
+{ "assignment": { "queueItemId": 42, "swimlaneId": 3, "positionInLane": 1, "isPinned": true } }
 ```
 
 ---

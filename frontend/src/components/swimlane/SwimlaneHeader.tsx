@@ -22,7 +22,8 @@ export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
   )
   const mergedCount = useMemo(
     () => Object.values(cardsByLane).reduce(
-      (sum, list) => sum + list.filter((c) => c.prState === 'MERGED').length,
+      // Pinned cards are never cleared, so don't count them.
+      (sum, list) => sum + list.filter((c) => c.prState === 'MERGED' && !c.isPinned).length,
       0,
     ),
     [cardsByLane],

@@ -243,14 +243,48 @@ class SwimlanesDB:
             logger.info("Reconciled %d missing swimlane assignments", len(missing))
 
     def get_assignments(self) -> List[Dict[str, Any]]:
-        """Return all assignments (queue_item_id, swimlane_id, position_in_lane)."""
+        """Return all assignments ordered pinned-first within each lane.
+
+        Pinned cards form a contiguous group at the top of their lane
+        (is_pinned DESC), then by position_in_lane.
+        """
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT * FROM swimlane_assignments "
-                "ORDER BY swimlane_id ASC, position_in_lane ASC"
+                "ORDER BY swimlane_id ASC, is_pinned DESC, position_in_lane ASC"
             )
             return [dict(row) for row in cursor.fetchall()]
+
+    def set_pinned(self, queue_item_id: int, pinned: bool) -> Dict[str, Any]:
+        """Pin or unpin a card. Pinning moves it to the bottom of its lane's
+        pinned group; unpinning moves it to the top of the unpinned group.
+        """
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM swimlane_assignments WHERE queue_item_id = ?", (queue_item_id,)
+            )
+            current = cursor.fetchone()
+            if not current:
+                raise ValueError("Card not assigned to any lane (is it in the merge queue?)")
+
+            lane_id = current["swimlane_id"]
+            # Sentinel position so compaction (is_pinned DESC, position ASC) drops the card
+            # at the boundary: pinning -> bottom of pinned group, unpinning -> top of unpinned.
+            sentinel = 1_000_000 if pinned else -1
+            cursor.execute(
+                "UPDATE swimlane_assignments "
+                "SET is_pinned = ?, position_in_lane = ? WHERE queue_item_id = ?",
+                (1 if pinned else 0, sentinel, queue_item_id),
+            )
+            if lane_id is not None:
+                self._compact_lane(cursor, lane_id)
+
+            cursor.execute(
+                "SELECT * FROM swimlane_assignments WHERE queue_item_id = ?", (queue_item_id,)
+            )
+            return dict(cursor.fetchone())
 
     def move_card(
         self, queue_item_id: int, to_lane_id: int, to_position: int
@@ -274,6 +308,7 @@ class SwimlanesDB:
                 raise ValueError("Card not assigned to any lane (is it in the merge queue?)")
 
             from_lane_id = current["swimlane_id"]
+            moving_pinned = bool(current["is_pinned"])
 
             # Remove from source lane (set position to a sentinel out of the way)
             cursor.execute(
@@ -286,13 +321,25 @@ class SwimlanesDB:
             if from_lane_id is not None:
                 self._compact_lane(cursor, from_lane_id)
 
-            # Insert into destination at requested position
+            # Clamp the target into the card's pin zone so a drag never crosses the
+            # pinned/unpinned boundary. Counts exclude the moving card (now detached).
             cursor.execute(
                 "SELECT COUNT(*) AS n FROM swimlane_assignments WHERE swimlane_id = ?",
                 (to_lane_id,),
             )
             dest_count = cursor.fetchone()["n"]
-            target_pos = max(1, min(to_position, dest_count + 1))
+            cursor.execute(
+                "SELECT COUNT(*) AS n FROM swimlane_assignments "
+                "WHERE swimlane_id = ? AND is_pinned = 1",
+                (to_lane_id,),
+            )
+            pinned_count = cursor.fetchone()["n"]
+
+            if moving_pinned:
+                lo, hi = 1, pinned_count + 1
+            else:
+                lo, hi = pinned_count + 1, dest_count + 1
+            target_pos = max(lo, min(to_position, hi))
 
             cursor.execute(
                 "UPDATE swimlane_assignments "
@@ -307,17 +354,24 @@ class SwimlanesDB:
                 (to_lane_id, target_pos, queue_item_id),
             )
 
+            # Re-normalize so positions stay pinned-first and contiguous.
+            self._compact_lane(cursor, to_lane_id)
+
             cursor.execute(
                 "SELECT * FROM swimlane_assignments WHERE queue_item_id = ?", (queue_item_id,)
             )
             return dict(cursor.fetchone())
 
     def _compact_lane(self, cursor, lane_id: int) -> None:
+        """Renumber position_in_lane to 1..N in pinned-first order."""
         cursor.execute(
-            "UPDATE swimlane_assignments SET position_in_lane = ("
-            "  SELECT COUNT(*) FROM swimlane_assignments s2 "
-            "  WHERE s2.swimlane_id = swimlane_assignments.swimlane_id "
-            "    AND s2.position_in_lane <= swimlane_assignments.position_in_lane"
-            ") WHERE swimlane_id = ?",
+            "SELECT queue_item_id FROM swimlane_assignments "
+            "WHERE swimlane_id = ? ORDER BY is_pinned DESC, position_in_lane ASC",
             (lane_id,),
         )
+        ids = [r["queue_item_id"] for r in cursor.fetchall()]
+        for pos, qid in enumerate(ids, start=1):
+            cursor.execute(
+                "UPDATE swimlane_assignments SET position_in_lane = ? WHERE queue_item_id = ?",
+                (pos, qid),
+            )

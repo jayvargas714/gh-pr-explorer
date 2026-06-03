@@ -7,6 +7,7 @@ import {
   moveSwimlaneCard,
   patchSwimlane,
   reorderSwimlanes,
+  setSwimlaneCardPinned,
 } from '../api/swimlanes'
 import { removeFromQueue } from '../api/queue'
 
@@ -61,6 +62,13 @@ interface SwimlaneState {
   // Counter-based pause: incremented on drag start / mutation start, decremented on end.
   // Polling is suspended while > 0 to avoid clobbering optimistic state mid-drag.
   pollPauseDepth: number
+  // Generation counter bumped on every optimistic mutation and authoritative load.
+  // A background fetch stamps the epoch at the moment it STARTS; if the epoch has
+  // advanced by the time it resolves, its (now-stale) data is discarded instead
+  // of being applied. This closes the gap the pause-depth check can't: a slow poll
+  // that began before a card move and lands after the move's pause window closed
+  // would otherwise overwrite the freshly-moved card (the lane "snap-back" bug).
+  boardEpoch: number
   // Free-text search across cards (PR number, title, author, repo). Empty string = no filter.
   searchQuery: string
   setSearchQuery: (q: string) => void
@@ -90,8 +98,12 @@ interface SwimlaneState {
   ) => Promise<void>
 
   // Bulk-remove all cards with prState === 'MERGED' from the merge queue.
-  // Returns the count of cards removed.
+  // Returns the count of cards removed. Pinned cards are never removed.
   clearMergedCards: () => Promise<number>
+
+  // Pin or unpin a card within its lane. Pinned cards anchor to the top of the
+  // lane and are excluded from "Clear merged".
+  togglePin: (queueItemId: number, laneId: number, pinned: boolean) => Promise<void>
 }
 
 function normalize(cardsByLane: Record<string, MergeQueueItem[]>): CardsByLane {
@@ -100,6 +112,23 @@ function normalize(cardsByLane: Record<string, MergeQueueItem[]>): CardsByLane {
     out[Number(k)] = cardsByLane[k]
   }
   return out
+}
+
+/**
+ * Clamp a desired drop index so the card stays inside its pin zone, mirroring
+ * the backend `move_card` clamp. Pinned cards land in `[0, pinnedCount]`,
+ * unpinned cards in `[pinnedCount, toList.length]`. `toList` must NOT contain
+ * the card being moved.
+ */
+export function pinZoneClamp(
+  toList: MergeQueueItem[],
+  isPinned: boolean,
+  desiredIndex: number,
+): number {
+  const pinnedCount = toList.filter((c) => c.isPinned).length
+  const lo = isPinned ? 0 : pinnedCount
+  const hi = isPinned ? pinnedCount : toList.length
+  return Math.max(lo, Math.min(desiredIndex, hi))
 }
 
 /**
@@ -198,6 +227,7 @@ export const useSwimlaneStore = create<SwimlaneState>((set, get) => ({
   lastUpdated: null,
   refreshing: false,
   pollPauseDepth: 0,
+  boardEpoch: 0,
   searchQuery: '',
   setSearchQuery: (q) => set({ searchQuery: q }),
   badgeFilters: new Set<BadgeFilterKey>(),
@@ -217,12 +247,14 @@ export const useSwimlaneStore = create<SwimlaneState>((set, get) => ({
       // force=true also invalidates per-PR timeline caches on the backend so
       // a subsequent timeline-modal open shows fresh events, not <=5min stale.
       const data = await fetchSwimlaneBoard({ refresh: opts.force })
-      set({
+      set((s) => ({
         lanes: data.lanes,
         cardsByLane: normalize(data.cardsByLane),
         loading: false,
         lastUpdated: new Date().toISOString(),
-      })
+        // Authoritative load supersedes any background fetch still in flight.
+        boardEpoch: s.boardEpoch + 1,
+      }))
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Failed to load board', loading: false })
     }
@@ -233,13 +265,19 @@ export const useSwimlaneStore = create<SwimlaneState>((set, get) => ({
   // entirely when polling is paused (drag in flight, modal hidden, etc.).
   refreshBoard: async () => {
     if (get().pollPauseDepth > 0) return
+    // Stamp the epoch at fetch-start. If any optimistic mutation or authoritative
+    // load advances it while we're in flight, our snapshot predates that change
+    // and must be discarded.
+    const startEpoch = get().boardEpoch
     set({ refreshing: true })
     try {
       const data = await fetchSwimlaneBoard()
-      // Re-check pause depth: a drag may have started while the request was in
-      // flight. Discard the response in that case to avoid clobbering the
-      // optimistic state.
-      if (get().pollPauseDepth > 0) {
+      // Discard a response initiated under a now-superseded view of the board:
+      //  - a drag/mutation is currently paused (started while we were in flight), or
+      //  - the epoch advanced (a card move/pin/reorder/load happened and already
+      //    completed, releasing its pause — the pause-depth check alone misses this,
+      //    which is the lane "snap-back" race).
+      if (get().pollPauseDepth > 0 || get().boardEpoch !== startEpoch) {
         set({ refreshing: false })
         return
       }
@@ -311,7 +349,10 @@ export const useSwimlaneStore = create<SwimlaneState>((set, get) => ({
     const [moved] = reordered.splice(fromIndex, 1)
     reordered.splice(toIndex, 0, moved)
     const next = defaultLane ? [defaultLane, ...reordered] : reordered
-    set({ lanes: next.map((l, i) => ({ ...l, position: i + 1 })) })
+    set((s) => ({
+      lanes: next.map((l, i) => ({ ...l, position: i + 1 })),
+      boardEpoch: s.boardEpoch + 1,
+    }))
     get().pausePolling()
     try {
       await reorderSwimlanes(next.map((l) => l.id))
@@ -325,7 +366,8 @@ export const useSwimlaneStore = create<SwimlaneState>((set, get) => ({
   clearMergedCards: async () => {
     const merged: MergeQueueItem[] = []
     for (const list of Object.values(get().cardsByLane)) {
-      for (const c of list) if (c.prState === 'MERGED') merged.push(c)
+      // Pinned cards are intentionally kept, even when merged.
+      for (const c of list) if (c.prState === 'MERGED' && !c.isPinned) merged.push(c)
     }
     if (merged.length === 0) return 0
     get().pausePolling()
@@ -351,17 +393,47 @@ export const useSwimlaneStore = create<SwimlaneState>((set, get) => ({
     next[fromLaneId] = fromList
 
     const toList = next[toLaneId] ?? []
-    const clampedIndex = Math.max(0, Math.min(toIndex, toList.length))
+    // Keep the card inside its pin zone so a drag never crosses the
+    // pinned/unpinned boundary (mirrors the backend clamp).
+    const clampedIndex = pinZoneClamp(toList, !!card.isPinned, toIndex)
     toList.splice(clampedIndex, 0, card)
     next[toLaneId] = toList
 
-    set({ cardsByLane: next })
+    set((s) => ({ cardsByLane: next, boardEpoch: s.boardEpoch + 1 }))
 
     get().pausePolling()
     try {
       await moveSwimlaneCard(queueItemId, toLaneId, clampedIndex + 1)
     } catch (e) {
       set({ cardsByLane: prev, error: e instanceof Error ? e.message : 'Failed to move card' })
+    } finally {
+      get().resumePolling()
+    }
+  },
+
+  togglePin: async (queueItemId, laneId, pinned) => {
+    const prev = get().cardsByLane
+
+    const next: CardsByLane = {}
+    for (const k of Object.keys(prev)) next[Number(k)] = [...prev[Number(k)]]
+
+    const list = next[laneId] ?? []
+    const idx = list.findIndex((c) => c.id === queueItemId)
+    if (idx === -1) return
+    const [card] = list.splice(idx, 1)
+    const updated = { ...card, isPinned: pinned }
+    // Pinning -> bottom of the pinned group; unpinning -> top of the unpinned group.
+    const pinnedCount = list.filter((c) => c.isPinned).length
+    list.splice(pinnedCount, 0, updated)
+    next[laneId] = list
+
+    set((s) => ({ cardsByLane: next, boardEpoch: s.boardEpoch + 1 }))
+
+    get().pausePolling()
+    try {
+      await setSwimlaneCardPinned(queueItemId, pinned)
+    } catch (e) {
+      set({ cardsByLane: prev, error: e instanceof Error ? e.message : 'Failed to pin card' })
     } finally {
       get().resumePolling()
     }

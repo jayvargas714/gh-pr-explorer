@@ -107,6 +107,7 @@
 
 /* Queue Item */
 .mx-queue-item {
+  position: relative;
   background: var(--mx-color-surface);
   border: 1px solid var(--mx-color-border);
   border-radius: var(--mx-radius-md);
@@ -1105,6 +1106,47 @@
 .mx-queue-item--approved-by-me:hover {
   border-color: color-mix(in srgb, var(--mx-color-success) 70%, transparent);
   box-shadow: 0 0 16px color-mix(in srgb, var(--mx-color-success) 28%, transparent);
+}
+
+/* ============================================================
+ * Pinned cards (swimlane board)
+ * ============================================================ */
+
+.mx-queue-item--pinned {
+  background-color: color-mix(in srgb, var(--mx-color-accent) 8%, var(--mx-color-surface));
+  border-color: color-mix(in srgb, var(--mx-color-accent) 45%, transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--mx-color-accent) 16%, transparent);
+}
+
+.mx-queue-item--pinned:hover {
+  border-color: color-mix(in srgb, var(--mx-color-accent) 70%, transparent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--mx-color-accent) 26%, transparent);
+}
+
+/* Corner pin marker */
+.mx-queue-item__pin-marker {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  font-size: 14px;
+  line-height: 1;
+  transform: rotate(20deg);
+  pointer-events: none;
+  filter: drop-shadow(0 1px 1px color-mix(in srgb, var(--mx-color-accent) 40%, transparent));
+}
+
+/* Pin toggle button */
+.mx-pin-btn {
+  opacity: 0.55;
+}
+
+.mx-pin-btn:hover {
+  opacity: 1;
+}
+
+.mx-pin-btn--active {
+  opacity: 1;
+  color: var(--mx-color-accent);
 }
 
 /* ============================================================

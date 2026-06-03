@@ -68,6 +68,7 @@ def get_board():
             if not card or lane_id is None:
                 continue
             if lane_id in cards_by_lane:
+                card["isPinned"] = bool(assignment["is_pinned"])
                 cards_by_lane[lane_id].append(card)
 
         return jsonify({
@@ -176,9 +177,34 @@ def move_card():
                 "queueItemId": assignment["queue_item_id"],
                 "swimlaneId": assignment["swimlane_id"],
                 "positionInLane": assignment["position_in_lane"],
+                "isPinned": bool(assignment["is_pinned"]),
             }
         })
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         return error_response("Internal server error", 500, f"Error moving card: {e}")
+
+
+@swimlane_bp.route("/api/swimlanes/cards/<int:queue_item_id>/pin", methods=["PUT"])
+def set_card_pinned(queue_item_id):
+    """Pin or unpin a card. Body: {pinned: bool}."""
+    try:
+        data = request.get_json() or {}
+        pinned = data.get("pinned")
+        if not isinstance(pinned, bool):
+            return jsonify({"error": "pinned must be a boolean"}), 400
+
+        assignment = get_swimlanes_db().set_pinned(queue_item_id, pinned)
+        return jsonify({
+            "assignment": {
+                "queueItemId": assignment["queue_item_id"],
+                "swimlaneId": assignment["swimlane_id"],
+                "positionInLane": assignment["position_in_lane"],
+                "isPinned": bool(assignment["is_pinned"]),
+            }
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return error_response("Internal server error", 500, f"Error pinning card: {e}")

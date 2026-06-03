@@ -347,6 +347,9 @@ export interface MergeQueueItem {
   isDraft: boolean
   currentReviewers: Reviewer[]
   statusCheckRollup?: StatusCheck[] | null
+  // Swimlane-only: whether the card is pinned within its lane. Present on cards
+  // returned by /swimlanes/board; absent (undefined) in the merge-queue panel.
+  isPinned?: boolean
 }
 
 export interface QueueNote {
@@ -914,6 +917,7 @@ export interface SwimlaneAssignment {
   queueItemId: number
   swimlaneId: number
   positionInLane: number
+  isPinned?: boolean
 }
 
 export interface SwimlaneMoveResponse {

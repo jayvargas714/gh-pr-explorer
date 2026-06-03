@@ -65,3 +65,10 @@ export function moveSwimlaneCard(
     toPosition,
   })
 }
+
+export function setSwimlaneCardPinned(
+  queueItemId: number,
+  pinned: boolean
+): Promise<SwimlaneMoveResponse> {
+  return api.put<SwimlaneMoveResponse>(`/swimlanes/cards/${queueItemId}/pin`, { pinned })
+}

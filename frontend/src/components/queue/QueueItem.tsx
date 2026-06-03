@@ -63,6 +63,8 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
   const openTimeline = useTimelineStore((state) => state.open)
   const lanes = useSwimlaneStore((state) => state.lanes)
   const moveCard = useSwimlaneStore((state) => state.moveCard)
+  const togglePin = useSwimlaneStore((state) => state.togglePin)
+  const isPinned = !!swimlaneContext && !!item.isPinned
   const myLogin = useAccountStore((state) => state.accounts.find((a) => a.is_personal)?.login)
   const approvedByMe =
     !!myLogin && !!item.currentReviewers?.some((r) => r.login === myLogin && r.state === 'APPROVED')
@@ -86,6 +88,11 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
     const toLaneId = Number(e.target.value)
     if (!Number.isFinite(toLaneId) || toLaneId === swimlaneContext.currentLaneId) return
     await moveCard(item.id, swimlaneContext.currentLaneId, toLaneId, 0)
+  }
+
+  const handleTogglePin = async () => {
+    if (!swimlaneContext) return
+    await togglePin(item.id, swimlaneContext.currentLaneId, !item.isPinned)
   }
 
   const handleRemove = async () => {
@@ -152,6 +159,7 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
         className={[
           'mx-queue-item',
           isDragging ? 'mx-queue-item--dragging' : '',
+          isPinned ? 'mx-queue-item--pinned' : '',
           approvedByMe ? 'mx-queue-item--approved-by-me' : '',
           searchMatch === 'match' ? 'mx-queue-item--search-match' : '',
           searchMatch === 'dim' ? 'mx-queue-item--search-dim' : '',
@@ -159,6 +167,11 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
           .filter(Boolean)
           .join(' ')}
       >
+        {isPinned && (
+          <span className="mx-queue-item__pin-marker" data-tooltip="Pinned" aria-hidden="true">
+            📌
+          </span>
+        )}
         <div className="mx-queue-item__header">
           <button
             className="mx-queue-item__drag-handle"
@@ -246,6 +259,18 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
         )}
 
         <div className="mx-queue-item__actions">
+          {swimlaneContext && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleTogglePin}
+              className={isPinned ? 'mx-pin-btn mx-pin-btn--active' : 'mx-pin-btn'}
+              data-tooltip={isPinned ? 'Unpin card' : 'Pin card to top of lane'}
+              aria-pressed={isPinned}
+            >
+              📌
+            </Button>
+          )}
           {item.hasReview && item.reviewId && (
             <>
               <Button

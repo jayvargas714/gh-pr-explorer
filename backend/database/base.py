@@ -276,6 +276,7 @@ class Database:
                     queue_item_id INTEGER NOT NULL UNIQUE,
                     swimlane_id INTEGER,
                     position_in_lane INTEGER NOT NULL,
+                    is_pinned INTEGER NOT NULL DEFAULT 0,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (queue_item_id) REFERENCES merge_queue(id) ON DELETE CASCADE,
                     FOREIGN KEY (swimlane_id) REFERENCES swimlanes(id) ON DELETE SET NULL
@@ -286,6 +287,19 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_swl_assign_lane
                 ON swimlane_assignments(swimlane_id)
             """)
+
+            # Migration: Add is_pinned column to swimlane_assignments for existing databases
+            cursor.execute("PRAGMA table_info(swimlane_assignments)")
+            swl_assign_columns = {row[1] for row in cursor.fetchall()}
+            if "is_pinned" not in swl_assign_columns:
+                try:
+                    cursor.execute(
+                        "ALTER TABLE swimlane_assignments "
+                        "ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0"
+                    )
+                    logger.info("Added column is_pinned to swimlane_assignments table")
+                except sqlite3.OperationalError:
+                    pass
 
             # Migration: Add section-posted columns to reviews for existing databases
             cursor.execute("PRAGMA table_info(reviews)")
