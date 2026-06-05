@@ -10,6 +10,7 @@ import { NotesModal } from './NotesModal'
 import { VerdictModal } from './VerdictModal'
 import { QueueDescriptionModal } from './QueueDescriptionModal'
 import { QueueReviewButton } from '../reviews/QueueReviewButton'
+import { AuditButton } from '../audits/AuditButton'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
 import { CIStatusBadge } from '../common/CIStatusBadge'
@@ -299,6 +300,14 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
             </>
           )}
           <QueueReviewButton item={item} onRefresh={onRefresh} />
+          <AuditButton
+            owner={item.repo.split('/')[0] ?? ''}
+            repo={item.repo.split('/')[1] ?? ''}
+            number={item.number}
+            url={item.url}
+            title={item.title}
+            author={item.author}
+          />
           <Button
             variant="ghost"
             size="sm"

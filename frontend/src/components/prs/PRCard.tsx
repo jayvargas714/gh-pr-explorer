@@ -161,7 +161,16 @@ export function PRCard({ pr }: PRCardProps) {
 
         <ReviewButton pr={pr} />
 
-        <AuditButton pr={pr} />
+        <AuditButton
+          owner={selectedRepo?.owner.login ?? ''}
+          repo={selectedRepo?.name ?? ''}
+          number={pr.number}
+          url={pr.url}
+          title={pr.title}
+          author={pr.author?.login}
+          headRef={pr.headRefName}
+          baseRef={pr.baseRefName}
+        />
 
         {selectedRepo && (
           <Button

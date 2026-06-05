@@ -1360,12 +1360,12 @@ The reviewer choice is plumbed through the `reviewer_type` field on `POST /api/r
 
 #### Split Review / Audit Triggers
 
-The PR card renders **two independent controls side by side**, so a review and a PB↔ED audit can run on the **same** PR at the same time, each tracking its own running/failed state (the backend already executes them independently):
+Every PR card — on the **PR list**, the **Merge Queue**, and the **Swimlane board** (queue and swimlane cards both render through `QueueItem`) — shows **two independent controls side by side**, so a review and a PB↔ED audit can run on the **same** PR at the same time, each tracking its own running/failed state (the backend already executes them independently):
 
-- **📋 Review ▾** (`ReviewButton`) — a pure review control that opens `ReviewerPickerMenu` with the three reviewer agents above (Default / Product Brief / Engineering Design). It dispatches to `POST /api/reviews` and carries no audit option.
+- **📋 Review ▾** — a pure review control (`ReviewButton` on the PR list, `QueueReviewButton` on queue/swimlane cards) that opens `ReviewerPickerMenu` with the three reviewer agents above (Default / Product Brief / Engineering Design). It dispatches to `POST /api/reviews` and carries no audit option.
 - **🔎 Audit** (`AuditButton`, in `frontend/src/components/audits/`) — starts, cancels, and surfaces errors for the PB↔ED audit independently. It dispatches to `POST /api/audits` and routes to a separate audit path with its own JSON schema, DB table, history tab, and chip — see [PB↔ED Audit](#pbed-audit). The button shows `🔎 Audit` when idle, an `Auditing… Cancel` spinner while running, and `✗ Audit Error` (opening the audit error modal) when the audit failed.
 
-`ReviewerPickerMenu` is shared between the PR-card `ReviewButton` and the Merge Queue's `QueueReviewButton`. Its **PB ED Audit** option is gated behind a `showAudit` prop (default `false`): the PR-card `ReviewButton` omits it (review-only), while `QueueReviewButton` passes `showAudit` and keeps its existing combined review/audit picker behavior unchanged. The audit option is **not** a `reviewer_type` value; selecting it dispatches `POST /api/audits` rather than `POST /api/reviews`.
+`AuditButton` is shared across all three surfaces: it takes explicit `owner`/`repo`/`number`/`url` (plus optional `title`/`author`/`headRef`/`baseRef`) props, so the PR list passes them from a `PullRequest` and the queue/swimlane cards pass them from a `MergeQueueItem`. Because audit is always triggered by this dedicated button, `ReviewerPickerMenu` is purely review reviewers on every surface (no audit option).
 
 #### Claude CLI Command
 

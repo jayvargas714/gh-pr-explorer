@@ -1,25 +1,36 @@
 import { useState } from 'react'
 import { useAuditStore } from '../../stores/useAuditStore'
-import { useAccountStore } from '../../stores/useAccountStore'
 import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
-import type { PullRequest } from '../../api/types'
 
 interface AuditButtonProps {
-  pr: PullRequest
+  owner: string
+  repo: string
+  number: number
+  url: string
+  title?: string
+  author?: string
+  headRef?: string
+  baseRef?: string
 }
 
-export function AuditButton({ pr }: AuditButtonProps) {
+export function AuditButton({
+  owner,
+  repo,
+  number,
+  url,
+  title,
+  author,
+  headRef,
+  baseRef,
+}: AuditButtonProps) {
   const [starting, setStarting] = useState(false)
   const startAudit = useAuditStore((state) => state.startAudit)
   const cancelAudit = useAuditStore((state) => state.cancelAudit)
   const showAuditError = useAuditStore((state) => state.showAuditError)
-  const selectedRepo = useAccountStore((state) => state.selectedRepo)
 
-  const owner = selectedRepo?.owner.login ?? ''
-  const repo = selectedRepo?.name ?? ''
   const activeAudit = useAuditStore((state) =>
-    state.activeAuditFor(owner, repo, pr.number),
+    state.activeAuditFor(owner, repo, number),
   )
   const auditRunning = activeAudit?.status === 'running'
   const auditFailed = activeAudit?.status === 'failed'
@@ -29,14 +40,14 @@ export function AuditButton({ pr }: AuditButtonProps) {
     try {
       setStarting(true)
       await startAudit({
-        number: pr.number,
-        url: pr.url,
+        number,
+        url,
         owner,
         repo,
-        title: pr.title,
-        author: pr.author?.login,
-        head_ref: pr.headRefName,
-        base_ref: pr.baseRefName,
+        title,
+        author,
+        head_ref: headRef,
+        base_ref: baseRef,
       })
     } catch (err) {
       console.error('Failed to start audit:', err)
@@ -47,7 +58,7 @@ export function AuditButton({ pr }: AuditButtonProps) {
 
   const handleCancelAudit = async () => {
     try {
-      await cancelAudit(owner, repo, pr.number)
+      await cancelAudit(owner, repo, number)
     } catch (err) {
       console.error('Failed to cancel audit:', err)
     }
@@ -56,9 +67,9 @@ export function AuditButton({ pr }: AuditButtonProps) {
   const handleShowAuditError = () => {
     if (!activeAudit) return
     showAuditError(
-      pr.number,
-      pr.title,
-      pr.url,
+      number,
+      title ?? '',
+      url,
       owner,
       repo,
       activeAudit.error_output || 'Unknown error',
