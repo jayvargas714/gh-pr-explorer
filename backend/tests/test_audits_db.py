@@ -2,6 +2,7 @@
 
 import json
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -40,10 +41,17 @@ def test_add_and_get_audit(audits_db):
 
 
 def test_get_latest_audit_for_pr(audits_db):
-    audits_db.add_audit(pr_number=1630, repo="owner/repo", content_json=_content())
-    audits_db.add_audit(pr_number=1630, repo="owner/repo", content_json=_content())
+    first_id = audits_db.add_audit(
+        pr_number=1630, repo="owner/repo", content_json=_content(),
+        audit_timestamp=datetime(2025, 1, 1, 10, 0, 0),
+    )
+    second_id = audits_db.add_audit(
+        pr_number=1630, repo="owner/repo", content_json=_content(),
+        audit_timestamp=datetime(2025, 1, 2, 10, 0, 0),
+    )
     latest = audits_db.get_latest_audit_for_pr("owner/repo", 1630)
     assert latest is not None
+    assert latest["id"] == second_id
     all_for_pr = audits_db.get_audits_for_pr("owner/repo", 1630)
     assert len(all_for_pr) == 2
 
@@ -73,7 +81,12 @@ def test_update_inline_comments_posted(audits_db):
     assert audits_db.get_audit(audit_id)["inline_comments_posted"] == 1
 
 
-def test_singleton_factory():
-    from backend.database import get_audits_db, AuditsDB as ExportedAuditsDB
-    db = get_audits_db()
+def test_singleton_factory(monkeypatch, tmp_path):
+    import backend.database as db_pkg
+    from backend.database.base import Database
+    from backend.database import AuditsDB as ExportedAuditsDB
+    monkeypatch.setattr(db_pkg, "_audits_db", None)
+    monkeypatch.setattr(db_pkg, "get_database", lambda: Database(tmp_path / "singleton_test.db"))
+    db = db_pkg.get_audits_db()
     assert isinstance(db, ExportedAuditsDB)
+    monkeypatch.setattr(db_pkg, "_audits_db", None)

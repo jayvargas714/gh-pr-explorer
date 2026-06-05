@@ -57,14 +57,17 @@ class AuditsDB:
             return audit_id
 
     def update_inline_comments_posted(self, audit_id: int, posted: bool = True):
+        """Update the inline_comments_posted flag for an audit."""
         with self.db.connection() as conn:
-            conn.cursor().execute(
+            cursor = conn.cursor()
+            cursor.execute(
                 "UPDATE audits SET inline_comments_posted = ? WHERE id = ?",
                 (posted, audit_id),
             )
             logger.info(f"Updated inline_comments_posted for audit {audit_id} to {posted}")
 
     def get_audit(self, audit_id: int) -> Optional[Dict[str, Any]]:
+        """Return a single audit row by ID, or None if not found."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM audits WHERE id = ?", (audit_id,))
@@ -72,6 +75,7 @@ class AuditsDB:
             return dict(row) if row else None
 
     def get_audits_for_pr(self, repo: str, pr_number: int) -> List[Dict[str, Any]]:
+        """Return all audits for a PR ordered by most recent first."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -81,6 +85,7 @@ class AuditsDB:
             return [dict(r) for r in cursor.fetchall()]
 
     def get_latest_audit_for_pr(self, repo: str, pr_number: int) -> Optional[Dict[str, Any]]:
+        """Return the most recent audit for a PR, or None if none exist."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -91,6 +96,7 @@ class AuditsDB:
             return dict(row) if row else None
 
     def check_pr_audited(self, repo: str, pr_number: int) -> Dict[str, Any]:
+        """Return audit status dict indicating whether a PR has been audited."""
         audits = self.get_audits_for_pr(repo, pr_number)
         if not audits:
             return {"audited": False, "audit_count": 0, "latest_audit": None}
@@ -115,6 +121,7 @@ class AuditsDB:
         limit: int = 50,
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
+        """Return audits with optional filters, ordered by most recent first."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             conditions, params = [], []
@@ -135,12 +142,14 @@ class AuditsDB:
             return [dict(r) for r in cursor.fetchall()]
 
     def count_all(self) -> int:
+        """Return the total number of audits in the database."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) as total FROM audits")
             return cursor.fetchone()["total"]
 
     def search_audits(self, search_text: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Search audits by PR title or content_json substring."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             pattern = f"%{search_text}%"

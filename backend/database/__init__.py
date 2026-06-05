@@ -25,7 +25,7 @@ _db_lock = threading.Lock()
 
 _db_instance: Optional[Database] = None
 _reviews_db: Optional[ReviewsDB] = None
-_audits_db: Optional["AuditsDB"] = None
+_audits_db: Optional[AuditsDB] = None
 _queue_db: Optional[MergeQueueDB] = None
 _swimlanes_db: Optional[SwimlanesDB] = None
 _settings_db: Optional[SettingsDB] = None
