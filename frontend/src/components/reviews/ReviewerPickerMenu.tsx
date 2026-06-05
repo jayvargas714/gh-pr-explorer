@@ -69,6 +69,18 @@ export function ReviewerPickerMenu({ onSelect, onClose }: ReviewerPickerMenuProp
           <small>ed-reviewer</small>
         </span>
       </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="mx-reviewer-picker__option"
+        onClick={() => onSelect('audit')}
+      >
+        <span className="mx-reviewer-picker__icon">🔎</span>
+        <span className="mx-reviewer-picker__label">
+          <strong>PB ED Audit</strong>
+          <small>pb-ed-audit skill</small>
+        </span>
+      </button>
     </div>
   )
 }

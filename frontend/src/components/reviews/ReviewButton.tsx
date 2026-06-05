@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useReviewStore } from '../../stores/useReviewStore'
+import { useAuditStore } from '../../stores/useAuditStore'
 import { useAccountStore } from '../../stores/useAccountStore'
 import { startReview, cancelReview, type ReviewerType } from '../../api/reviews'
 import { Button } from '../common/Button'
@@ -16,6 +17,7 @@ export function ReviewButton({ pr }: ReviewButtonProps) {
   const [pickerOpen, setPickerOpen] = useState(false)
   const { activeReviews, updateReview, removeReview, showReviewError } =
     useReviewStore()
+  const startAudit = useAuditStore((state) => state.startAudit)
   const selectedRepo = useAccountStore((state) => state.selectedRepo)
 
   const owner = selectedRepo?.owner.login ?? ''
@@ -26,6 +28,27 @@ export function ReviewButton({ pr }: ReviewButtonProps) {
   const handleStartReview = async (reviewerType: ReviewerType) => {
     if (starting || !owner || !repo) return
     setPickerOpen(false)
+
+    if (reviewerType === 'audit') {
+      try {
+        setStarting(true)
+        await startAudit({
+          number: pr.number,
+          url: pr.url,
+          owner,
+          repo,
+          title: pr.title,
+          author: pr.author?.login,
+          head_ref: pr.headRefName,
+          base_ref: pr.baseRefName,
+        })
+      } catch (err) {
+        console.error('Failed to start audit:', err)
+      } finally {
+        setStarting(false)
+      }
+      return
+    }
 
     try {
       setStarting(true)

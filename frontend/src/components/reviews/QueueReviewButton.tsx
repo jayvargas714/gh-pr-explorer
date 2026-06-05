@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useReviewStore } from '../../stores/useReviewStore'
+import { useAuditStore } from '../../stores/useAuditStore'
 import { startReview, cancelReview, type ReviewerType } from '../../api/reviews'
 import { InlineIssuePickerModal } from './InlineIssuePickerModal'
 import { ReviewerPickerMenu } from './ReviewerPickerMenu'
@@ -17,6 +18,7 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
   const [reviewerPickerOpen, setReviewerPickerOpen] = useState(false)
   const [pickerSection, setPickerSection] = useState<string | null>(null)
   const { activeReviews, updateReview, removeReview, showReviewError } = useReviewStore()
+  const startAudit = useAuditStore((state) => state.startAudit)
 
   const [owner, repo] = item.repo.split('/')
   const reviewKey = `${item.repo}/${item.number}`
@@ -37,6 +39,25 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
   const handleStartReview = async (reviewerType: ReviewerType) => {
     if (starting || !owner || !repo) return
     setReviewerPickerOpen(false)
+
+    if (reviewerType === 'audit') {
+      try {
+        setStarting(true)
+        await startAudit({
+          number: item.number,
+          url: item.url,
+          owner,
+          repo,
+          title: item.title,
+          author: item.author,
+        })
+      } catch (err) {
+        console.error('Failed to start audit:', err)
+      } finally {
+        setStarting(false)
+      }
+      return
+    }
 
     try {
       setStarting(true)
