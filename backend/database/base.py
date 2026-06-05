@@ -288,6 +288,37 @@ class Database:
                 ON swimlane_assignments(swimlane_id)
             """)
 
+            # Create audits table (PB↔ED audits — parallel to reviews)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS audits (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pr_number INTEGER NOT NULL,
+                    repo TEXT NOT NULL,
+                    pr_title TEXT,
+                    pr_author TEXT,
+                    pr_url TEXT,
+                    head_ref TEXT,
+                    base_ref TEXT,
+                    audit_type TEXT NOT NULL DEFAULT 'pb_ed',
+                    audit_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    status TEXT NOT NULL DEFAULT 'completed',
+                    content_json TEXT NOT NULL,
+                    finding_count INTEGER DEFAULT 0,
+                    blocking_count INTEGER DEFAULT 0,
+                    inline_comments_posted BOOLEAN DEFAULT FALSE,
+                    audit_file_path TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audits_repo_pr
+                ON audits(repo, pr_number)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audits_timestamp
+                ON audits(audit_timestamp DESC)
+            """)
+
             # Migration: Add is_pinned column to swimlane_assignments for existing databases
             cursor.execute("PRAGMA table_info(swimlane_assignments)")
             swl_assign_columns = {row[1] for row in cursor.fetchall()}
