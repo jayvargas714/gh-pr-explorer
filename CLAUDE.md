@@ -63,12 +63,12 @@ Keep `docs/DESIGN.md` updated whenever any design aspect changes, and update the
 | — PR Timelines | 1017 | Single-PR event timeline modal |
 | — Merge Queue | 1091 | Prioritized cross-repo PR queue |
 | — Swimlane Board (Kanban) | 1170 | Lane CRUD, DnD, badge filtering |
-| — Code Review System (Claude CLI) | 1269 | Reviewer agents, subprocess flow |
-| — Inline Comments Posting | 1365 | Post critical issues to GitHub |
-| — Review Verdict | 1413 | Approve/Request-Changes/Comment composer |
-| **API Endpoints** | 1479 | All REST routes, grouped by domain (auth → cache) |
-| **Configuration** | 2639 | `config.json` options |
-| **Technical Details** | 2679 | gh CLI integration, caching, parallel fetch, logging, Review JSON Schema (2938) |
-| **Future Considerations** | 3024 | Improvements, known limitations |
-| **Appendix** | 3086 | Dependencies, file structure, run instructions |
+| — Code Review System (Claude CLI) | 1341 | Reviewer agents, subprocess flow, split Review/Audit triggers |
+| — Inline Comments Posting | 1446 | Post critical issues to GitHub |
+| — Review Verdict | 1494 | Approve/Request-Changes/Comment composer, verdict source toggle |
+| **API Endpoints** | 1569 | All REST routes, grouped by domain (auth → cache) |
+| **Configuration** | 2910 | `config.json` options |
+| **Technical Details** | 2953 | gh CLI integration, caching, parallel fetch, logging, Review JSON Schema (3212) |
+| **Future Considerations** | 3383 | Improvements, known limitations |
+| **Appendix** | 3445 | Dependencies, file structure, run instructions |
 

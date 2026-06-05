@@ -1344,12 +1344,11 @@ The Code Review feature integrates with Claude CLI to perform automated code rev
 
 #### How It Works
 
-1. User clicks "Review ▾" button on a PR card or queue item
-2. A small picker menu appears offering three reviewer agents plus an audit option:
+1. User clicks the **📋 Review ▾** button on a PR card or queue item
+2. A small picker menu (`ReviewerPickerMenu`) appears offering three reviewer agents:
    - **Default Reviewer** — `elite-code-reviewer` (general code review)
    - **Product Brief Reviewer** — `product-brief-reviewer` (PB-000 brief review)
    - **Engineering Design Reviewer** — `ed-reviewer` (ED-000 engineering design review; applies both the SDLC-conformance and code-review lenses described in the agent's protocol)
-   - **PB ED Audit** — `/pb-ed-audit` skill (parity + cross-ED consistency audit; routes to a separate audit path with its own JSON schema, DB table, history tab, and chip — see [PB↔ED Audit](#pbed-audit) below). This is **not** a `reviewer_type` value; the picker dispatches it to `POST /api/audits` rather than `POST /api/reviews`.
 3. Backend spawns a Claude CLI subprocess with a prompt tailored to the selected reviewer
 4. UI shows spinner while review is in progress
 5. All reviewer types produce output in the same dual format: a markdown file (`.md`) and a structured JSON file (`.json`) following the schema in `backend/services/review_schema.py`
@@ -1358,6 +1357,15 @@ The Code Review feature integrates with Claude CLI to perform automated code rev
 8. Failed reviews display error details in a modal
 
 The reviewer choice is plumbed through the `reviewer_type` field on `POST /api/reviews` (`"default"`, `"pb"`, or `"ed"`). When `"pb"` is selected, the prompt invokes the `product-brief-reviewer` agent and asks it to identify and review the PB-NNN brief file(s) touched in the PR diff. When `"ed"` is selected, the prompt invokes the `ed-reviewer` agent and asks it to identify and review the ED-NNN engineering design file(s) under `docs/designs/` touched in the PR diff. All three reviewers must emit the same JSON schema and write to the same `.md` + `.json` paths so downstream parsing, inline-comment posting, and verdict composition are reviewer-agnostic.
+
+#### Split Review / Audit Triggers
+
+The PR card renders **two independent controls side by side**, so a review and a PB↔ED audit can run on the **same** PR at the same time, each tracking its own running/failed state (the backend already executes them independently):
+
+- **📋 Review ▾** (`ReviewButton`) — a pure review control that opens `ReviewerPickerMenu` with the three reviewer agents above (Default / Product Brief / Engineering Design). It dispatches to `POST /api/reviews` and carries no audit option.
+- **🔎 Audit** (`AuditButton`, in `frontend/src/components/audits/`) — starts, cancels, and surfaces errors for the PB↔ED audit independently. It dispatches to `POST /api/audits` and routes to a separate audit path with its own JSON schema, DB table, history tab, and chip — see [PB↔ED Audit](#pbed-audit). The button shows `🔎 Audit` when idle, an `Auditing… Cancel` spinner while running, and `✗ Audit Error` (opening the audit error modal) when the audit failed.
+
+`ReviewerPickerMenu` is shared between the PR-card `ReviewButton` and the Merge Queue's `QueueReviewButton`. Its **PB ED Audit** option is gated behind a `showAudit` prop (default `false`): the PR-card `ReviewButton` omits it (review-only), while `QueueReviewButton` passes `showAudit` and keeps its existing combined review/audit picker behavior unchanged. The audit option is **not** a `reviewer_type` value; selecting it dispatches `POST /api/audits` rather than `POST /api/reviews`.
 
 #### Claude CLI Command
 
@@ -1501,6 +1509,7 @@ The Review Verdict feature allows users to submit a formal GitHub PR review verd
 |-----------|----------|-------------|
 | Verdict Button | Merge Queue Card | Appears when PR has a completed review |
 | VerdictModal | Overlay | Modal with event selector, textarea, section toggles, and submit |
+| Verdict Source toggle | VerdictModal | Review / Audit selector, shown only when the PR has both a completed review and a completed audit (see [Verdict Source Toggle](#verdict-source-toggle) below) |
 | Event Selector | VerdictModal | Three side-by-side buttons for Approve/Request Changes/Comment |
 | Section Toggles | VerdictModal | Checkbox per review section. Clicking **Edit** opens the section in `SectionEditModal` rather than expanding inline. |
 | SectionEditModal | Floating overlay | Standalone draggable/resizable modal for editing a single section's body (or per-issue Problem/Fix fields when the section is marked Inline). One section open at a time. |
@@ -1546,6 +1555,14 @@ The preview panel can switch into edit mode, allowing the user to hand-edit the 
 | **manually edited** badge | Shown in the preview header whenever `manualBodyOverride !== null` so it's visible at a glance that section toggles will not modify the body until Recompose is clicked. |
 
 When an override is active, the final submitted body uses the override verbatim. Inline comments and the inline summary table are independent of the override and continue to come from the section toggles.
+
+#### Verdict Source Toggle
+
+When a PR has **both** a completed review and a completed audit, the verdict modal shows a **Verdict Source** toggle (Review / Audit) so a single modal can compose its body from either source:
+
+- **Default source** — the modal opens on the source it was launched from: the merge queue opens it on **Review**, while the `AuditViewer` opens it on **Audit**. It then discovers the *other* source's latest id via the existing `checkPRReviewed` / `checkPRAudited` endpoints. The toggle renders only when **both** ids resolve; if discovery returns nothing (or fails — discovery is best-effort), the modal stays single-source, unchanged from before.
+- **Switching source** — recomposes the verdict body from the newly selected source. Source-derived selections are reset (parsed sections, enabled/inline toggles, audit blocks, structured/edited issue content, and any manual body override), while the user's chosen review action (Approve / Request Changes / Comment) and custom text are preserved.
+- **Submission** — exactly one verdict is posted per submission, from the selected source. `review_id` (used for review section-count tracking) is sent **only** when the Review source is selected; audit submissions never send it. To post the other source as its own GitHub verdict, switch the toggle (or reopen the modal) and submit again.
 
 ---
 
