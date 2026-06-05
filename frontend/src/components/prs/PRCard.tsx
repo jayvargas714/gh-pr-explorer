@@ -12,6 +12,7 @@ import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
 import { PRBadges } from './PRBadges'
 import { ReviewButton } from '../reviews/ReviewButton'
+import { AuditButton } from '../audits/AuditButton'
 import { DescriptionModal } from '../modals/DescriptionModal'
 import { formatRelativeTime } from '../../utils/formatters'
 
@@ -159,6 +160,8 @@ export function PRCard({ pr }: PRCardProps) {
         </Button>
 
         <ReviewButton pr={pr} />
+
+        <AuditButton pr={pr} />
 
         {selectedRepo && (
           <Button

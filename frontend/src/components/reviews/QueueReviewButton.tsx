@@ -203,6 +203,7 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
         </Button>
         {reviewerPickerOpen && (
           <ReviewerPickerMenu
+            showAudit
             onSelect={handleStartReview}
             onClose={() => setReviewerPickerOpen(false)}
           />

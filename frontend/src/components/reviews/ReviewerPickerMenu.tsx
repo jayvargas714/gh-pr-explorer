@@ -4,9 +4,10 @@ import type { ReviewerType } from '../../api/reviews'
 interface ReviewerPickerMenuProps {
   onSelect: (reviewer: ReviewerType) => void
   onClose: () => void
+  showAudit?: boolean
 }
 
-export function ReviewerPickerMenu({ onSelect, onClose }: ReviewerPickerMenuProps) {
+export function ReviewerPickerMenu({ onSelect, onClose, showAudit = false }: ReviewerPickerMenuProps) {
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -69,18 +70,20 @@ export function ReviewerPickerMenu({ onSelect, onClose }: ReviewerPickerMenuProp
           <small>ed-reviewer</small>
         </span>
       </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="mx-reviewer-picker__option"
-        onClick={() => onSelect('audit')}
-      >
-        <span className="mx-reviewer-picker__icon">🔎</span>
-        <span className="mx-reviewer-picker__label">
-          <strong>PB ED Audit</strong>
-          <small>pb-ed-audit skill</small>
-        </span>
-      </button>
+      {showAudit && (
+        <button
+          type="button"
+          role="menuitem"
+          className="mx-reviewer-picker__option"
+          onClick={() => onSelect('audit')}
+        >
+          <span className="mx-reviewer-picker__icon">🔎</span>
+          <span className="mx-reviewer-picker__label">
+            <strong>PB ED Audit</strong>
+            <small>pb-ed-audit skill</small>
+          </span>
+        </button>
+      )}
     </div>
   )
 }
