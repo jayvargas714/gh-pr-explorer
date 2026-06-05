@@ -9,6 +9,9 @@ import { Badge } from '../common/Badge'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 import { formatRelativeTime } from '../../utils/formatters'
+import { AuditHistoryList } from '../audits/AuditHistoryList'
+
+type HistoryTab = 'reviews' | 'audits'
 
 export function HistoryPanel() {
   const showHistoryPanel = useUIStore((state) => state.showHistoryPanel)
@@ -25,12 +28,13 @@ export function HistoryPanel() {
   const [totalReviews, setTotalReviews] = useState<number>(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<HistoryTab>('reviews')
 
   useEffect(() => {
-    if (showHistoryPanel) {
+    if (showHistoryPanel && activeTab === 'reviews') {
       loadHistory()
     }
-  }, [showHistoryPanel, searchQuery, prNumberFilter])
+  }, [showHistoryPanel, activeTab, searchQuery, prNumberFilter])
 
   const loadHistory = async () => {
     try {
@@ -71,16 +75,45 @@ export function HistoryPanel() {
       <div className="mx-history-panel">
         <div className="mx-history-panel__header">
           <div className="mx-history-panel__title">
-            <h2>Review History</h2>
-            <span className="mx-history-panel__count">
-              {totalReviews} total {totalReviews === 1 ? 'review' : 'reviews'}
-            </span>
+            <h2>{activeTab === 'reviews' ? 'Review History' : 'Audit History'}</h2>
+            {activeTab === 'reviews' && (
+              <span className="mx-history-panel__count">
+                {totalReviews} total {totalReviews === 1 ? 'review' : 'reviews'}
+              </span>
+            )}
           </div>
           <Button variant="ghost" size="sm" onClick={() => setShowHistoryPanel(false)}>
             ✕
           </Button>
         </div>
 
+        <div className="mx-analytics-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'reviews'}
+            className={`mx-analytics-tab${activeTab === 'reviews' ? ' mx-analytics-tab--active' : ''}`}
+            onClick={() => setActiveTab('reviews')}
+          >
+            <span className="mx-analytics-tab__label">Reviews</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'audits'}
+            className={`mx-analytics-tab${activeTab === 'audits' ? ' mx-analytics-tab--active' : ''}`}
+            onClick={() => setActiveTab('audits')}
+          >
+            <span className="mx-analytics-tab__label">Audits</span>
+          </button>
+        </div>
+
+        {activeTab === 'audits' ? (
+          <div className="mx-history-panel__content">
+            <AuditHistoryList />
+          </div>
+        ) : (
+        <>
         <div className="mx-history-panel__total">
           Total PRs Reviewed: <strong>{totalReviews}</strong>
         </div>
@@ -143,6 +176,8 @@ export function HistoryPanel() {
             </div>
           )}
         </div>
+        </>
+        )}
       </div>
     </>
   )
