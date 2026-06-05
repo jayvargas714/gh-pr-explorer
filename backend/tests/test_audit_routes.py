@@ -66,3 +66,29 @@ def test_check_audit(client):
     audits_db.add_audit(pr_number=1630, repo="owner/repo", content_json=_content())
     resp = c.get("/api/audit-history/check/owner/repo/1630")
     assert resp.get_json()["audited"] is True
+
+
+def test_findings_to_inline_comments_mapping():
+    from backend.routes.audit_routes import _findings_to_inline_comments
+    cj = {"audits": [{"key": "A", "name": "x", "findings": [
+        {"id": "CE-1", "severity": "INCONSISTENCY", "summary": "s1",
+         "detail": "d", "recommendation": "r",
+         "locations": [{"file": "docs/ED-010.md", "line": 5}, {"file": "docs/ED-010.md", "line": 9}]},
+        {"id": "CE-2", "severity": "INFO", "summary": "s2",
+         "locations": [{"file": "docs/ED-010.md", "line": 0}]},   # line<1 -> skipped
+        {"id": "CE-3", "severity": "INFO", "summary": "s3", "locations": None},  # None -> skipped, no crash
+        {"id": "CE-4", "severity": "INFO", "summary": "s4"},        # no locations -> skipped
+    ]}]}
+    comments = _findings_to_inline_comments(cj)
+    assert len(comments) == 1                      # only CE-1 maps (first location)
+    c = comments[0]
+    assert c["path"] == "docs/ED-010.md"
+    assert c["start_line"] == 5 and c["end_line"] == 5
+    assert c["title"] == "CE-1"
+    assert "CE-1" in c["body"] and "s1" in c["body"]
+
+
+def test_findings_to_inline_comments_handles_null_findings():
+    from backend.routes.audit_routes import _findings_to_inline_comments
+    cj = {"audits": [{"key": "A", "name": "x", "findings": None}, "not-a-dict"]}
+    assert _findings_to_inline_comments(cj) == []

@@ -79,10 +79,12 @@ def start_audit():
         pr_number = data["number"]
         owner, repo = data["owner"], data["repo"]
         key = f"{owner}/{repo}/{pr_number}"
+        logger.info(f"Received audit request for {key}")
 
         with audits_lock:
             existing = active_audits.get(key)
             if existing and existing["status"] == "running":
+                logger.warning(f"Audit already in progress for {key}")
                 return jsonify({"error": "Audit already in progress for this PR"}), 409
 
         process, result = start_audit_process(data["url"], owner, repo, pr_number)
@@ -112,6 +114,7 @@ def start_audit():
 @audit_bp.route("/api/audits/<owner>/<repo>/<int:pr_number>", methods=["DELETE"])
 def cancel_audit(owner, repo, pr_number):
     key = f"{owner}/{repo}/{pr_number}"
+    logger.info(f"Cancelling audit {key}")
     with audits_lock:
         if key not in active_audits:
             return jsonify({"error": "Audit not found"}), 404
@@ -162,12 +165,14 @@ def list_audit_history():
 
     if search:
         rows = audits_db.search_audits(search, limit=limit)
+        total = len(rows)
     else:
         rows = audits_db.list_audits(repo=repo, author=author, pr_number=pr_number,
                                      limit=limit, offset=offset)
+        total = audits_db.count_all()
     return jsonify({
         "audits": [_audit_row_to_summary(r) for r in rows],
-        "total": audits_db.count_all(),
+        "total": total,
     })
 
 
@@ -203,9 +208,13 @@ def check_audit(owner, repo, pr_number):
 def _findings_to_inline_comments(content_json):
     """Map findings with a resolvable file+line to verdict inline_comments entries."""
     comments = []
-    for audit in content_json.get("audits", []):
-        for f in audit.get("findings", []):
-            for loc in f.get("locations", []):
+    for audit in (content_json.get("audits") or []):
+        if not isinstance(audit, dict):
+            continue
+        for f in (audit.get("findings") or []):
+            if not isinstance(f, dict):
+                continue
+            for loc in (f.get("locations") or []):
                 file = loc.get("file")
                 line = loc.get("line")
                 if file and isinstance(line, int) and line >= 1:
@@ -255,6 +264,9 @@ def post_audit_inline_comments(audit_id):
     result, status_code = post_verdict(
         owner, repo_name, row["pr_number"], "COMMENT", body, inline_comments=comments,
     )
-    if status_code == 200:
+    if status_code == 200 and not result.get("inline_errors"):
         audits_db.update_inline_comments_posted(audit_id, True)
+    elif status_code == 200 and result.get("inline_errors"):
+        # Some comments failed — leave the flag unset so the user can retry.
+        result["partial"] = True
     return jsonify(result), status_code
