@@ -6,6 +6,7 @@ import { Button } from '../common/Button'
 import { Alert } from '../common/Alert'
 import { Spinner } from '../common/Spinner'
 import { getReviewDetail, postVerdict } from '../../api/reviews'
+import { getAuditDetail } from '../../api/audits'
 import { getReviewSections, type ReviewSection } from '../../utils/reviewSections'
 import { SectionEditModal, type EditableIssue } from './SectionEditModal'
 import type {
@@ -13,6 +14,8 @@ import type {
   VerdictInlineComment,
   ReviewDetail,
   ReviewIssueJSON,
+  AuditDetail,
+  AuditJSON,
 } from '../../api/types'
 
 /** Build a markdown summary table of inline issues for the verdict body. */
@@ -71,12 +74,70 @@ const buildInlineSummaryTable = (comments: VerdictInlineComment[]): string => {
   ].join('\n')
 }
 
+// ---------------------------------------------------------------------------
+// Audit-mode composition helpers (consume AuditDetail.content_json)
+// ---------------------------------------------------------------------------
+
+/** Compose the verdict body from the enabled audit blocks. */
+function composeAuditBody(audit: AuditJSON, enabled: Set<string>): string {
+  const parts: string[] = []
+  if (enabled.has('exec') && audit.executive_summary) {
+    parts.push(`**Executive summary**\n\n${audit.executive_summary}`)
+  }
+  for (const section of audit.audits) {
+    const key = `audit:${section.key}`
+    if (!enabled.has(key)) continue
+    const lines = [`**Audit ${section.key} — ${section.name}**`]
+    if (section.verdict) lines.push(section.verdict)
+    for (const f of section.findings) {
+      lines.push(`- **[${f.id}] ${f.severity}** — ${f.summary}`)
+    }
+    parts.push(lines.join('\n'))
+  }
+  if (enabled.has('action_map') && audit.action_map?.length) {
+    const rows = audit.action_map
+      .map((r) => `| ${r.priority || ''} | ${(r.finding_ids || []).join(', ')} | ${r.nature || ''} |`)
+      .join('\n')
+    parts.push(`**Action map**\n\n| Priority | Items | Nature |\n|---|---|---|\n${rows}`)
+  }
+  return parts.join('\n\n---\n\n')
+}
+
+/** Build inline comment payloads from audit findings that carry a resolvable file+line. */
+function auditInlineComments(audit: AuditJSON): VerdictInlineComment[] {
+  const out: VerdictInlineComment[] = []
+  for (const section of audit.audits) {
+    for (const f of section.findings) {
+      const loc = (f.locations || []).find(
+        (l) => l.file && typeof l.line === 'number' && (l.line as number) >= 1,
+      )
+      if (!loc) continue
+      const bodyParts = [`**[${f.id}] ${f.summary}**`, `_Severity: ${f.severity}_`]
+      if (f.detail) bodyParts.push(f.detail)
+      if (f.recommendation) bodyParts.push(`**Recommendation:** ${f.recommendation}`)
+      out.push({
+        path: loc.file as string,
+        start_line: loc.line as number,
+        end_line: loc.line as number,
+        body: bodyParts.join('\n\n'),
+        title: f.id,
+      })
+    }
+  }
+  return out
+}
+
 interface VerdictModalProps {
-  reviewId: number
+  /** Required in standard ('review') mode. */
+  reviewId?: number
   prNumber: number
   repo: string
   onClose: () => void
   onRefresh?: () => void
+  /** Composition mode. Defaults to 'review' (existing behavior). */
+  mode?: 'review' | 'audit'
+  /** Required when mode === 'audit'. */
+  auditId?: number
 }
 
 const EVENT_OPTIONS: { value: VerdictEvent; label: string }[] = [
@@ -96,7 +157,16 @@ const MIN_PANEL_TOP = 60
 const VERDICT_MIN_WIDTH = 420
 const VERDICT_MIN_HEIGHT = 350
 
-export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: VerdictModalProps) {
+export function VerdictModal({
+  reviewId,
+  prNumber,
+  repo,
+  onClose,
+  onRefresh,
+  mode = 'review',
+  auditId,
+}: VerdictModalProps) {
+  const isAudit = mode === 'audit'
   const [event, setEvent] = useState<VerdictEvent>('COMMENT')
   const [customText, setCustomText] = useState('')
   const [sections, setSections] = useState<ReviewSection[]>([])
@@ -114,6 +184,11 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
   const [reviewDetail, setReviewDetail] = useState<ReviewDetail | null>(null)
   const [showReviewPanel, setShowReviewPanel] = useState(false)
   const [showPreview, setShowPreview] = useState(false)
+
+  // Audit-mode state (mode === 'audit')
+  const [auditDetail, setAuditDetail] = useState<AuditDetail | null>(null)
+  const [auditBlocks, setAuditBlocks] = useState<{ key: string; label: string }[]>([])
+  const [postAuditInline, setPostAuditInline] = useState(false)
 
   // Drag state for the review panel
   const [panelPos, setPanelPos] = useState({ x: 40, y: 80 })
@@ -137,8 +212,13 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
   const verdictNodeRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    loadReviewContent()
-  }, [reviewId])
+    if (isAudit) {
+      loadAuditContent()
+    } else {
+      loadReviewContent()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewId, auditId, isAudit])
 
   // Close on Escape
   useEffect(() => {
@@ -310,6 +390,11 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
   }, [previewSize])
 
   const loadReviewContent = async () => {
+    if (reviewId === undefined) {
+      setError('No review id provided')
+      setLoading(false)
+      return
+    }
     try {
       setLoading(true)
       setError(null)
@@ -345,6 +430,39 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load review content')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const loadAuditContent = async () => {
+    if (auditId === undefined) {
+      setError('No audit id provided')
+      setLoading(false)
+      return
+    }
+    try {
+      setLoading(true)
+      setError(null)
+      const detail = await getAuditDetail(auditId)
+      setAuditDetail(detail)
+
+      const cj = detail.content_json
+      const blocks: { key: string; label: string }[] = []
+      if (cj?.executive_summary) {
+        blocks.push({ key: 'exec', label: 'Executive summary' })
+      }
+      for (const section of cj?.audits ?? []) {
+        blocks.push({ key: `audit:${section.key}`, label: `Audit ${section.key} — ${section.name}` })
+      }
+      if (cj?.action_map?.length) {
+        blocks.push({ key: 'action_map', label: 'Action map' })
+      }
+      setAuditBlocks(blocks)
+      // Enable all blocks by default so the body composes out of the box.
+      setEnabledSections(new Set(blocks.map((b) => b.key)))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load audit content')
     } finally {
       setLoading(false)
     }
@@ -418,13 +536,34 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
     return comments
   }
 
-  const inlineCommentsMemo = useMemo(
-    () => buildInlineComments(),
-    [sections, enabledSections, inlineSections, structuredIssues]
+  // All inline comments available from the audit (findings with file+line).
+  const auditInlineMemo = useMemo<VerdictInlineComment[]>(
+    () => (auditDetail?.content_json ? auditInlineComments(auditDetail.content_json) : []),
+    [auditDetail]
   )
+
+  const inlineCommentsMemo = useMemo(() => {
+    if (isAudit) {
+      return postAuditInline ? auditInlineMemo : []
+    }
+    return buildInlineComments()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAudit, postAuditInline, auditInlineMemo, sections, enabledSections, inlineSections, structuredIssues])
 
   /** Build the body text for the verdict (excludes inline sections). */
   const composeBody = (): string => {
+    if (isAudit) {
+      const parts: string[] = []
+      const table = buildInlineSummaryTable(inlineCommentsMemo)
+      if (table) parts.push(table)
+      if (customText.trim()) parts.push(customText.trim())
+      const auditBody = auditDetail?.content_json
+        ? composeAuditBody(auditDetail.content_json, enabledSections)
+        : ''
+      if (auditBody) parts.push(auditBody)
+      return parts.join('\n\n---\n\n')
+    }
+
     const parts: string[] = []
 
     const table = buildInlineSummaryTable(inlineCommentsMemo)
@@ -476,7 +615,8 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
         event,
         body: body || '',
         inline_comments: inlineComments.length > 0 ? inlineComments : undefined,
-        review_id: reviewId,
+        // Section-count tracking is review-only; never pass review_id for audits.
+        review_id: isAudit ? undefined : reviewId,
       })
 
       // Build detailed success/warning message
@@ -529,8 +669,12 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
   }
 
   const hasOverride = manualBodyOverride !== null && manualBodyOverride.trim().length > 0
-  const hasBodyContent = hasOverride || customText.trim() || [...enabledSections].some((k) => !inlineSections.has(k))
-  const hasInlineContent = [...enabledSections].some((k) => inlineSections.has(k) && structuredIssues[k]?.length)
+  const hasBodyContent = isAudit
+    ? hasOverride || !!customText.trim() || enabledSections.size > 0
+    : hasOverride || customText.trim() || [...enabledSections].some((k) => !inlineSections.has(k))
+  const hasInlineContent = isAudit
+    ? postAuditInline && auditInlineMemo.length > 0
+    : [...enabledSections].some((k) => inlineSections.has(k) && structuredIssues[k]?.length)
   const hasContent = hasBodyContent || hasInlineContent
 
   const isInlineEligible = (key: string) => INLINE_ELIGIBLE_KEYS.has(key) && !!structuredIssues[key]?.length
@@ -567,7 +711,7 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
             {loading ? (
               <div className="mx-verdict-modal__loading">
                 <Spinner size="md" />
-                <p>Loading review content...</p>
+                <p>{isAudit ? 'Loading audit content...' : 'Loading review content...'}</p>
               </div>
             ) : (
               <>
@@ -626,7 +770,42 @@ export function VerdictModal({ reviewId, prNumber, repo, onClose, onRefresh }: V
                   />
                 </div>
 
-                {sections.length > 0 && (
+                {isAudit && auditBlocks.length > 0 && (
+                  <div className="mx-verdict-modal__sections">
+                    <label className="mx-verdict-modal__label">Include Audit Blocks</label>
+                    {auditBlocks.map((block) => (
+                      <div key={block.key} className="mx-verdict-modal__section-toggle">
+                        <div className="mx-verdict-modal__section-header">
+                          <label className="mx-verdict-modal__checkbox-label">
+                            <input
+                              type="checkbox"
+                              checked={enabledSections.has(block.key)}
+                              onChange={() => toggleSection(block.key)}
+                              disabled={submitting}
+                            />
+                            {block.label}
+                          </label>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {isAudit && auditInlineMemo.length > 0 && (
+                  <div className="mx-verdict-modal__sections">
+                    <label className="mx-verdict-modal__checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={postAuditInline}
+                        onChange={() => setPostAuditInline((v) => !v)}
+                        disabled={submitting}
+                      />
+                      Post {auditInlineMemo.length} finding{auditInlineMemo.length === 1 ? '' : 's'} inline
+                    </label>
+                  </div>
+                )}
+
+                {!isAudit && sections.length > 0 && (
                   <div className="mx-verdict-modal__sections">
                     <label className="mx-verdict-modal__label">Include Review Sections</label>
                     {sections.map((section) => (
