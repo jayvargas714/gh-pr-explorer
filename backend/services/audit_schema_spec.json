@@ -1,0 +1,100 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PB-ED Audit JSON Schema",
+  "description": "Structured JSON format for PB↔ED audits produced by the /pb-ed-audit skill",
+  "type": "object",
+  "required": ["schema_version", "format", "audit_type", "metadata", "audits"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "format": { "type": "string", "const": "audit" },
+    "audit_type": { "type": "string", "enum": ["pb_ed"] },
+    "metadata": {
+      "type": "object",
+      "required": ["pr_number", "repository"],
+      "properties": {
+        "pr_number": { "type": "integer" },
+        "repository": { "type": "string", "description": "owner/repo format" },
+        "pr_url": { "type": "string" },
+        "pr_title": { "type": "string" },
+        "head_ref": { "type": "string" },
+        "base_ref": { "type": "string" },
+        "parent_pb": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "title": { "type": "string" },
+            "status": { "type": "string" }
+          }
+        },
+        "eds": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": { "id": { "type": "string" }, "title": { "type": "string" } }
+          }
+        },
+        "auditor": { "type": "string" },
+        "date": { "type": "string" },
+        "scope": { "type": "string" }
+      }
+    },
+    "executive_summary": { "type": "string" },
+    "audits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "name", "findings"],
+        "properties": {
+          "key": { "type": "string", "description": "Short label, e.g. 'A' or 'B'" },
+          "name": { "type": "string" },
+          "verdict": { "type": "string" },
+          "tally": { "type": "object", "additionalProperties": { "type": "integer" } },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "severity", "summary"],
+              "properties": {
+                "id": { "type": "string" },
+                "severity": { "type": "string", "description": "Uppercase token, e.g. CONTRADICTION, SCOPE-VIOLATION, INCONSISTENCY, UN-ANCHORED, UNDER-COVERAGE, INFO" },
+                "blocking": { "type": "boolean" },
+                "rule_id": { "type": "string" },
+                "rule_authority": { "type": "string" },
+                "concept": { "type": "string" },
+                "lens": { "type": "string" },
+                "summary": { "type": "string" },
+                "locations": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "file": { "type": "string", "description": "repo-relative path; enables inline comments" },
+                      "line": { "type": ["integer", "null"] },
+                      "ref": { "type": "string", "description": "human display ref, e.g. 'ED-010 §10:389'" },
+                      "quote": { "type": "string" }
+                    }
+                  }
+                },
+                "detail": { "type": "string" },
+                "recommendation": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "verified_clean": { "type": "string" },
+    "supplementary_notes": { "type": "string" },
+    "action_map": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "priority": { "type": "string" },
+          "finding_ids": { "type": "array", "items": { "type": "string" } },
+          "nature": { "type": "string" }
+        }
+      }
+    }
+  }
+}
