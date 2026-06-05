@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import 'highlight.js/styles/github-dark.css'
-import { getAuditDetail } from '../../api/audits'
-import type { AuditDetail } from '../../api/types'
+import { getAuditDetail, postAuditInlineComments } from '../../api/audits'
+import { APIError } from '../../api/client'
+import type { AuditDetail, AuditJSON } from '../../api/types'
 import { AuditChip } from './AuditChip'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
@@ -16,11 +17,33 @@ interface AuditViewerProps {
   onClose: () => void
 }
 
+/**
+ * Count findings that carry a resolvable file+line location. Uses the SAME
+ * predicate as the backend `_findings_to_inline_comments` (isinstance(line, int))
+ * and the verdict-path `auditInlineComments`: a location with a non-empty file
+ * and an integer line >= 1.
+ */
+function mappableFindingCount(content: AuditJSON | null | undefined): number {
+  if (!content) return 0
+  let count = 0
+  for (const section of content.audits || []) {
+    for (const f of section.findings || []) {
+      const loc = (f.locations || []).find(
+        (l) => l.file && Number.isInteger(l.line) && (l.line as number) >= 1,
+      )
+      if (loc) count += 1
+    }
+  }
+  return count
+}
+
 export function AuditViewer({ auditId, onClose }: AuditViewerProps) {
   const [audit, setAudit] = useState<AuditDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showVerdict, setShowVerdict] = useState(false)
+  const [posting, setPosting] = useState(false)
+  const [postMessage, setPostMessage] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -65,6 +88,39 @@ export function AuditViewer({ auditId, onClose }: AuditViewerProps) {
   const canPostVerdict =
     repository.includes('/') && typeof prNumber === 'number' && Number.isFinite(prNumber)
 
+  const mappableCount = useMemo(
+    () => mappableFindingCount(audit?.content_json),
+    [audit?.content_json],
+  )
+  const inlinePosted = !!audit?.inline_comments_posted
+  const canPostInline = canPostVerdict && mappableCount > 0
+
+  const handlePostInline = async () => {
+    if (posting || inlinePosted || !canPostInline) return
+    setPosting(true)
+    setPostMessage(null)
+    try {
+      const resp = await postAuditInlineComments(auditId)
+      // Re-fetch so inline_comments_posted reflects the authoritative server state.
+      const refreshed = await getAuditDetail(auditId).catch(() => null)
+      if (refreshed) setAudit(refreshed)
+      setPostMessage(resp.message || 'Inline comments posted')
+    } catch (e) {
+      if (e instanceof APIError && e.status === 409) {
+        // Already posted on the server — sync local state to reflect it.
+        const refreshed = await getAuditDetail(auditId).catch(() => null)
+        if (refreshed) setAudit(refreshed)
+        setPostMessage(e.message || 'Inline comments already posted for this audit')
+      } else {
+        setPostMessage(
+          e instanceof Error ? e.message : 'Failed to post inline comments',
+        )
+      }
+    } finally {
+      setPosting(false)
+    }
+  }
+
   return (
     <>
     <div className="mx-modal-overlay" onClick={onClose}>
@@ -91,6 +147,27 @@ export function AuditViewer({ auditId, onClose }: AuditViewerProps) {
                   findingCount={audit.finding_count}
                   blockingCount={audit.blocking_count}
                 />
+                {canPostInline && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handlePostInline}
+                    disabled={posting || inlinePosted}
+                    data-tooltip={
+                      inlinePosted
+                        ? 'Inline comments already posted to GitHub'
+                        : `Post ${mappableCount} finding(s) with file+line as inline comments`
+                    }
+                  >
+                    {inlinePosted ? (
+                      '✓ Inline comments posted'
+                    ) : posting ? (
+                      <><Spinner size="sm" /> Posting…</>
+                    ) : (
+                      'Post inline comments'
+                    )}
+                  </Button>
+                )}
                 {canPostVerdict && (
                   <Button
                     variant="secondary"
@@ -112,6 +189,9 @@ export function AuditViewer({ auditId, onClose }: AuditViewerProps) {
           </button>
         </div>
         <div className="mx-draggable-modal__body">
+          {postMessage && (
+            <Alert variant="info">{postMessage}</Alert>
+          )}
           {loading ? (
             <div className="mx-review-viewer__loading">
               <Spinner size="lg" />
