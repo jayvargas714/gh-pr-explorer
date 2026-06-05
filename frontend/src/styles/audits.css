@@ -27,6 +27,12 @@
   align-items: flex-start;
   gap: 12px;
 }
+.mx-audit-viewer__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
 .mx-audit-viewer__meta {
   font-size: 12px;
   opacity: 0.8;

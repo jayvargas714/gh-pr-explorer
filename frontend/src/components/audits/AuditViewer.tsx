@@ -8,6 +8,8 @@ import type { AuditDetail } from '../../api/types'
 import { AuditChip } from './AuditChip'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
+import { Button } from '../common/Button'
+import { VerdictModal } from '../queue/VerdictModal'
 
 interface AuditViewerProps {
   auditId: number
@@ -18,6 +20,7 @@ export function AuditViewer({ auditId, onClose }: AuditViewerProps) {
   const [audit, setAudit] = useState<AuditDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [showVerdict, setShowVerdict] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -52,7 +55,15 @@ export function AuditViewer({ auditId, onClose }: AuditViewerProps) {
 
   const meta = audit?.content_json?.metadata
 
+  // Derive owner/repo/PR for the verdict modal from the audit metadata,
+  // falling back to the top-level audit record when metadata is absent.
+  const repository = meta?.repository ?? audit?.repo ?? ''
+  const prNumber = meta?.pr_number ?? audit?.pr_number
+  const canPostVerdict =
+    repository.includes('/') && typeof prNumber === 'number' && Number.isFinite(prNumber)
+
   return (
+    <>
     <div className="mx-modal-overlay" onClick={onClose}>
       <div
         className="mx-draggable-modal mx-draggable-modal--xl"
@@ -72,10 +83,21 @@ export function AuditViewer({ auditId, onClose }: AuditViewerProps) {
               )}
             </div>
             {audit && (
-              <AuditChip
-                findingCount={audit.finding_count}
-                blockingCount={audit.blocking_count}
-              />
+              <div className="mx-audit-viewer__header-actions">
+                <AuditChip
+                  findingCount={audit.finding_count}
+                  blockingCount={audit.blocking_count}
+                />
+                {canPostVerdict && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setShowVerdict(true)}
+                  >
+                    Verdict
+                  </Button>
+                )}
+              </div>
             )}
           </div>
           <button
@@ -109,5 +131,16 @@ export function AuditViewer({ auditId, onClose }: AuditViewerProps) {
         </div>
       </div>
     </div>
+
+      {showVerdict && canPostVerdict && (
+        <VerdictModal
+          mode="audit"
+          auditId={auditId}
+          prNumber={prNumber as number}
+          repo={repository}
+          onClose={() => setShowVerdict(false)}
+        />
+      )}
+    </>
   )
 }
