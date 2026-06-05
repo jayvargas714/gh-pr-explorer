@@ -109,7 +109,7 @@ function auditInlineComments(audit: AuditJSON): VerdictInlineComment[] {
   for (const section of audit.audits) {
     for (const f of section.findings) {
       const loc = (f.locations || []).find(
-        (l) => l.file && typeof l.line === 'number' && (l.line as number) >= 1,
+        (l) => l.file && Number.isInteger(l.line) && (l.line as number) >= 1,
       )
       if (!loc) continue
       const bodyParts = [`**[${f.id}] ${f.summary}**`, `_Severity: ${f.severity}_`]
