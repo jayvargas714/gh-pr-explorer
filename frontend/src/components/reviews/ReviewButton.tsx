@@ -18,18 +18,23 @@ export function ReviewButton({ pr }: ReviewButtonProps) {
   const { activeReviews, updateReview, removeReview, showReviewError } =
     useReviewStore()
   const startAudit = useAuditStore((state) => state.startAudit)
+  const cancelAudit = useAuditStore((state) => state.cancelAudit)
+  const auditStatusFor = useAuditStore((state) => state.auditStatusFor)
   const selectedRepo = useAccountStore((state) => state.selectedRepo)
 
   const owner = selectedRepo?.owner.login ?? ''
   const repo = selectedRepo?.name ?? ''
   const reviewKey = `${owner}/${repo}/${pr.number}`
   const review = activeReviews[reviewKey]
+  const auditStatus = auditStatusFor(owner, repo, pr.number)
+  const auditRunning = auditStatus === 'running'
 
   const handleStartReview = async (reviewerType: ReviewerType) => {
     if (starting || !owner || !repo) return
     setPickerOpen(false)
 
     if (reviewerType === 'audit') {
+      if (auditRunning) return
       try {
         setStarting(true)
         await startAudit({
@@ -88,6 +93,14 @@ export function ReviewButton({ pr }: ReviewButtonProps) {
     }
   }
 
+  const handleCancelAudit = async () => {
+    try {
+      await cancelAudit(owner, repo, pr.number)
+    } catch (err) {
+      console.error('Failed to cancel audit:', err)
+    }
+  }
+
   const handleShowError = () => {
     if (!review) return
     showReviewError(
@@ -98,6 +111,15 @@ export function ReviewButton({ pr }: ReviewButtonProps) {
       repo,
       review.error_output || 'Unknown error',
       review.exit_code || null,
+    )
+  }
+
+  // Audit running (only when no review is running for this PR)
+  if (!review && auditRunning) {
+    return (
+      <Button variant="ghost" size="sm" onClick={handleCancelAudit}>
+        <Spinner size="sm" /> Auditing… Cancel
+      </Button>
     )
   }
 

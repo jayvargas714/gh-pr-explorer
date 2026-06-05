@@ -30,7 +30,37 @@ export const useAuditStore = create<AuditStoreState>((set, get) => ({
   activeAudits: [],
 
   startAudit: async (args) => {
-    await apiStartAudit(args)
+    const key = `${args.owner}/${args.repo}/${args.number}`
+    // Optimistically mark the audit as running so the UI reflects it immediately,
+    // before the API round-trip. refreshActiveAudits() reconciles from the server.
+    const optimistic: ActiveAudit = {
+      key,
+      owner: args.owner,
+      repo: args.repo,
+      pr_number: args.number,
+      status: 'running',
+      started_at: new Date().toISOString(),
+      completed_at: '',
+      pr_url: args.url,
+      audit_file: '',
+      exit_code: null,
+      error_output: '',
+    }
+    set((state) => ({
+      activeAudits: [
+        ...state.activeAudits.filter((a) => a.key !== key),
+        optimistic,
+      ],
+    }))
+    try {
+      await apiStartAudit(args)
+    } catch (err) {
+      // Roll back the optimistic entry on failure so the picker is usable again.
+      set((state) => ({
+        activeAudits: state.activeAudits.filter((a) => a.key !== key),
+      }))
+      throw err
+    }
     await get().refreshActiveAudits()
   },
 

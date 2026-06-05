@@ -19,10 +19,13 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
   const [pickerSection, setPickerSection] = useState<string | null>(null)
   const { activeReviews, updateReview, removeReview, showReviewError } = useReviewStore()
   const startAudit = useAuditStore((state) => state.startAudit)
+  const cancelAudit = useAuditStore((state) => state.cancelAudit)
+  const auditStatusFor = useAuditStore((state) => state.auditStatusFor)
 
   const [owner, repo] = item.repo.split('/')
   const reviewKey = `${item.repo}/${item.number}`
   const review = activeReviews[reviewKey]
+  const auditRunning = auditStatusFor(owner, repo, item.number) === 'running'
   const prevStatusRef = useRef(review?.status)
 
   // Refresh queue when a review transitions to completed or failed
@@ -41,6 +44,7 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
     setReviewerPickerOpen(false)
 
     if (reviewerType === 'audit') {
+      if (auditRunning) return
       try {
         setStarting(true)
         await startAudit({
@@ -101,6 +105,14 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
     }
   }
 
+  const handleCancelAudit = async () => {
+    try {
+      await cancelAudit(owner, repo, item.number)
+    } catch (err) {
+      console.error('Failed to cancel audit:', err)
+    }
+  }
+
   const handleShowError = () => {
     if (!review) return
     showReviewError(
@@ -133,6 +145,15 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
     return (
       <Button variant="ghost" size="sm" onClick={handleShowError}>
         ✗ Error
+      </Button>
+    )
+  }
+
+  // Audit running (no review is running/failed for this PR)
+  if (auditRunning) {
+    return (
+      <Button variant="ghost" size="sm" onClick={handleCancelAudit}>
+        <Spinner size="sm" /> Auditing… Cancel
       </Button>
     )
   }
