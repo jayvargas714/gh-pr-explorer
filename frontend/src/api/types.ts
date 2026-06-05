@@ -923,3 +923,111 @@ export interface SwimlaneAssignment {
 export interface SwimlaneMoveResponse {
   assignment: SwimlaneAssignment
 }
+
+// ----- PB↔ED Audit types -----
+
+export interface AuditLocation {
+  file?: string
+  line?: number | null
+  ref?: string
+  quote?: string
+}
+
+export interface AuditFinding {
+  id: string
+  severity: string
+  blocking?: boolean
+  rule_id?: string
+  rule_authority?: string
+  concept?: string
+  lens?: string
+  summary: string
+  locations?: AuditLocation[]
+  detail?: string
+  recommendation?: string
+}
+
+export interface AuditSection {
+  key: string
+  name: string
+  verdict?: string
+  tally?: Record<string, number>
+  findings: AuditFinding[]
+}
+
+export interface AuditJSONMetadata {
+  pr_number: number
+  repository: string
+  pr_url?: string
+  pr_title?: string
+  head_ref?: string
+  base_ref?: string
+  parent_pb?: { id?: string; title?: string; status?: string }
+  eds?: { id?: string; title?: string }[]
+  auditor?: string
+  date?: string
+  scope?: string
+}
+
+export interface AuditActionRow {
+  priority?: string
+  finding_ids?: string[]
+  nature?: string
+}
+
+export interface AuditJSON {
+  schema_version: string
+  format: 'audit'
+  audit_type: string
+  metadata: AuditJSONMetadata
+  executive_summary?: string
+  audits: AuditSection[]
+  verified_clean?: string
+  supplementary_notes?: string
+  action_map?: AuditActionRow[]
+}
+
+export interface AuditHistoryItem {
+  id: number
+  pr_number: number
+  repo: string
+  pr_title?: string | null
+  pr_author?: string | null
+  pr_url?: string | null
+  audit_timestamp?: string
+  status?: string
+  finding_count: number
+  blocking_count: number
+  inline_comments_posted: boolean
+}
+
+export interface AuditDetail extends AuditHistoryItem {
+  content_json?: AuditJSON | null
+  content?: string
+  head_ref?: string | null
+  base_ref?: string | null
+  audit_file_path?: string | null
+}
+
+export interface AuditHistoryResponse {
+  audits: AuditHistoryItem[]
+  total: number
+}
+
+export interface ActiveAudit {
+  key: string
+  owner: string
+  repo: string
+  pr_number: number
+  status: string
+  started_at: string
+  completed_at: string
+  pr_url: string
+  audit_file: string
+  exit_code: number | null
+  error_output: string
+}
+
+export interface ActiveAuditsResponse {
+  audits: ActiveAudit[]
+}
