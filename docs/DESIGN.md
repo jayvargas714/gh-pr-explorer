@@ -195,6 +195,7 @@ The database module provides SQLite-based persistence for reviews and merge queu
 |-------|-------------|
 | `Database` | Base class managing SQLite connection and schema initialization |
 | `ReviewsDB` | Handles review storage, retrieval, and search operations |
+| `AuditsDB` | Handles PB↔ED audit storage, retrieval, and search operations (parallel to `ReviewsDB`) |
 | `MergeQueueDB` | Manages merge queue persistence and ordering |
 | `SwimlanesDB` | Manages swimlane definitions and per-card lane assignments (including pin state) for the Kanban view of the merge queue |
 | `DevStatsDB` | Caches developer statistics with 4-hour TTL for improved performance |
@@ -229,6 +230,29 @@ CREATE TABLE reviews (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (parent_review_id) REFERENCES reviews(id)
 );
+
+-- Audits table: Stores PB↔ED audit history and structured JSON content (parallel to reviews)
+CREATE TABLE IF NOT EXISTS audits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pr_number INTEGER NOT NULL,
+    repo TEXT NOT NULL,
+    pr_title TEXT,
+    pr_author TEXT,
+    pr_url TEXT,
+    head_ref TEXT,
+    base_ref TEXT,
+    audit_type TEXT NOT NULL DEFAULT 'pb_ed',
+    audit_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    status TEXT NOT NULL DEFAULT 'completed',
+    content_json TEXT NOT NULL,              -- Structured JSON audit content (see Audit JSON Schema)
+    finding_count INTEGER DEFAULT 0,
+    blocking_count INTEGER DEFAULT 0,
+    inline_comments_posted BOOLEAN DEFAULT FALSE,
+    audit_file_path TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_audits_repo_pr ON audits(repo, pr_number);
+CREATE INDEX idx_audits_timestamp ON audits(audit_timestamp DESC);
 
 -- Merge queue table: Persists prioritized PR queue
 CREATE TABLE merge_queue (
@@ -1281,6 +1305,39 @@ Pause-suspension alone cannot catch a slow board fetch that *started before* a c
 
 The header shows a `CacheTimestamp` indicator ("Updated X ago" / "refreshing…") sourced from `lastUpdated` and `refreshing` flags on the swimlane store. Background refreshes do not flip the modal's `loading` flag and silently swallow transient errors so a brief network blip doesn't surface a banner mid-session.
 
+### PB↔ED Audit
+
+The PB↔ED Audit feature audits the Engineering Design (ED) documents touched in a PR against their parent Product Brief (PB) for **parity** (does the design implement what the brief specifies — and only that?) and against each other for **cross-ED consistency** (do sibling EDs agree on shared values, enums, contracts, and cross-references?). It runs the global `/pb-ed-audit` skill via Claude CLI and runs as a background subprocess parallel to the code review system, persisting completed audits to the `audits` SQLite table.
+
+#### How It Works
+
+1. The user picks **PB ED Audit** — the fourth option in the same "Review ▾" picker used for code reviews. This dispatches to `POST /api/audits` (not `/api/reviews`).
+2. The backend (`audit_service.start_audit_process`) spawns a `claude -p` subprocess whose prompt invokes the `/pb-ed-audit` skill, instructing it to write a markdown report **and** a structured JSON file conforming to `backend/services/audit_schema_spec.json`.
+3. The skill fetches the PR-head ED/PB docs, runs the two audits (Audit A — cross-ED consistency, Audit B — PB↔ED parity), and writes both artifacts. The embedded `_AUDIT_SCHEMA_INSTRUCTIONS` prompt emphasizes that each finding's `locations[]` must carry a resolved repo-relative `file` and integer `line` so findings can be posted as inline PR comments.
+4. On completion, `save_audit_to_db` reads and validates the `.json`, computes finding/blocking tallies, and inserts a row into `audits`.
+5. The UI polls active audits to drive the spinner, then surfaces the result via the audit chip and viewer.
+
+#### UI Components
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| **PB ED Audit** picker option | PR card / queue item "Review ▾" menu | Starts an audit for the PR |
+| `AuditChip` | PR card / queue item | Green when the latest audit has zero blocking findings, red when one or more findings are blocking; shows the finding count |
+| `AuditViewer` | Overlay modal | Renders the full audit: executive summary, the two-part report (**Audit A** cross-ED consistency and **Audit B** PB↔ED parity), per-finding detail, verified-clean list, and action map |
+| Audits history tab | History panel | A dedicated tab listing past audits with repo/author/PR/search filters, alongside the existing reviews history |
+| VerdictModal audit mode | Overlay | The verdict modal opens in audit mode from the `AuditViewer`, composing a PR review body from toggleable audit blocks and inline comments drawn from findings with resolvable `file`+`line` locations |
+
+#### Audit Chip Status
+
+| State | Color | Meaning |
+|-------|-------|---------|
+| Clean | Green | Latest audit has no blocking findings (`blocking_count == 0`) |
+| Blocking | Red | One or more findings are blocking (`blocking_count > 0`) |
+
+#### Inline Comments
+
+Audit findings can be posted to the PR as inline comments via `POST /api/audits/<audit_id>/post-inline-comments`. The backend maps each finding's first location with a concrete `file` + integer `line` to an inline comment (`_findings_to_inline_comments`), then posts them through the shared `post_verdict` helper. Findings whose locations carry only a human display `ref` (no resolved `file`/`line`) are silently skipped, which is why the skill is instructed to resolve real line numbers.
+
 ### Code Review System (Claude CLI Integration)
 
 The Code Review feature integrates with Claude CLI to perform automated code reviews. Reviews run as background subprocesses, with real-time status tracking in the UI. Completed reviews are persisted to the SQLite database for historical access.
@@ -1288,10 +1345,11 @@ The Code Review feature integrates with Claude CLI to perform automated code rev
 #### How It Works
 
 1. User clicks "Review ▾" button on a PR card or queue item
-2. A small picker menu appears offering three reviewer agents:
+2. A small picker menu appears offering three reviewer agents plus an audit option:
    - **Default Reviewer** — `elite-code-reviewer` (general code review)
    - **Product Brief Reviewer** — `product-brief-reviewer` (PB-000 brief review)
    - **Engineering Design Reviewer** — `ed-reviewer` (ED-000 engineering design review; applies both the SDLC-conformance and code-review lenses described in the agent's protocol)
+   - **PB ED Audit** — `/pb-ed-audit` skill (parity + cross-ED consistency audit; routes to a separate audit path with its own JSON schema, DB table, history tab, and chip — see [PB↔ED Audit](#pbed-audit) below). This is **not** a `reviewer_type` value; the picker dispatches it to `POST /api/audits` rather than `POST /api/reviews`.
 3. Backend spawns a Claude CLI subprocess with a prompt tailored to the selected reviewer
 4. UI shows spinner while review is in progress
 5. All reviewer types produce output in the same dual format: a markdown file (`.md`) and a structured JSON file (`.json`) following the schema in `backend/services/review_schema.py`
@@ -2468,6 +2526,171 @@ Posts a formal PR review verdict (Approve, Request Changes, or Comment) to GitHu
 
 ---
 
+### Audits
+
+PB↔ED audit endpoints mirror the code-review endpoints. Active-audit routes drive the spinner; history routes serve persisted audits from the `audits` table.
+
+**GET** `/api/audits`
+
+Returns active/recent audits with refreshed statuses (polled to drive the spinner).
+
+**Response**:
+```json
+{
+  "audits": [
+    {
+      "key": "owner/repo/123",
+      "owner": "owner",
+      "repo": "repo",
+      "pr_number": 123,
+      "status": "running",
+      "started_at": "2026-06-05T10:30:00Z",
+      "completed_at": "",
+      "pr_url": "https://github.com/owner/repo/pull/123",
+      "audit_file": "/path/to/reviews/owner-repo-pr-123-audit.md",
+      "exit_code": null,
+      "error_output": ""
+    }
+  ]
+}
+```
+
+---
+
+**POST** `/api/audits`
+
+Starts a PB↔ED audit for a PR.
+
+**Request Body**:
+```json
+{
+  "number": 123,
+  "url": "https://github.com/owner/repo/pull/123",
+  "owner": "owner",
+  "repo": "repo",
+  "title": "PR title",
+  "author": "developer",
+  "head_ref": "feature-branch",
+  "base_ref": "main"
+}
+```
+
+`number`, `url`, `owner`, and `repo` are required; the rest are optional display/metadata fields.
+
+**Response** (201 Created):
+```json
+{
+  "message": "Audit started",
+  "key": "owner/repo/123",
+  "status": "running",
+  "audit_file": "/path/to/reviews/owner-repo-pr-123-audit.md"
+}
+```
+
+**Error Responses**:
+- `400`: Missing required field
+- `409`: Audit already in progress for this PR
+- `500`: Failed to start audit
+
+---
+
+**DELETE** `/api/audits/<owner>/<repo>/<pr_number>`
+
+Cancels a running audit.
+
+**Response**:
+```json
+{ "message": "Audit cancelled", "key": "owner/repo/123" }
+```
+
+---
+
+**GET** `/api/audits/<owner>/<repo>/<pr_number>/status`
+
+Gets the status of a specific audit (same shape as a single entry in `GET /api/audits`).
+
+---
+
+**POST** `/api/audits/<audit_id>/post-inline-comments`
+
+Posts audit findings that have a resolvable `file` + integer `line` location as inline PR comments via the shared `post_verdict` helper. Findings without a mappable location are skipped.
+
+**Response** (Success):
+```json
+{ "message": "...", "issues_posted": 3 }
+```
+
+**Response** (No mappable locations):
+```json
+{ "message": "No findings with mappable file+line locations", "issues_posted": 0, "issues_found": 0 }
+```
+
+**Error Responses**:
+- `404`: Audit not found
+- `409`: Inline comments already posted for this audit
+- `400`: Audit has no parseable content / invalid repo format
+
+---
+
+**GET** `/api/audit-history`
+
+Returns a list of past audits with optional filtering.
+
+**Query Parameters**:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `repo` | string | Filter by repository (owner/repo format) |
+| `author` | string | Filter by PR author |
+| `pr_number` | integer | Filter by PR number |
+| `search` | string | Full-text search across audit content |
+| `limit` | integer | Maximum results (default 50) |
+| `offset` | integer | Pagination offset |
+
+**Response**:
+```json
+{
+  "audits": [
+    {
+      "id": 1,
+      "pr_number": 123,
+      "repo": "owner/repo",
+      "pr_title": "Add new feature",
+      "pr_author": "developer",
+      "pr_url": "https://github.com/owner/repo/pull/123",
+      "audit_timestamp": "2026-06-05T10:30:00Z",
+      "status": "completed",
+      "finding_count": 7,
+      "blocking_count": 1,
+      "inline_comments_posted": false
+    }
+  ],
+  "total": 12
+}
+```
+
+---
+
+**GET** `/api/audit-history/<audit_id>`
+
+Returns a single audit with full content in both structured JSON (`content_json`) and generated markdown (`content`, produced on the fly via `audit_json_to_markdown()`), plus `head_ref`, `base_ref`, and `audit_file_path`.
+
+**Error Responses**:
+- `404`: Audit not found
+
+---
+
+**GET** `/api/audit-history/check/<owner>/<repo>/<pr_number>`
+
+Checks whether a PR has been audited (drives the audit chip).
+
+**Response**:
+```json
+{ "audited": true, "audit_count": 2, "latest_audit": { "id": 5, "blocking_count": 0 } }
+```
+
+---
+
 ### Review History
 
 **GET** `/api/review-history`
@@ -3052,6 +3275,91 @@ The `review_schema.py` service module provides:
 - **`SCHEMA_VERSION`**: Current schema version constant (`"1.0.0"`)
 
 The formal JSON Schema specification is available at `backend/services/review_schema_spec.json` for use by external tools and agents.
+
+### Audit JSON Schema
+
+PB↔ED audits are stored as structured JSON in the `audits.content_json` column, distinct from the review schema. The formal specification lives at `backend/services/audit_schema_spec.json`; `backend/services/audit_schema.py` provides `validate_audit_json()`, `audit_json_to_markdown()`, `compute_audit_tallies()`, and `AUDIT_SCHEMA_VERSION`. The same shape is documented for the skill in `_AUDIT_SCHEMA_INSTRUCTIONS` (`backend/services/audit_service.py`) and in the `/pb-ed-audit` skill's JSON-output section.
+
+#### Schema Version: 1.0.0
+
+```json
+{
+  "schema_version": "1.0.0",
+  "format": "audit",
+  "audit_type": "pb_ed",
+  "metadata": {
+    "pr_number": 123,
+    "repository": "owner/repo",
+    "pr_url": "https://github.com/owner/repo/pull/123",
+    "pr_title": "Add bulk export",
+    "head_ref": "feature-branch",
+    "base_ref": "main",
+    "parent_pb": { "id": "PB-017", "title": "Export", "status": "approved" },
+    "eds": [{ "id": "ED-010", "title": "Bulk export design" }],
+    "auditor": "pb-ed-audit",
+    "date": "2026-06-05",
+    "scope": "PB↔ED parity + cross-ED consistency"
+  },
+  "executive_summary": "Action-bucketed summary markdown.",
+  "audits": [
+    {
+      "key": "A",
+      "name": "Cross-ED consistency",
+      "verdict": "Coherent, one inconsistency.",
+      "tally": { "CONTRADICTION": 0, "INCONSISTENCY": 1, "INFO": 2 },
+      "findings": []
+    },
+    {
+      "key": "B",
+      "name": "PB↔ED parity",
+      "verdict": "One scope violation to decide.",
+      "tally": { "SCOPE-VIOLATION": 1, "UN-ANCHORED": 1 },
+      "findings": [
+        {
+          "id": "PE-1",
+          "severity": "SCOPE-VIOLATION",
+          "blocking": true,
+          "rule_id": "ED.SCOPE.PB_DEFERRED_IMPLEMENTED",
+          "rule_authority": "SPEC-AUTH-0012",
+          "lens": "SDLC",
+          "summary": "ED-010 implements the P2-deferred bulk-export endpoint.",
+          "locations": [
+            {
+              "file": "docs/designs/ED-010-export.md",
+              "line": 389,
+              "ref": "ED-010 §10:389",
+              "quote": "Expose POST /exports/bulk returning a job id."
+            }
+          ],
+          "detail": "PB-017 lists bulk export under P2 (deferred).",
+          "recommendation": "Amend PB-017 to P1, or descope from ED-010."
+        }
+      ]
+    }
+  ],
+  "verified_clean": "What passed / was correctly scoped (markdown).",
+  "supplementary_notes": "Auditor-spotted items outside the two audits (markdown).",
+  "action_map": [
+    { "priority": "Decide", "finding_ids": ["PE-1"], "nature": "In/out scope decision" }
+  ]
+}
+```
+
+#### Key Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `schema_version` | string | Yes | `"1.0.0"` |
+| `format` | string | Yes | `"audit"` (distinguishes from review JSON) |
+| `audit_type` | string | Yes | `"pb_ed"` |
+| `metadata` | object | Yes | PR identification + `parent_pb`, `eds`, auditor, date, scope. `pr_number` and `repository` required |
+| `audits` | array | Yes | One entry per audit run (`{key, name, verdict, tally, findings}`); Audit A omitted for single-ED PRs |
+| `executive_summary` | string | No | Action-bucketed summary markdown |
+| `verified_clean` | string | No | What passed / was correctly scoped |
+| `supplementary_notes` | string | No | Auditor-spotted items outside the two audits |
+| `action_map` | array | No | `{priority, finding_ids, nature}` rows |
+
+Each **finding** requires `id`, `severity` (uppercase token: `CONTRADICTION`, `SCOPE-VIOLATION`, `INCONSISTENCY`, `UN-ANCHORED`, `UNDER-COVERAGE`, `INFO`), and `summary`. Optional fields include `blocking`, `rule_id`, `rule_authority`, `concept`, `lens`, `detail`, `recommendation`, and `locations`. Each `locations[]` entry carries `file` (repo-relative path), `line` (integer or null), `ref` (human display reference), and `quote`. The resolved `file` + integer `line` are what enable a finding to be posted as an inline PR comment.
 
 ---
 
