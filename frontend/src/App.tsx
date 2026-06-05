@@ -11,6 +11,7 @@ import { WorkflowsView } from './components/workflows/WorkflowsView'
 import { RepoStatsView } from './components/repo-stats/RepoStatsView'
 import { QueuePanel } from './components/queue/QueuePanel'
 import { ReviewErrorModal } from './components/reviews/ReviewErrorModal'
+import { AuditErrorModal } from './components/audits/AuditErrorModal'
 import { ReviewViewer } from './components/reviews/ReviewViewer'
 import { HistoryPanel } from './components/reviews/HistoryPanel'
 import { ReviewPollingManager } from './components/reviews/ReviewPollingManager'
@@ -88,6 +89,7 @@ function App() {
       <QueuePanel />
       <HistoryPanel />
       <ReviewErrorModal />
+      <AuditErrorModal />
       <ReviewViewer />
       <ReviewPollingManager />
       <TimelineModal />

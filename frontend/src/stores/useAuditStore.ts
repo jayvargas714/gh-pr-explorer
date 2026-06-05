@@ -17,17 +17,54 @@ interface AuditStartArgs {
   base_ref?: string
 }
 
+interface AuditErrorModalState {
+  show: boolean
+  prNumber: number | null
+  prTitle: string
+  prUrl: string
+  owner: string
+  repo: string
+  errorOutput: string
+  exitCode: number | null
+}
+
 interface AuditStoreState {
   activeAudits: ActiveAudit[]
+  /** Audit error modal (mirrors the review error modal). */
+  auditErrorModal: AuditErrorModalState
   startAudit: (args: AuditStartArgs) => Promise<void>
   cancelAudit: (owner: string, repo: string, prNumber: number) => Promise<void>
   refreshActiveAudits: () => Promise<void>
   /** Status string if an audit is running/recent for this PR, else null. */
   auditStatusFor: (owner: string, repo: string, prNumber: number) => string | null
+  /** Full active audit record for this PR (reacts to activeAudits), else null. */
+  activeAuditFor: (owner: string, repo: string, prNumber: number) => ActiveAudit | null
+  showAuditError: (
+    prNumber: number,
+    prTitle: string,
+    prUrl: string,
+    owner: string,
+    repo: string,
+    errorOutput: string,
+    exitCode: number | null,
+  ) => void
+  hideAuditError: () => void
+}
+
+const EMPTY_AUDIT_ERROR_MODAL: AuditErrorModalState = {
+  show: false,
+  prNumber: null,
+  prTitle: '',
+  prUrl: '',
+  owner: '',
+  repo: '',
+  errorOutput: '',
+  exitCode: null,
 }
 
 export const useAuditStore = create<AuditStoreState>((set, get) => ({
   activeAudits: [],
+  auditErrorModal: EMPTY_AUDIT_ERROR_MODAL,
 
   startAudit: async (args) => {
     const key = `${args.owner}/${args.repo}/${args.number}`
@@ -83,4 +120,25 @@ export const useAuditStore = create<AuditStoreState>((set, get) => ({
     const found = get().activeAudits.find((a) => a.key === key)
     return found ? found.status : null
   },
+
+  activeAuditFor: (owner, repo, prNumber) => {
+    const key = `${owner}/${repo}/${prNumber}`
+    return get().activeAudits.find((a) => a.key === key) ?? null
+  },
+
+  showAuditError: (prNumber, prTitle, prUrl, owner, repo, errorOutput, exitCode) =>
+    set({
+      auditErrorModal: {
+        show: true,
+        prNumber,
+        prTitle,
+        prUrl,
+        owner,
+        repo,
+        errorOutput,
+        exitCode,
+      },
+    }),
+
+  hideAuditError: () => set({ auditErrorModal: EMPTY_AUDIT_ERROR_MODAL }),
 }))

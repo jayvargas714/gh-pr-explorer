@@ -19,13 +19,18 @@ export function ReviewButton({ pr }: ReviewButtonProps) {
     useReviewStore()
   const startAudit = useAuditStore((state) => state.startAudit)
   const cancelAudit = useAuditStore((state) => state.cancelAudit)
+  const showAuditError = useAuditStore((state) => state.showAuditError)
   const selectedRepo = useAccountStore((state) => state.selectedRepo)
 
   const owner = selectedRepo?.owner.login ?? ''
   const repo = selectedRepo?.name ?? ''
   const reviewKey = `${owner}/${repo}/${pr.number}`
   const review = activeReviews[reviewKey]
-  const auditRunning = useAuditStore((state) => state.auditStatusFor(owner, repo, pr.number) === 'running')
+  const activeAudit = useAuditStore((state) =>
+    state.activeAuditFor(owner, repo, pr.number),
+  )
+  const auditRunning = activeAudit?.status === 'running'
+  const auditFailed = activeAudit?.status === 'failed'
 
   const handleStartReview = async (reviewerType: ReviewerType) => {
     if (starting || !owner || !repo) return
@@ -112,11 +117,33 @@ export function ReviewButton({ pr }: ReviewButtonProps) {
     )
   }
 
+  const handleShowAuditError = () => {
+    if (!activeAudit) return
+    showAuditError(
+      pr.number,
+      pr.title,
+      pr.url,
+      owner,
+      repo,
+      activeAudit.error_output || 'Unknown error',
+      activeAudit.exit_code ?? null,
+    )
+  }
+
   // Audit running (only when no review is running for this PR)
   if (!review && auditRunning) {
     return (
       <Button variant="ghost" size="sm" onClick={handleCancelAudit}>
         <Spinner size="sm" /> Auditing… Cancel
+      </Button>
+    )
+  }
+
+  // Audit failed (only when no review state owns the button for this PR)
+  if (!review && auditFailed) {
+    return (
+      <Button variant="ghost" size="sm" onClick={handleShowAuditError}>
+        ✗ Audit Error
       </Button>
     )
   }
