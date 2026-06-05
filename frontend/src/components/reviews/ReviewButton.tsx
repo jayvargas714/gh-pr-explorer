@@ -19,15 +19,13 @@ export function ReviewButton({ pr }: ReviewButtonProps) {
     useReviewStore()
   const startAudit = useAuditStore((state) => state.startAudit)
   const cancelAudit = useAuditStore((state) => state.cancelAudit)
-  const auditStatusFor = useAuditStore((state) => state.auditStatusFor)
   const selectedRepo = useAccountStore((state) => state.selectedRepo)
 
   const owner = selectedRepo?.owner.login ?? ''
   const repo = selectedRepo?.name ?? ''
   const reviewKey = `${owner}/${repo}/${pr.number}`
   const review = activeReviews[reviewKey]
-  const auditStatus = auditStatusFor(owner, repo, pr.number)
-  const auditRunning = auditStatus === 'running'
+  const auditRunning = useAuditStore((state) => state.auditStatusFor(owner, repo, pr.number) === 'running')
 
   const handleStartReview = async (reviewerType: ReviewerType) => {
     if (starting || !owner || !repo) return

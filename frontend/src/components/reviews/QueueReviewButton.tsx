@@ -20,12 +20,11 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
   const { activeReviews, updateReview, removeReview, showReviewError } = useReviewStore()
   const startAudit = useAuditStore((state) => state.startAudit)
   const cancelAudit = useAuditStore((state) => state.cancelAudit)
-  const auditStatusFor = useAuditStore((state) => state.auditStatusFor)
 
   const [owner, repo] = item.repo.split('/')
   const reviewKey = `${item.repo}/${item.number}`
   const review = activeReviews[reviewKey]
-  const auditRunning = auditStatusFor(owner, repo, item.number) === 'running'
+  const auditRunning = useAuditStore((state) => state.auditStatusFor(owner, repo, item.number) === 'running')
   const prevStatusRef = useRef(review?.status)
 
   // Refresh queue when a review transitions to completed or failed
