@@ -344,6 +344,7 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
 
       {showVerdict && item.reviewId && (
         <VerdictModal
+          mode="review"
           reviewId={item.reviewId}
           prNumber={item.number}
           repo={item.repo}

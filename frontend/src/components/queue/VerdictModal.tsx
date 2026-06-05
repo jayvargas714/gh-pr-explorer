@@ -5,8 +5,8 @@ import rehypeHighlight from 'rehype-highlight'
 import { Button } from '../common/Button'
 import { Alert } from '../common/Alert'
 import { Spinner } from '../common/Spinner'
-import { getReviewDetail, postVerdict } from '../../api/reviews'
-import { getAuditDetail } from '../../api/audits'
+import { getReviewDetail, postVerdict, checkPRReviewed } from '../../api/reviews'
+import { getAuditDetail, checkPRAudited } from '../../api/audits'
 import { getReviewSections, type ReviewSection } from '../../utils/reviewSections'
 import { SectionEditModal, type EditableIssue } from './SectionEditModal'
 import type {
@@ -166,7 +166,10 @@ export function VerdictModal({
   mode = 'review',
   auditId,
 }: VerdictModalProps) {
-  const isAudit = mode === 'audit'
+  const [source, setSource] = useState<'review' | 'audit'>(mode)
+  const [resolvedReviewId, setResolvedReviewId] = useState<number | undefined>(reviewId)
+  const [resolvedAuditId, setResolvedAuditId] = useState<number | undefined>(auditId)
+  const isAudit = source === 'audit'
   const [event, setEvent] = useState<VerdictEvent>('COMMENT')
   const [customText, setCustomText] = useState('')
   const [sections, setSections] = useState<ReviewSection[]>([])
@@ -211,14 +214,51 @@ export function VerdictModal({
   const verdictResizeRef = useRef<{ startX: number; startY: number; origW: number; origH: number } | null>(null)
   const verdictNodeRef = useRef<HTMLDivElement>(null)
 
+  // Discover the "other" source's latest id so the toggle can appear when a PR
+  // has both a review and an audit. Best-effort: failures leave it single-source.
   useEffect(() => {
-    if (isAudit) {
+    let cancelled = false
+    const [owner, repoName] = repo.split('/')
+    async function discover() {
+      try {
+        if (reviewId !== undefined && auditId === undefined) {
+          const res = (await checkPRAudited(owner, repoName, prNumber)) as {
+            audited?: boolean
+            latest_audit?: { id: number } | null
+          }
+          if (!cancelled && res.audited && res.latest_audit) {
+            setResolvedAuditId(res.latest_audit.id)
+          }
+        } else if (auditId !== undefined && reviewId === undefined) {
+          const res = (await checkPRReviewed(owner, repoName, prNumber)) as {
+            has_review?: boolean
+            latest_review?: { id: number } | null
+          }
+          if (!cancelled && res.has_review && res.latest_review) {
+            setResolvedReviewId(res.latest_review.id)
+          }
+        }
+      } catch {
+        // discovery is best-effort; stay single-source
+      }
+    }
+    discover()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Load content for the active source. Re-runs only when the source changes
+  // (not on discovery), so discovering the other id never clobbers in-progress edits.
+  useEffect(() => {
+    if (source === 'audit') {
       loadAuditContent()
     } else {
       loadReviewContent()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reviewId, auditId, isAudit])
+  }, [source])
 
   // Close on Escape
   useEffect(() => {
@@ -390,7 +430,7 @@ export function VerdictModal({
   }, [previewSize])
 
   const loadReviewContent = async () => {
-    if (reviewId === undefined) {
+    if (resolvedReviewId === undefined) {
       setError('No review id provided')
       setLoading(false)
       return
@@ -398,7 +438,7 @@ export function VerdictModal({
     try {
       setLoading(true)
       setError(null)
-      const review = await getReviewDetail(reviewId)
+      const review = await getReviewDetail(resolvedReviewId)
       setReviewDetail(review)
       const parsed = getReviewSections(review.content, review.content_json)
       setSections(parsed)
@@ -436,7 +476,7 @@ export function VerdictModal({
   }
 
   const loadAuditContent = async () => {
-    if (auditId === undefined) {
+    if (resolvedAuditId === undefined) {
       setError('No audit id provided')
       setLoading(false)
       return
@@ -444,7 +484,7 @@ export function VerdictModal({
     try {
       setLoading(true)
       setError(null)
-      const detail = await getAuditDetail(auditId)
+      const detail = await getAuditDetail(resolvedAuditId)
       setAuditDetail(detail)
 
       const cj = detail.content_json
@@ -478,6 +518,23 @@ export function VerdictModal({
       }
       return next
     })
+  }
+
+  // Switch verdict source: reset source-derived composition state, keep the
+  // user's own event choice and custom text. The content-load effect repopulates.
+  const switchSource = (next: 'review' | 'audit') => {
+    if (next === source) return
+    setSuccess(null)
+    setSections([])
+    setEnabledSections(new Set())
+    setInlineSections(new Set())
+    setStructuredIssues({})
+    setEditedContent({})
+    setAuditBlocks([])
+    setPostAuditInline(false)
+    setManualBodyOverride(null)
+    setPreviewEditMode(false)
+    setSource(next)
   }
 
   const toggleInline = (key: string) => {
@@ -616,7 +673,7 @@ export function VerdictModal({
         body: body || '',
         inline_comments: inlineComments.length > 0 ? inlineComments : undefined,
         // Section-count tracking is review-only; never pass review_id for audits.
-        review_id: isAudit ? undefined : reviewId,
+        review_id: isAudit ? undefined : resolvedReviewId,
       })
 
       // Build detailed success/warning message
@@ -721,6 +778,32 @@ export function VerdictModal({
                   <Alert variant="warning">
                     <div style={{ whiteSpace: 'pre-wrap' }}>{inlineWarning}</div>
                   </Alert>
+                )}
+
+                {resolvedReviewId !== undefined && resolvedAuditId !== undefined && (
+                  <div className="mx-verdict-modal__source-selector">
+                    <label className="mx-verdict-modal__label">Verdict Source</label>
+                    <div className="mx-verdict-modal__source-buttons">
+                      <button
+                        className={`mx-verdict-modal__source-btn${
+                          source === 'review' ? ' mx-verdict-modal__source-btn--active' : ''
+                        }`}
+                        onClick={() => switchSource('review')}
+                        disabled={submitting}
+                      >
+                        Review
+                      </button>
+                      <button
+                        className={`mx-verdict-modal__source-btn${
+                          source === 'audit' ? ' mx-verdict-modal__source-btn--active' : ''
+                        }`}
+                        onClick={() => switchSource('audit')}
+                        disabled={submitting}
+                      >
+                        Audit
+                      </button>
+                    </div>
+                  </div>
                 )}
 
                 {reviewDetail && (
