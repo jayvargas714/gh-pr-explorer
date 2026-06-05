@@ -1322,7 +1322,7 @@ The PB↔ED Audit feature audits the Engineering Design (ED) documents touched i
 | Component | Location | Description |
 |-----------|----------|-------------|
 | **PB ED Audit** picker option | PR card / queue item "Review ▾" menu | Starts an audit for the PR |
-| `AuditChip` | PR card / queue item | Green when the latest audit has zero blocking findings, red when one or more findings are blocking; shows the finding count |
+| `AuditChip` | Audit viewer header / audit history rows | Green when the latest audit has zero blocking findings, red when one or more findings are blocking; the label shows the blocking count (`Audit · N blocking`), with the total finding count in the tooltip |
 | `AuditViewer` | Overlay modal | Renders the full audit: executive summary, the two-part report (**Audit A** cross-ED consistency and **Audit B** PB↔ED parity), per-finding detail, verified-clean list, and action map |
 | Audits history tab | History panel | A dedicated tab listing past audits with repo/author/PR/search filters, alongside the existing reviews history |
 | VerdictModal audit mode | Overlay | The verdict modal opens in audit mode from the `AuditViewer`, composing a PR review body from toggleable audit blocks and inline comments drawn from findings with resolvable `file`+`line` locations |
