@@ -16,6 +16,7 @@ import './styles/modals.css'
 import './styles/markdown.css'
 import './styles/timeline.css'
 import './styles/swimlane.css'
+import './styles/audits.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

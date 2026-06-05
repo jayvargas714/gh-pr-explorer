@@ -1,0 +1,72 @@
+.mx-audit-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mx-audit-chip--clean {
+  color: var(--mx-color-success);
+  background: var(--mx-color-success-bg);
+  border-color: var(--mx-color-success);
+}
+.mx-audit-chip--blocking {
+  color: var(--mx-color-error);
+  background: var(--mx-color-error-bg);
+  border-color: var(--mx-color-error);
+}
+
+.mx-audit-viewer__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.mx-audit-viewer__meta {
+  font-size: 12px;
+  opacity: 0.8;
+  margin-top: 4px;
+}
+.mx-audit-viewer__body {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+/* Audit history list (in the history panel "Audits" tab) */
+.mx-audit-history__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mx-audit-history__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--mx-border-color, rgba(128, 128, 128, 0.25));
+  border-radius: 8px;
+}
+.mx-audit-history__row .mx-link {
+  flex: 1 1 auto;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  color: var(--mx-color-primary, inherit);
+  font-weight: 600;
+  font-size: 13px;
+}
+.mx-audit-history__meta {
+  font-size: 11px;
+  opacity: 0.7;
+}
