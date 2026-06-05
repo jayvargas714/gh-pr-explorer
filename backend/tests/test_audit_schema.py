@@ -6,6 +6,7 @@ from backend.services.audit_schema import (
     AUDIT_SCHEMA_VERSION,
     validate_audit_json,
     compute_audit_tallies,
+    audit_json_to_markdown,
 )
 
 
@@ -89,9 +90,6 @@ def test_explicit_blocking_flag_counts():
     assert tallies["blocking_count"] == 2  # CE-1 (flag) + PE-1 (severity)
 
 
-from backend.services.audit_schema import audit_json_to_markdown
-
-
 def test_markdown_renders_key_blocks():
     md = audit_json_to_markdown(_good_audit())
     # Header + PR
@@ -114,3 +112,19 @@ def test_markdown_handles_empty_audits():
     md = audit_json_to_markdown(data)
     assert isinstance(md, str)
     assert "PR #1630" in md or "PR-1630" in md
+
+
+def test_findings_null_fails():
+    data = _good_audit()
+    data["audits"][0]["findings"] = None
+    ok, errors = validate_audit_json(data)
+    assert not ok
+    assert any("findings" in e for e in errors)
+
+
+def test_markdown_file_only_location_has_no_none():
+    data = _good_audit()
+    data["audits"][0]["findings"][0]["locations"] = [{"file": "docs/designs/ED-010.md"}]
+    md = audit_json_to_markdown(data)
+    assert ":None" not in md
+    assert "docs/designs/ED-010.md" in md

@@ -58,8 +58,7 @@ def validate_audit_json(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
                     errors.append(f"audits[{i}].{k} is required")
             findings = audit.get("findings")
             if not isinstance(findings, list):
-                if findings is not None:
-                    errors.append(f"audits[{i}].findings must be an array")
+                errors.append(f"audits[{i}].findings must be an array")
                 continue
             for j, f in enumerate(findings):
                 if not isinstance(f, dict):
@@ -75,8 +74,12 @@ def validate_audit_json(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
 
 
 def _finding_is_blocking(finding: Dict[str, Any]) -> bool:
-    if finding.get("blocking") is True:
+    # Explicit blocking flag wins; fall back to severity only when absent.
+    explicit = finding.get("blocking")
+    if explicit is True:
         return True
+    if explicit is False:
+        return False
     sev = str(finding.get("severity", "")).strip().upper()
     return sev in BLOCKING_SEVERITIES
 
@@ -86,11 +89,20 @@ def compute_audit_tallies(data: Dict[str, Any]) -> Dict[str, int]:
     finding_count = 0
     blocking_count = 0
     for audit in data.get("audits", []):
-        for finding in audit.get("findings", []):
+        for finding in (audit.get("findings") or []):
             finding_count += 1
             if _finding_is_blocking(finding):
                 blocking_count += 1
     return {"finding_count": finding_count, "blocking_count": blocking_count}
+
+
+def _loc_ref(loc: Dict[str, Any]) -> str:
+    if loc.get("ref"):
+        return loc["ref"]
+    if loc.get("file"):
+        line = loc.get("line")
+        return f"{loc['file']}:{line}" if line is not None else loc["file"]
+    return ""
 
 
 def audit_json_to_markdown(data: Dict[str, Any]) -> str:
@@ -177,9 +189,7 @@ def audit_json_to_markdown(data: Dict[str, Any]) -> str:
                         + (f"  ·  **Lens:** {f['lens']}" if f.get("lens") else "")
                     )
                 for loc in f.get("locations", []):
-                    ref = loc.get("ref") or (
-                        f"{loc.get('file', '')}:{loc.get('line')}" if loc.get("file") else ""
-                    )
+                    ref = _loc_ref(loc)
                     if ref:
                         quote = f" — *{loc['quote']}*" if loc.get("quote") else ""
                         lines.append(f"- **Location:** `{ref}`{quote}")
