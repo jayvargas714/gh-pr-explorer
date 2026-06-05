@@ -87,3 +87,30 @@ def test_explicit_blocking_flag_counts():
     data["audits"][0]["findings"][0]["blocking"] = True   # CE-1 explicitly blocking
     tallies = compute_audit_tallies(data)
     assert tallies["blocking_count"] == 2  # CE-1 (flag) + PE-1 (severity)
+
+
+from backend.services.audit_schema import audit_json_to_markdown
+
+
+def test_markdown_renders_key_blocks():
+    md = audit_json_to_markdown(_good_audit())
+    # Header + PR
+    assert "PR #1630" in md or "PR-1630" in md
+    # Both audits rendered by name
+    assert "Cross-ED consistency" in md
+    assert "PB↔ED parity" in md
+    # Executive summary present
+    assert "Strong, disciplined ED set." in md
+    # Findings rendered by id + severity
+    assert "CE-1" in md
+    assert "INCONSISTENCY" in md
+    assert "PE-1" in md
+    assert "SCOPE-VIOLATION" in md
+
+
+def test_markdown_handles_empty_audits():
+    data = _good_audit()
+    data["audits"] = []
+    md = audit_json_to_markdown(data)
+    assert isinstance(md, str)
+    assert "PR #1630" in md or "PR-1630" in md
