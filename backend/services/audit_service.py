@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.config import get_reviews_dir
-from backend.services.github_service import fetch_pr_head_sha, fetch_pr_state
 from backend.services.audit_schema import (
     AUDIT_SCHEMA_VERSION,
     validate_audit_json,
@@ -144,7 +143,7 @@ def start_audit_process(pr_url, owner, repo, pr_number):
 
     repo_safe = repo.replace("/", "-")
     audit_file = reviews_dir / f"{owner}-{repo_safe}-pr-{pr_number}-audit.md"
-    json_file = str(audit_file).replace(".md", ".json")
+    json_file = str(audit_file.with_suffix(".json"))
 
     prompt = (
         f"Run a PB↔ED audit on PR #{pr_number} at {pr_url}. "
@@ -159,6 +158,7 @@ def start_audit_process(pr_url, owner, repo, pr_number):
     cmd = [
         "claude",
         "-p", prompt,
+        # Skill required: the /pb-ed-audit skill invokes sub-skills/subagents at runtime
         "--allowedTools", (
             "Bash(git status*),Bash(git log*),Bash(git show*),"
             "Bash(git diff*),Bash(git blame*),Bash(git branch*),"

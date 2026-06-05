@@ -89,7 +89,11 @@ def compute_audit_tallies(data: Dict[str, Any]) -> Dict[str, int]:
     finding_count = 0
     blocking_count = 0
     for audit in data.get("audits", []):
+        if not isinstance(audit, dict):
+            continue
         for finding in (audit.get("findings") or []):
+            if not isinstance(finding, dict):
+                continue
             finding_count += 1
             if _finding_is_blocking(finding):
                 blocking_count += 1

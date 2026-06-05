@@ -39,10 +39,7 @@ def _write_audit_json(tmpdir, pr=1630, blocking=False):
     return str(md)
 
 
-def test_save_completed_audit_persists_tallies(audits_db, monkeypatch):
-    # Avoid network in fetch_pr_head_sha / fetch_pr_state
-    monkeypatch.setattr("backend.services.audit_service.fetch_pr_head_sha", lambda *a, **k: "abc")
-    monkeypatch.setattr("backend.services.audit_service.fetch_pr_state", lambda *a, **k: "OPEN")
+def test_save_completed_audit_persists_tallies(audits_db):
     tmp = tempfile.mkdtemp()
     audit_file = _write_audit_json(tmp, blocking=True)
     audit = {"audit_file": audit_file, "pr_url": "https://github.com/owner/repo/pull/1630",
@@ -57,11 +54,25 @@ def test_save_completed_audit_persists_tallies(audits_db, monkeypatch):
     assert latest["status"] == "completed"
 
 
-def test_failed_audit_persists_stub(audits_db, monkeypatch):
-    monkeypatch.setattr("backend.services.audit_service.fetch_pr_head_sha", lambda *a, **k: "abc")
-    monkeypatch.setattr("backend.services.audit_service.fetch_pr_state", lambda *a, **k: "OPEN")
+def test_failed_audit_persists_stub(audits_db):
     audit = {"audit_file": None, "pr_url": "", "pr_title": None, "pr_author": None}
     save_audit_to_db("owner/repo/1630", audit, "failed", audits_db)
     latest = audits_db.get_latest_audit_for_pr("owner/repo", 1630)
     assert latest["status"] == "failed"
     assert latest["finding_count"] == 0
+
+
+def test_invalid_but_parseable_audit_still_persists(audits_db):
+    import json as _json
+    tmp = tempfile.mkdtemp()
+    data = {"format": "audit", "audits": [{"key": "A", "name": "x",
+            "findings": [{"id": "CE-1", "severity": "INFO", "summary": "s"}]}]}  # missing required top-level keys
+    md = Path(tmp) / "owner-repo-pr-1630-audit.md"
+    js = Path(tmp) / "owner-repo-pr-1630-audit.json"
+    md.write_text("# audit", encoding="utf-8")
+    js.write_text(_json.dumps(data), encoding="utf-8")
+    audit = {"audit_file": str(md), "pr_url": "", "pr_title": "t", "pr_author": "a"}
+    save_audit_to_db("owner/repo/1630", audit, "completed", audits_db)
+    latest = audits_db.get_latest_audit_for_pr("owner/repo", 1630)
+    assert latest is not None
+    assert latest["finding_count"] == 1

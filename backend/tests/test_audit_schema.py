@@ -128,3 +128,12 @@ def test_markdown_file_only_location_has_no_none():
     md = audit_json_to_markdown(data)
     assert ":None" not in md
     assert "docs/designs/ED-010.md" in md
+
+
+def test_tallies_ignore_non_dict_findings():
+    data = _good_audit()
+    data["audits"][0]["findings"] = [None, "bad", {"id": "x", "severity": "INFO", "summary": "s"}]
+    data["audits"].append("not-a-dict")
+    tallies = compute_audit_tallies(data)
+    # 1 valid finding in audit A + 1 in audit B; non-dict audit/findings skipped
+    assert tallies["finding_count"] == 2
