@@ -5,6 +5,7 @@ from typing import Optional
 
 from backend.database.base import Database
 from backend.database.reviews import ReviewsDB
+from backend.database.audits import AuditsDB
 from backend.database.merge_queue import MergeQueueDB
 from backend.database.swimlanes import SwimlanesDB
 from backend.database.settings import SettingsDB
@@ -24,6 +25,7 @@ _db_lock = threading.Lock()
 
 _db_instance: Optional[Database] = None
 _reviews_db: Optional[ReviewsDB] = None
+_audits_db: Optional["AuditsDB"] = None
 _queue_db: Optional[MergeQueueDB] = None
 _swimlanes_db: Optional[SwimlanesDB] = None
 _settings_db: Optional[SettingsDB] = None
@@ -54,6 +56,16 @@ def get_reviews_db() -> ReviewsDB:
             if _reviews_db is None:
                 _reviews_db = ReviewsDB(db)
     return _reviews_db
+
+
+def get_audits_db() -> AuditsDB:
+    global _audits_db
+    if _audits_db is None:
+        db = get_database()
+        with _db_lock:
+            if _audits_db is None:
+                _audits_db = AuditsDB(db)
+    return _audits_db
 
 
 def get_queue_db() -> MergeQueueDB:
@@ -167,11 +179,11 @@ def get_timeline_cache_db() -> TimelineCacheDB:
 
 
 __all__ = [
-    "Database", "ReviewsDB", "MergeQueueDB", "SwimlanesDB", "SettingsDB",
+    "Database", "ReviewsDB", "AuditsDB", "MergeQueueDB", "SwimlanesDB", "SettingsDB",
     "DeveloperStatsDB", "LifecycleCacheDB", "WorkflowCacheDB",
     "ContributorTimeSeriesCacheDB", "CodeActivityCacheDB",
     "RepoStatsCacheDB", "RepoLOCCacheDB", "TimelineCacheDB",
-    "get_database", "get_reviews_db", "get_queue_db", "get_swimlanes_db",
+    "get_database", "get_reviews_db", "get_audits_db", "get_queue_db", "get_swimlanes_db",
     "get_settings_db", "get_dev_stats_db", "get_lifecycle_cache_db",
     "get_workflow_cache_db", "get_contributor_ts_cache_db",
     "get_code_activity_cache_db", "get_repo_stats_cache_db",
