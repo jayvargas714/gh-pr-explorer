@@ -21,6 +21,21 @@
   border-color: var(--mx-color-error);
 }
 
+/* Failed-audit badge: a crashed audit must never read as a clean result. */
+.mx-audit-failed-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--mx-color-error);
+  background: var(--mx-color-error-bg);
+  border: 1px solid var(--mx-color-error);
+}
+
 .mx-audit-viewer__header {
   display: flex;
   justify-content: space-between;

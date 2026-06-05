@@ -61,11 +61,17 @@ export function AuditHistoryList() {
                 PR #{a.pr_number} — {a.pr_title || a.repo}
               </button>
               <span className="mx-audit-history__meta">{a.repo}</span>
-              <AuditChip
-                findingCount={a.finding_count}
-                blockingCount={a.blocking_count}
-                onClick={() => setOpenId(a.id)}
-              />
+              {a.status === 'failed' ? (
+                <span className="mx-audit-failed-badge" title="The audit process failed to complete">
+                  Failed
+                </span>
+              ) : (
+                <AuditChip
+                  findingCount={a.finding_count}
+                  blockingCount={a.blocking_count}
+                  onClick={() => setOpenId(a.id)}
+                />
+              )}
             </li>
           ))}
         </ul>
