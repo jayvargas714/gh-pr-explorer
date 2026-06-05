@@ -43,7 +43,10 @@ export function AuditViewer({ auditId, onClose }: AuditViewerProps) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') {
+        if (showVerdict) return // let the stacked VerdictModal own Escape
+        onClose()
+      }
     }
     document.addEventListener('keydown', onKey)
     document.body.style.overflow = 'hidden'
@@ -51,7 +54,7 @@ export function AuditViewer({ auditId, onClose }: AuditViewerProps) {
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = ''
     }
-  }, [onClose])
+  }, [onClose, showVerdict])
 
   const meta = audit?.content_json?.metadata
 
