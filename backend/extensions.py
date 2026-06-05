@@ -24,6 +24,11 @@ cache = TTLCache(maxsize=256, ttl=300)
 active_reviews = {}
 reviews_lock = threading.Lock()
 
+# In-memory tracking of active audit processes (parallel to active_reviews)
+# key: "owner/repo/pr_number", value: {"process": Popen, "status": str, ...}
+active_audits = {}
+audits_lock = threading.Lock()
+
 # Background refresh tracking sets + locks for stale-while-revalidate caches
 workflow_refresh_in_progress = set()
 workflow_refresh_lock = threading.Lock()
