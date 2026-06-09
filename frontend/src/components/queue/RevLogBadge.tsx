@@ -1,8 +1,28 @@
 import { useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Badge } from '../common/Badge'
-import { formatFullDateTime } from '../../utils/formatters'
 import type { RevLogEntry } from '../../api/types'
+
+/**
+ * DB timestamps are naive UTC ("YYYY-MM-DD HH:MM:SS[.ffffff]"), so normalize to
+ * an explicit UTC instant and let the browser render it in the viewer's local
+ * timezone. Without the trailing "Z", `new Date` would parse the string as local
+ * time and display the UTC wall-clock numbers, landing hours off.
+ */
+function formatLocalDateTime(dbTimestamp: string): string {
+  let s = dbTimestamp.trim().replace(' ', 'T')
+  if (!/[zZ]|[+-]\d\d:?\d\d$/.test(s)) s += 'Z'
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return dbTimestamp
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  })
+}
 
 interface RevLogBadgeProps {
   entries: RevLogEntry[]
@@ -89,7 +109,7 @@ export function RevLogBadge({ entries, onOpenReview, onOpenAudit }: RevLogBadgeP
                   {e.kind === 'review' ? 'REVIEW' : 'AUDIT'}
                 </span>
                 {renderResult(e)}
-                <span className="mx-revlog-when">{formatFullDateTime(e.timestamp)}</span>
+                <span className="mx-revlog-when">{formatLocalDateTime(e.timestamp)}</span>
               </button>
             ))}
           </div>,
