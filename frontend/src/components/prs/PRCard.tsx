@@ -81,6 +81,7 @@ export function PRCard({ pr }: PRCardProps) {
           majorIssueTitles: null,
           minorIssueTitles: null,
           isFollowup: false,
+          revLog: [],
           reviewDecision: pr.reviewDecision,
           ciStatus: pr.ciStatus,
           isDraft: pr.isDraft,

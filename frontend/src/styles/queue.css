@@ -1372,3 +1372,98 @@
   );
   border-radius: 0 0 var(--mx-radius-lg) 0;
 }
+
+/* Rev Log badge + popover */
+.mx-revlog-badge {
+  cursor: default;
+  display: inline-flex;
+}
+
+.mx-revlog-popup {
+  position: fixed;
+  z-index: 1000;
+  min-width: 280px;
+  max-width: 420px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  box-shadow: 0 0 16px rgba(0, 255, 157, 0.12);
+}
+
+.mx-revlog-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  border-radius: var(--mx-radius-sm);
+  color: var(--mx-color-text-primary);
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mx-revlog-row:hover {
+  background: var(--mx-color-surface-hover);
+}
+
+.mx-revlog-tag {
+  flex: 0 0 auto;
+  font-weight: 600;
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+  padding: 1px 6px;
+  border-radius: var(--mx-radius-full);
+}
+
+.mx-revlog-tag--review {
+  color: var(--mx-color-info);
+  background: rgba(0, 229, 255, 0.08);
+}
+
+.mx-revlog-tag--audit {
+  color: var(--mx-color-text-secondary);
+  background: rgba(107, 138, 122, 0.12);
+}
+
+.mx-revlog-result {
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mx-revlog-score {
+  font-weight: 600;
+}
+
+.mx-revlog-score--good { color: var(--mx-color-success); }
+.mx-revlog-score--ok { color: var(--mx-color-warning); }
+.mx-revlog-score--bad { color: var(--mx-color-error); }
+.mx-revlog-score--neutral { color: var(--mx-color-text-secondary); }
+
+.mx-revlog-followup {
+  font-size: 0.65rem;
+  color: var(--mx-color-info);
+}
+
+.mx-revlog-blocking { color: var(--mx-color-error); }
+.mx-revlog-clean { color: var(--mx-color-text-secondary); }
+
+.mx-revlog-status {
+  flex: 1 1 auto;
+  color: var(--mx-color-warning);
+  text-transform: capitalize;
+}
+
+.mx-revlog-when {
+  flex: 0 0 auto;
+  color: var(--mx-color-text-secondary);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}

@@ -311,6 +311,17 @@ export interface Bottleneck {
 // Merge Queue Types
 // ============================================================================
 
+export interface RevLogEntry {
+  kind: 'review' | 'audit'
+  id: number
+  timestamp: string
+  status: string
+  score?: number | null      // reviews only
+  isFollowup?: boolean        // reviews only
+  findingCount?: number       // audits only
+  blockingCount?: number      // audits only
+}
+
 export interface MergeQueueItem {
   id: number
   number: number
@@ -350,6 +361,9 @@ export interface MergeQueueItem {
   // Swimlane-only: whether the card is pinned within its lane. Present on cards
   // returned by /swimlanes/board; absent (undefined) in the merge-queue panel.
   isPinned?: boolean
+  // Combined review + audit history for this PR, newest-first. Bundled by the
+  // backend so the rev-log badge popover renders without an extra fetch.
+  revLog: RevLogEntry[]
 }
 
 export interface QueueNote {

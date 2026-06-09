@@ -924,6 +924,12 @@ When the badge shows **CI failed**, hovering it opens a portal-rendered popover 
 | Posted | Shows inline comments have been posted to GitHub |
 | Branch Divergence | Shows how many commits behind the base branch (open PRs only) |
 
+#### Rev Log Badge (queue + swimlane cards)
+
+Merge-queue and swimlane cards carry a neutral **`rev log (N)`** badge in the title row (after the CI badge), shown only when the PR has at least one review or audit. Hovering it opens a portal-rendered popover (same hover/positioning mechanics as `CIStatusBadge`) that lists every review **and** audit run for the PR, newest-first. Each row shows a `REVIEW`/`AUDIT` tag, the result (review → color-coded `N/10` plus a `follow-up` marker when applicable; audit → `N findings · M blocking`, blocking count in red when non-zero), and the absolute date + time the run completed. Non-`completed` runs show their status (`running`, `failed`, `cancelled`) in place of a result. Rows are clickable: review rows open the review viewer (`openReviewViewer`), audit rows open the `AuditViewer`.
+
+The data is bundled into each card payload by `backend/services/queue_enrichment.py` via the pure `build_rev_log(reviews, audits)` helper (merges `reviews_db.get_reviews_for_pr` + `audits_db.get_audits_for_pr` into a newest-first `revLog` array), so the popover renders without an extra fetch. Rendered by the shared `RevLogBadge` component, so the merge queue panel and the swimlane board behave identically.
+
 #### Branch Divergence Badge
 
 Shows how far behind the base branch each open PR's head branch is:

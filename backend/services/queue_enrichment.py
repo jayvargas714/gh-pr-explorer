@@ -9,7 +9,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional
 
-from backend.database import get_queue_db, get_reviews_db
+from backend.database import get_queue_db, get_reviews_db, get_audits_db
 from backend.services.github_service import fetch_pr_queue_data
 from backend.services.pr_service import get_ci_status, get_current_reviewers, get_review_status
 
@@ -25,15 +25,16 @@ def enrich_queue_items(items: List[Dict[str, Any]], max_workers: int = 5) -> Lis
 
     queue_db = get_queue_db()
     reviews_db = get_reviews_db()
+    audits_db = get_audits_db()
 
     def enrich(item: Dict[str, Any]) -> Dict[str, Any]:
-        return _enrich_one(item, queue_db, reviews_db)
+        return _enrich_one(item, queue_db, reviews_db, audits_db)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         return list(executor.map(enrich, items))
 
 
-def _enrich_one(item: Dict[str, Any], queue_db, reviews_db) -> Dict[str, Any]:
+def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db) -> Dict[str, Any]:
     notes_count = queue_db.get_notes_count(item["id"])
     repo_parts = item["repo"].split("/")
     pr_state: Optional[str] = None
@@ -61,6 +62,7 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db) -> Dict[str, Any]:
     status_check_rollup: Optional[List[Dict[str, Any]]] = None
     is_draft = False
     current_reviewers: List[Dict[str, Any]] = []
+    rev_log: List[Dict[str, Any]] = []
 
     if len(repo_parts) == 2:
         owner, repo = repo_parts
@@ -86,7 +88,10 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db) -> Dict[str, Any]:
         is_draft = queue_data.get("isDraft", False)
         current_reviewers = get_current_reviewers(queue_reviews)
 
-        latest_review = reviews_db.get_latest_review_for_pr(item["repo"], item["pr_number"])
+        pr_reviews = reviews_db.get_reviews_for_pr(item["repo"], item["pr_number"])
+        pr_audits = audits_db.get_audits_for_pr(item["repo"], item["pr_number"])
+        rev_log = build_rev_log(pr_reviews, pr_audits)
+        latest_review = pr_reviews[0] if pr_reviews else None
         if latest_review:
             has_review = True
             review_score = latest_review.get("score")
@@ -155,7 +160,36 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db) -> Dict[str, Any]:
         "statusCheckRollup": status_check_rollup,
         "isDraft": is_draft,
         "currentReviewers": current_reviewers,
+        "revLog": rev_log,
     }
+
+
+def build_rev_log(reviews, audits):
+    """Merge review + audit rows into one newest-first summary list for the card.
+
+    Each entry carries only summary fields (no content_json parsing).
+    """
+    entries = []
+    for r in reviews:
+        entries.append({
+            "kind": "review",
+            "id": r["id"],
+            "timestamp": r["review_timestamp"],
+            "status": r["status"],
+            "score": r.get("score"),
+            "isFollowup": bool(r.get("is_followup", False)),
+        })
+    for a in audits:
+        entries.append({
+            "kind": "audit",
+            "id": a["id"],
+            "timestamp": a["audit_timestamp"],
+            "status": a["status"],
+            "findingCount": a.get("finding_count", 0),
+            "blockingCount": a.get("blocking_count", 0),
+        })
+    entries.sort(key=lambda e: e["timestamp"] or "", reverse=True)
+    return entries
 
 
 def _extract_issue_titles(content_json_raw):

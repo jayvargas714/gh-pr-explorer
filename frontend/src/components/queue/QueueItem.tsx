@@ -14,6 +14,8 @@ import { AuditButton } from '../audits/AuditButton'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
 import { CIStatusBadge } from '../common/CIStatusBadge'
+import { RevLogBadge } from './RevLogBadge'
+import { AuditViewer } from '../audits/AuditViewer'
 import { ChangesRequestedModal } from '../common/ChangesRequestedModal'
 import { formatNumber, formatRelativeTime } from '../../utils/formatters'
 import { ReviewersBadge } from '../common/ReviewersBadge'
@@ -59,6 +61,7 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
   const [showVerdict, setShowVerdict] = useState(false)
   const [showChangesModal, setShowChangesModal] = useState(false)
   const [showDescription, setShowDescription] = useState(false)
+  const [auditViewerId, setAuditViewerId] = useState<number | null>(null)
   const [removing, setRemoving] = useState(false)
   const openReviewViewer = useReviewStore((state) => state.openReviewViewer)
   const openTimeline = useTimelineStore((state) => state.open)
@@ -200,6 +203,11 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
                 <ReviewersBadge reviewers={item.currentReviewers} />
               )}
               {getCIStatusBadge()}
+              <RevLogBadge
+                entries={item.revLog ?? []}
+                onOpenReview={(id) => openReviewViewer({ id })}
+                onOpenAudit={setAuditViewerId}
+              />
             </div>
             <div className="mx-queue-item__meta">
               <span className="mx-queue-item__repo">{item.repo}</span>
@@ -382,6 +390,10 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
           />
         )
       })()}
+
+      {auditViewerId !== null && (
+        <AuditViewer auditId={auditViewerId} onClose={() => setAuditViewerId(null)} />
+      )}
     </>
   )
 }
