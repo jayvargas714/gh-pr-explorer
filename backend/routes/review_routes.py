@@ -129,7 +129,8 @@ def start_review():
                 "is_followup": is_followup,
                 "parent_review_id": parent_id,
                 "pr_title": pr_title,
-                "pr_author": pr_author
+                "pr_author": pr_author,
+                "reviewer_type": reviewer_type
             }
 
         return jsonify({

@@ -30,6 +30,13 @@ interface RevLogBadgeProps {
   onOpenAudit: (id: number) => void
 }
 
+const AGENT_META: Record<string, { label: string }> = {
+  default: { label: 'Code' },
+  pb: { label: 'PB' },
+  ed: { label: 'ED' },
+  pb_ed: { label: 'PB/ED' },
+}
+
 function scoreClass(score: number): string {
   if (score >= 7) return 'mx-revlog-score--good'
   if (score >= 4) return 'mx-revlog-score--ok'
@@ -109,6 +116,11 @@ export function RevLogBadge({ entries, onOpenReview, onOpenAudit }: RevLogBadgeP
                   {e.kind === 'review' ? 'REVIEW' : 'AUDIT'}
                 </span>
                 {renderResult(e)}
+                {e.reviewerAgent && AGENT_META[e.reviewerAgent] && (
+                  <span className={`mx-revlog-agent mx-revlog-agent--${e.reviewerAgent}`}>
+                    {AGENT_META[e.reviewerAgent].label}
+                  </span>
+                )}
                 <span className="mx-revlog-when">{formatLocalDateTime(e.timestamp)}</span>
               </button>
             ))}

@@ -28,7 +28,26 @@ def test_audits_mapped_with_summary_fields():
     assert log == [{
         "kind": "audit", "id": 3, "timestamp": "2026-06-09 13:00:00",
         "status": "completed", "findingCount": 5, "blockingCount": 2,
+        "reviewerAgent": "pb_ed",
     }]
+
+
+def test_review_includes_reviewer_agent_when_present():
+    reviews = [{
+        "id": 8, "review_timestamp": "2026-06-09 14:00:00", "status": "completed",
+        "score": 9.0, "is_followup": 0, "reviewer_agent": "ed",
+    }]
+    log = build_rev_log(reviews, [])
+    assert log[0]["reviewerAgent"] == "ed"
+
+
+def test_review_omits_reviewer_agent_when_absent():
+    reviews = [{
+        "id": 9, "review_timestamp": "2026-06-09 14:00:00", "status": "completed",
+        "score": 9.0, "is_followup": 0,
+    }]
+    log = build_rev_log(reviews, [])
+    assert "reviewerAgent" not in log[0]
 
 
 def test_merged_sorted_newest_first():

@@ -33,7 +33,8 @@ class ReviewsDB:
         parent_review_id: Optional[int] = None,
         review_timestamp: Optional[datetime] = None,
         head_commit_sha: Optional[str] = None,
-        pr_state_at_review: Optional[str] = None
+        pr_state_at_review: Optional[str] = None,
+        reviewer_agent: Optional[str] = None
     ) -> int:
         """Save a review to the database. Returns the review ID.
 
@@ -59,13 +60,13 @@ class ReviewsDB:
                     pr_number, repo, pr_title, pr_author, pr_url,
                     status, review_file_path, score, content_json,
                     is_followup, parent_review_id, review_timestamp,
-                    head_commit_sha, pr_state_at_review
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    head_commit_sha, pr_state_at_review, reviewer_agent
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 pr_number, repo, pr_title, pr_author, pr_url,
                 status, review_file_path, score, content_json,
                 is_followup, parent_review_id, timestamp,
-                head_commit_sha, pr_state_at_review
+                head_commit_sha, pr_state_at_review, reviewer_agent
             ))
 
             review_id = cursor.lastrowid

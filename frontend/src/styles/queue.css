@@ -1431,6 +1431,22 @@
   background: rgba(107, 138, 122, 0.12);
 }
 
+.mx-revlog-agent {
+  flex: 0 0 auto;
+  font-weight: 600;
+  font-size: 0.6rem;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: var(--mx-radius-full);
+  background: rgba(107, 138, 122, 0.12);
+  color: var(--mx-color-text-secondary);
+}
+
+.mx-revlog-agent--default { color: var(--mx-color-info); }
+.mx-revlog-agent--pb { color: var(--mx-color-success); }
+.mx-revlog-agent--ed { color: var(--mx-color-warning); }
+.mx-revlog-agent--pb_ed { color: var(--mx-color-text-secondary); }
+
 .mx-revlog-result {
   flex: 1 1 auto;
   display: inline-flex;

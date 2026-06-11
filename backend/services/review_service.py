@@ -122,6 +122,7 @@ def save_review_to_db(key, review, status, reviews_db):
             pr_author = review.get("pr_author")
             is_followup = review.get("is_followup", False)
             parent_review_id = review.get("parent_review_id")
+            reviewer_agent = review.get("reviewer_type", "default")
 
             if not pr_title:
                 pr_title = review_json_data.get("metadata", {}).get("pr_title")
@@ -160,7 +161,8 @@ def save_review_to_db(key, review, status, reviews_db):
                 is_followup=is_followup,
                 parent_review_id=parent_review_id,
                 head_commit_sha=head_commit_sha,
-                pr_state_at_review=pr_state_at_review
+                pr_state_at_review=pr_state_at_review,
+                reviewer_agent=reviewer_agent
             )
             logger.info(f"Saved review to database for {key}")
     except Exception as e:

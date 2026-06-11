@@ -320,6 +320,7 @@ export interface RevLogEntry {
   isFollowup?: boolean        // reviews only
   findingCount?: number       // audits only
   blockingCount?: number      // audits only
+  reviewerAgent?: string      // reviewer agent code (default/pb/ed; pb_ed for audits)
 }
 
 export interface MergeQueueItem {

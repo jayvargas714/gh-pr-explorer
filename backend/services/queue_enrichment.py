@@ -171,14 +171,17 @@ def build_rev_log(reviews, audits):
     """
     entries = []
     for r in reviews:
-        entries.append({
+        entry = {
             "kind": "review",
             "id": r["id"],
             "timestamp": r["review_timestamp"],
             "status": r["status"],
             "score": r.get("score"),
             "isFollowup": bool(r.get("is_followup", False)),
-        })
+        }
+        if r.get("reviewer_agent"):
+            entry["reviewerAgent"] = r["reviewer_agent"]
+        entries.append(entry)
     for a in audits:
         entries.append({
             "kind": "audit",
@@ -187,6 +190,7 @@ def build_rev_log(reviews, audits):
             "status": a["status"],
             "findingCount": a.get("finding_count", 0),
             "blockingCount": a.get("blocking_count", 0),
+            "reviewerAgent": "pb_ed",
         })
     entries.sort(key=lambda e: e["timestamp"] or "", reverse=True)
     return entries
