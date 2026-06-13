@@ -736,6 +736,43 @@ export function VerdictModal({
 
   const isInlineEligible = (key: string) => INLINE_ELIGIBLE_KEYS.has(key) && !!structuredIssues[key]?.length
 
+  // Keys eligible for the "select all" toggles. Sections in review mode, blocks in audit mode.
+  const selectableSectionKeys = isAudit ? auditBlocks.map((b) => b.key) : sections.map((s) => s.key)
+  const allSectionsSelected =
+    selectableSectionKeys.length > 0 && selectableSectionKeys.every((k) => enabledSections.has(k))
+
+  const toggleAllSections = () => {
+    setEnabledSections((prev) => {
+      const allSelected = selectableSectionKeys.every((k) => prev.has(k))
+      const next = new Set(prev)
+      for (const k of selectableSectionKeys) {
+        if (allSelected) next.delete(k)
+        else next.add(k)
+      }
+      return next
+    })
+  }
+
+  // Inline "select all" (review mode only — audit has a single post-all-findings checkbox).
+  const inlineEligibleKeys = sections.filter((s) => isInlineEligible(s.key)).map((s) => s.key)
+  const allInlineSelected =
+    inlineEligibleKeys.length > 0 && inlineEligibleKeys.every((k) => inlineSections.has(k))
+
+  const toggleAllInline = () => {
+    const allSelected = inlineEligibleKeys.every((k) => inlineSections.has(k))
+    if (allSelected) {
+      setInlineSections((prev) => {
+        const next = new Set(prev)
+        for (const k of inlineEligibleKeys) next.delete(k)
+        return next
+      })
+    } else {
+      // Enable the sections too, so inline posting actually takes effect.
+      setEnabledSections((prev) => new Set([...prev, ...inlineEligibleKeys]))
+      setInlineSections((prev) => new Set([...prev, ...inlineEligibleKeys]))
+    }
+  }
+
   // Compute inline styles for draggable verdict modal
   const verdictStyle: React.CSSProperties = {
     ...(verdictPos ? { left: verdictPos.x, top: verdictPos.y } : {}),
@@ -855,7 +892,17 @@ export function VerdictModal({
 
                 {isAudit && auditBlocks.length > 0 && (
                   <div className="mx-verdict-modal__sections">
-                    <label className="mx-verdict-modal__label">Include Audit Blocks</label>
+                    <div className="mx-verdict-modal__sections-header">
+                      <label className="mx-verdict-modal__label">Include Audit Blocks</label>
+                      <button
+                        type="button"
+                        className="mx-verdict-modal__select-all-btn"
+                        onClick={toggleAllSections}
+                        disabled={submitting}
+                      >
+                        {allSectionsSelected ? 'Deselect All' : 'Select All'}
+                      </button>
+                    </div>
                     {auditBlocks.map((block) => (
                       <div key={block.key} className="mx-verdict-modal__section-toggle">
                         <div className="mx-verdict-modal__section-header">
@@ -890,7 +937,29 @@ export function VerdictModal({
 
                 {!isAudit && sections.length > 0 && (
                   <div className="mx-verdict-modal__sections">
-                    <label className="mx-verdict-modal__label">Include Review Sections</label>
+                    <div className="mx-verdict-modal__sections-header">
+                      <label className="mx-verdict-modal__label">Include Review Sections</label>
+                      <div className="mx-verdict-modal__select-all-group">
+                        <button
+                          type="button"
+                          className="mx-verdict-modal__select-all-btn"
+                          onClick={toggleAllSections}
+                          disabled={submitting}
+                        >
+                          {allSectionsSelected ? 'Deselect All' : 'Select All'}
+                        </button>
+                        {inlineEligibleKeys.length > 0 && (
+                          <button
+                            type="button"
+                            className="mx-verdict-modal__select-all-btn"
+                            onClick={toggleAllInline}
+                            disabled={submitting}
+                          >
+                            {allInlineSelected ? 'Deselect All Inline' : 'Select All Inline'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
                     {sections.map((section) => (
                       <div key={section.key} className="mx-verdict-modal__section-toggle">
                         <div className="mx-verdict-modal__section-header">

@@ -463,6 +463,44 @@
   margin-bottom: var(--mx-spacing-4);
 }
 
+.mx-verdict-modal__sections-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mx-spacing-2);
+  margin-bottom: var(--mx-spacing-2);
+}
+
+.mx-verdict-modal__sections-header .mx-verdict-modal__label {
+  margin-bottom: 0;
+}
+
+.mx-verdict-modal__select-all-group {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-spacing-2);
+}
+
+.mx-verdict-modal__select-all-btn {
+  background: none;
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-sm);
+  color: var(--mx-color-primary);
+  font-size: var(--mx-font-size-xs);
+  cursor: pointer;
+  padding: var(--mx-spacing-1) var(--mx-spacing-2);
+  white-space: nowrap;
+}
+
+.mx-verdict-modal__select-all-btn:hover:not(:disabled) {
+  background: var(--mx-color-background-hover);
+}
+
+.mx-verdict-modal__select-all-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .mx-verdict-modal__section-toggle {
   background: var(--mx-color-surface);
   border: 1px solid var(--mx-color-border);
