@@ -307,6 +307,8 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
     cmd = [
         "claude",
         "-p", prompt,
+        # Pin the model so reviews stay reproducible if the CLI default changes.
+        "--model", "claude-opus-5",
         "--allowedTools", (
             "Bash(git status*),Bash(git log*),Bash(git show*),"
             "Bash(git diff*),Bash(git blame*),Bash(git branch*),"

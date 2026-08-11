@@ -158,6 +158,8 @@ def start_audit_process(pr_url, owner, repo, pr_number):
     cmd = [
         "claude",
         "-p", prompt,
+        # Pin the model so audits stay reproducible if the CLI default changes.
+        "--model", "claude-opus-5",
         # Skill required: the /pb-ed-audit skill invokes sub-skills/subagents at runtime
         "--allowedTools", (
             "Bash(git status*),Bash(git log*),Bash(git show*),"
