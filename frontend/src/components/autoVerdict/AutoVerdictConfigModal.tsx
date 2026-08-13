@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Modal } from '../common/Modal'
 import { Button } from '../common/Button'
 import { Toggle } from '../common/Toggle'
@@ -50,7 +51,11 @@ export function AutoVerdictConfigModal({ onClose }: AutoVerdictConfigModalProps)
     if (await save(draft)) onClose()
   }
 
-  return (
+  // Portal to body so the fixed-position overlay centers on the viewport. Both
+  // call sites sit inside an ancestor that creates a containing block for fixed
+  // descendants — the header's backdrop-filter, and the swimlane board — which
+  // would otherwise pin the overlay to that box and clip it off-screen.
+  return createPortal(
     <Modal title="Auto Verdict Criteria" onClose={onClose} size="md">
       <div className="mx-auto-verdict-config">
         {storeError && <Alert variant="error">{storeError}</Alert>}
@@ -114,6 +119,7 @@ export function AutoVerdictConfigModal({ onClose }: AutoVerdictConfigModalProps)
           </Button>
         </div>
       </div>
-    </Modal>
+    </Modal>,
+    document.body
   )
 }
