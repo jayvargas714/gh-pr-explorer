@@ -312,7 +312,7 @@ export interface Bottleneck {
 // ============================================================================
 
 export interface RevLogEntry {
-  kind: 'review' | 'audit'
+  kind: 'review' | 'audit' | 'auto_verdict'
   id: number
   timestamp: string
   status: string
@@ -321,6 +321,46 @@ export interface RevLogEntry {
   findingCount?: number       // audits only
   blockingCount?: number      // audits only
   reviewerAgent?: string      // reviewer agent code (default/pb/ed; pb_ed for audits)
+  event?: string | null       // auto verdicts only: APPROVE/REQUEST_CHANGES/COMMENT
+  reason?: string | null      // auto verdicts only: the criteria evaluation
+  reviewId?: number | null    // auto verdicts only: the review that triggered it
+}
+
+// ============================================================================
+// Auto Verdict Types
+// ============================================================================
+
+/** Reviewer agents an armed card can pin its auto review to. */
+export type AutoVerdictReviewer = 'default' | 'pb' | 'ed'
+
+/** Global thresholds deciding auto changes-requested vs auto approval. */
+export interface AutoVerdictConfig {
+  enabled: boolean
+  maxCritical: number
+  maxMajor: number
+  maxMinor: number
+  allowAutoApprove: boolean
+}
+
+export type AutoVerdictOutcome = 'pending' | 'posted' | 'suppressed' | 'skipped' | 'error'
+
+/** The most recent auto verdict recorded for a PR. */
+export interface AutoVerdictRecord {
+  reviewId: number | null
+  event: string | null
+  outcome: AutoVerdictOutcome
+  reason: string | null
+  criticalCount: number | null
+  majorCount: number | null
+  minorCount: number | null
+  createdAt: string
+}
+
+/** Per-card arming state plus the last recorded outcome. */
+export interface AutoVerdictState {
+  enabled: boolean
+  reviewerType: AutoVerdictReviewer
+  last: AutoVerdictRecord | null
 }
 
 export interface MergeQueueItem {
@@ -365,6 +405,8 @@ export interface MergeQueueItem {
   // Combined review + audit history for this PR, newest-first. Bundled by the
   // backend so the rev-log badge popover renders without an extra fetch.
   revLog: RevLogEntry[]
+  // Auto-verdict arming state and last outcome, bundled the same way as revLog.
+  autoVerdict?: AutoVerdictState
 }
 
 export interface QueueNote {

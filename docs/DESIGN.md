@@ -266,8 +266,34 @@ CREATE TABLE merge_queue (
     deletions INTEGER DEFAULT 0,
     position INTEGER NOT NULL,
     added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    auto_verdict_enabled INTEGER NOT NULL DEFAULT 0,  -- armed for auto verdicts
+    auto_verdict_reviewer TEXT,                       -- 'default' | 'pb' | 'ed'
     UNIQUE(pr_number, repo)
 );
+
+-- Auto verdicts table: One row per review the auto-verdict evaluator handled.
+-- review_id is UNIQUE and claimed before GitHub is contacted, which is what
+-- makes a double post impossible when several callers notice one completion.
+CREATE TABLE auto_verdicts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    review_id INTEGER UNIQUE,
+    event TEXT,                     -- APPROVE | REQUEST_CHANGES | COMMENT | NULL
+    outcome TEXT NOT NULL DEFAULT 'pending',
+                                    -- pending | posted | suppressed | skipped | error
+    reason TEXT,                    -- human-readable criteria evaluation
+    critical_count INTEGER,
+    major_count INTEGER,
+    minor_count INTEGER,
+    criteria_json TEXT,             -- threshold snapshot at decision time
+    head_commit_sha TEXT,
+    error_detail TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (review_id) REFERENCES reviews(id)
+);
+
+CREATE INDEX idx_auto_verdicts_repo_pr ON auto_verdicts(repo, pr_number);
 
 -- Queue notes table: Stores notes attached to merge queue items
 CREATE TABLE queue_notes (
@@ -1570,6 +1596,95 @@ When a PR has **both** a completed review and a completed audit, the verdict mod
 - **Switching source** — recomposes the verdict body from the newly selected source. Source-derived selections are reset (parsed sections, enabled/inline toggles, audit blocks, structured/edited issue content, and any manual body override), while the user's chosen review action (Approve / Request Changes / Comment) and custom text are preserved.
 - **Submission** — exactly one verdict is posted per submission, from the selected source. `review_id` (used for review section-count tracking) is sent **only** when the Review source is selected; audit submissions never send it. To post the other source as its own GitHub verdict, switch the toggle (or reopen the modal) and submit again.
 
+### Auto Verdicts
+
+Auto verdicts remove the manual click-path for the mechanical case: a PR card is **armed** with a 🤖 toggle, and when a review for that PR completes, the backend compares the review's issue counts against configurable thresholds and posts the verdict to GitHub itself. The full review report becomes the comment body. Every auto-generated verdict is badged in the UI so it can be audited after the fact.
+
+#### How It Works
+
+1. The user sets thresholds once in the **Auto Verdict Criteria** panel (🤖 button in the header, or "Edit criteria…" from any card's auto popover).
+2. On a queue or swimlane card, the **🤖 Auto** button arms that PR and picks which reviewer agent its auto review uses.
+3. A review completes — started from anywhere, by any surface.
+4. `check_review_status` saves the review, then spawns a thread running `maybe_post_auto_verdict` (`backend/services/auto_verdict_service.py`).
+5. The evaluator counts issues per severity, compares against the criteria, and posts `REQUEST_CHANGES`, `APPROVE`, `COMMENT`, or nothing.
+6. The decision is recorded in the `auto_verdicts` table and surfaces on the card as a badge plus a rev-log entry.
+
+#### Criteria
+
+Stored as the `auto_verdict_config` key in `user_settings`. Defaults live in exactly one place — `DEFAULT_CRITERIA` in `backend/services/auto_verdict_config.py` — because both the evaluator and the API read them.
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `enabled` | `false` | Master switch. While off, armed cards are never evaluated and nothing is posted. |
+| `maxCritical` | `0` | Critical issues tolerated. `0` means one critical triggers changes-requested. |
+| `maxMajor` | `0` | Major issues tolerated. |
+| `maxMinor` | `99` | Minor issues tolerated — effectively unlimited, so minors alone never block. |
+| `allowAutoApprove` | `false` | When off, a passing review posts nothing; only changes-requested is automated. |
+
+Thresholds are **inclusive upper bounds**: `maxMajor: 1` allows one major and trips on two. Both switches default off so installing the feature cannot post anything until deliberately enabled.
+
+#### Decision Table
+
+| Condition | Event posted | Recorded outcome |
+|-----------|--------------|------------------|
+| Any severity over its limit | `REQUEST_CHANGES` | `posted` |
+| Within all limits, `allowAutoApprove` on, PR authored by someone else | `APPROVE` | `posted` |
+| Within all limits, `allowAutoApprove` on, PR self-authored | `COMMENT` | `posted` |
+| Within all limits, `allowAutoApprove` off | *(nothing)* | `suppressed` |
+| Review failed, content unusable, or PR not `OPEN` | *(nothing)* | `skipped` |
+| `post_verdict` returned non-200 or raised | *(attempted)* | `error` |
+
+GitHub rejects `APPROVE` on your own PR with a 422, so a self-authored passing PR falls back to `COMMENT` and the reason records why. A `suppressed` outcome is the "changes-requested only" mode: the card shows *passed — approve manually* so every approval stays a human action.
+
+#### Verdict Body
+
+The body is `json_to_markdown(content_json)` — the same canonical renderer the review viewer uses, so the posted comment is the full report: summary, every severity section with Location/Problem/Fix, highlights, recommendations, and score. It is truncated at 60 000 characters (GitHub's cap is 65 536) with a trailing notice. No inline comments are posted, and no auto-generated header is injected into the body; the auto-generated marker lives in the UI badge instead.
+
+Note there is no per-issue resolved/dismissed state anywhere in the system, so "remaining issues" necessarily means *the issues in the latest review*. For a follow-up review that is already the remaining set.
+
+#### Idempotency
+
+`auto_verdicts.review_id` is `UNIQUE`, and `AutoVerdictsDB.claim()` inserts the row in the `pending` state **before** GitHub is contacted. Whichever caller wins the claim posts; every other caller returns immediately. This is what makes a double post structurally impossible when the watcher thread and a frontend poll notice the same completion. `claim()` distinguishes a lost race from a genuine constraint failure (such as the foreign key to `reviews(id)`) by re-querying, so an FK error is never silently reported as a duplicate.
+
+#### Completion Watcher
+
+`check_review_status` only runs when the frontend polls `GET /api/reviews`, so with no browser tab open a finished review was previously neither persisted nor verdicted until someone reopened the app. `auto_verdict_watcher_loop` (`backend/services/auto_verdict_watcher.py`) polls `check_review_status` for every key in `active_reviews` every 10 seconds. It starts as a daemon thread from `app.py` alongside the existing startup cache-refresh threads, guarded on `WERKZEUG_RUN_MAIN` so Flask's reloader cannot double-start it in debug mode. This also fixes the pre-existing persistence gap for reviews that finish after the tab closes.
+
+#### Persistence
+
+```sql
+auto_verdicts (
+  id, repo, pr_number, review_id UNIQUE, event, outcome,
+  reason, critical_count, major_count, minor_count,
+  criteria_json, head_commit_sha, error_detail, created_at
+)
+```
+
+Plus two columns on `merge_queue` (added via tracked `ALTER TABLE` migrations in `base.py`), which is the single record behind both the queue panel and the swimlane board:
+
+```sql
+auto_verdict_enabled  INTEGER NOT NULL DEFAULT 0
+auto_verdict_reviewer TEXT      -- 'default' | 'pb' | 'ed'
+```
+
+`criteria_json` snapshots the thresholds at decision time, so changing the criteria later does not rewrite the history of why a past verdict fired.
+
+#### UI Components
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| `AutoVerdictToggle` | Queue / swimlane card action row | `🤖 Auto` button, `--active` when armed. Opens a popover with arm/disarm, a reviewer-agent radio group, the effective criteria, and an "Edit criteria…" link |
+| `AutoVerdictConfigModal` | Overlay | The criteria panel: master toggle, three threshold inputs, auto-approve toggle, Cancel/Save |
+| `AutoVerdictBadge` | Card badge row | Outcome badge with a tooltip carrying the reason, tallies, and local timestamp |
+| 🤖 header button | Header | Opens the criteria panel; shows an `on` chip while the master switch is enabled |
+| `RevLogBadge` | Card rev-log popover | Renders `auto_verdict` entries with an `AUTO` tag; clicking one opens the review it was derived from |
+
+Badge variants: `🤖 auto ✗ changes requested` (error), `🤖 auto ✓ approved` (success), `🤖 auto 💬 comment` (info), `🤖 passed — approve manually` (warning), `🤖 auto verdict failed` (error), `🤖 auto skipped` (neutral).
+
+An armed card's **Review** button skips the reviewer picker on its primary click and starts the armed agent directly (labelled `🤖 Review`); the adjacent `▾` still opens the picker to override for one run without changing the stored arming.
+
+The swimlane badge filter gains an **Auto Verdict** dimension with chips *🤖 Armed*, *🤖 Verdict Posted*, and *🤖 Needs Manual Approval*, mirroring the rendered badges one-for-one as `cardMatchesBadge` requires.
+
 ---
 
 ## API Endpoints
@@ -2206,6 +2321,81 @@ Reorders items in the merge queue.
 {
   "message": "Queue reordered",
   "queue": [...]
+}
+```
+
+---
+
+### Auto Verdicts
+
+**GET** `/api/auto-verdict/config`
+
+Returns the global auto-verdict criteria, stored values merged over `DEFAULT_CRITERIA`.
+
+**Response**:
+```json
+{
+  "config": {
+    "enabled": false,
+    "maxCritical": 0,
+    "maxMajor": 0,
+    "maxMinor": 99,
+    "allowAutoApprove": false
+  }
+}
+```
+
+**PUT** `/api/auto-verdict/config`
+
+Validates and saves the criteria. Thresholds must be integers ≥ 0; a negative or
+non-numeric value returns 400. Unrecognized keys are ignored, and omitted keys fall
+back to their defaults. Also accepts POST. The payload may be sent either wrapped in
+`config` or as a bare object.
+
+**Request Body**:
+```json
+{
+  "config": {
+    "enabled": true,
+    "maxCritical": 0,
+    "maxMajor": 1,
+    "maxMinor": 99,
+    "allowAutoApprove": false
+  }
+}
+```
+
+**Response**:
+```json
+{
+  "config": { "...": "the stored value" },
+  "message": "Auto-verdict config saved"
+}
+```
+
+**PUT** `/api/merge-queue/<pr_number>/auto-verdict`
+
+Arms or disarms auto verdicts for a queued PR.
+
+**Query Parameters**:
+- `repo` (required): Repository in `owner/repo` format
+
+**Request Body**:
+```json
+{
+  "enabled": true,
+  "reviewerType": "default"
+}
+```
+
+`reviewerType` is one of `default`, `pb`, `ed` (defaults to `default`); anything else
+returns 400. A PR that is not in the merge queue returns 404.
+
+**Response**:
+```json
+{
+  "autoVerdict": { "enabled": true, "reviewerType": "default" },
+  "message": "Auto verdict updated"
 }
 ```
 

@@ -9,7 +9,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional
 
-from backend.database import get_queue_db, get_reviews_db, get_audits_db
+from backend.database import get_queue_db, get_reviews_db, get_audits_db, get_auto_verdicts_db
 from backend.services.github_service import fetch_pr_queue_data
 from backend.services.pr_service import get_ci_status, get_current_reviewers, get_review_status
 
@@ -26,15 +26,16 @@ def enrich_queue_items(items: List[Dict[str, Any]], max_workers: int = 5) -> Lis
     queue_db = get_queue_db()
     reviews_db = get_reviews_db()
     audits_db = get_audits_db()
+    auto_verdicts_db = get_auto_verdicts_db()
 
     def enrich(item: Dict[str, Any]) -> Dict[str, Any]:
-        return _enrich_one(item, queue_db, reviews_db, audits_db)
+        return _enrich_one(item, queue_db, reviews_db, audits_db, auto_verdicts_db)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         return list(executor.map(enrich, items))
 
 
-def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db) -> Dict[str, Any]:
+def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db, auto_verdicts_db) -> Dict[str, Any]:
     notes_count = queue_db.get_notes_count(item["id"])
     repo_parts = item["repo"].split("/")
     pr_state: Optional[str] = None
@@ -63,6 +64,7 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db) -> Dict[s
     is_draft = False
     current_reviewers: List[Dict[str, Any]] = []
     rev_log: List[Dict[str, Any]] = []
+    auto_verdict_last: Optional[Dict[str, Any]] = None
 
     if len(repo_parts) == 2:
         owner, repo = repo_parts
@@ -90,7 +92,9 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db) -> Dict[s
 
         pr_reviews = reviews_db.get_reviews_for_pr(item["repo"], item["pr_number"])
         pr_audits = audits_db.get_audits_for_pr(item["repo"], item["pr_number"])
-        rev_log = build_rev_log(pr_reviews, pr_audits)
+        pr_auto_verdicts = auto_verdicts_db.get_for_pr(item["repo"], item["pr_number"])
+        rev_log = build_rev_log(pr_reviews, pr_audits, pr_auto_verdicts)
+        auto_verdict_last = _format_auto_verdict(pr_auto_verdicts[0]) if pr_auto_verdicts else None
         latest_review = pr_reviews[0] if pr_reviews else None
         if latest_review:
             has_review = True
@@ -155,6 +159,11 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db) -> Dict[s
         "majorIssueTitles": major_issue_titles,
         "minorIssueTitles": minor_issue_titles,
         "isFollowup": is_followup,
+        "autoVerdict": {
+            "enabled": bool(item.get("auto_verdict_enabled")),
+            "reviewerType": item.get("auto_verdict_reviewer") or "default",
+            "last": auto_verdict_last,
+        },
         "reviewDecision": review_decision,
         "ciStatus": ci_status,
         "statusCheckRollup": status_check_rollup,
@@ -164,8 +173,22 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db) -> Dict[s
     }
 
 
-def build_rev_log(reviews, audits):
-    """Merge review + audit rows into one newest-first summary list for the card.
+def _format_auto_verdict(row):
+    """Shape an auto_verdicts row for the card payload."""
+    return {
+        "reviewId": row.get("review_id"),
+        "event": row.get("event"),
+        "outcome": row.get("outcome"),
+        "reason": row.get("reason"),
+        "criticalCount": row.get("critical_count"),
+        "majorCount": row.get("major_count"),
+        "minorCount": row.get("minor_count"),
+        "createdAt": row.get("created_at"),
+    }
+
+
+def build_rev_log(reviews, audits, auto_verdicts=None):
+    """Merge review + audit + auto-verdict rows into one newest-first summary list.
 
     Each entry carries only summary fields (no content_json parsing).
     """
@@ -191,6 +214,16 @@ def build_rev_log(reviews, audits):
             "findingCount": a.get("finding_count", 0),
             "blockingCount": a.get("blocking_count", 0),
             "reviewerAgent": "pb_ed",
+        })
+    for v in auto_verdicts or []:
+        entries.append({
+            "kind": "auto_verdict",
+            "id": v["id"],
+            "timestamp": v.get("created_at"),
+            "status": v.get("outcome"),
+            "event": v.get("event"),
+            "reason": v.get("reason"),
+            "reviewId": v.get("review_id"),
         })
     entries.sort(key=lambda e: e["timestamp"] or "", reverse=True)
     return entries

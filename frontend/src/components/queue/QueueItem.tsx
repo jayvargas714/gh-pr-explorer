@@ -11,6 +11,8 @@ import { VerdictModal } from './VerdictModal'
 import { QueueDescriptionModal } from './QueueDescriptionModal'
 import { QueueReviewButton } from '../reviews/QueueReviewButton'
 import { AuditButton } from '../audits/AuditButton'
+import { AutoVerdictToggle } from '../autoVerdict/AutoVerdictToggle'
+import { AutoVerdictBadge } from '../autoVerdict/AutoVerdictBadge'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
 import { CIStatusBadge } from '../common/CIStatusBadge'
@@ -243,6 +245,7 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
           <div className="mx-queue-item__badges">
             {item.isFollowup && <Badge variant="info">Follow-up</Badge>}
             {item.hasNewCommits && <Badge variant="warning">New Commits</Badge>}
+            {item.autoVerdict?.last && <AutoVerdictBadge record={item.autoVerdict.last} />}
             {!!item.inlineCommentsPosted && (item.criticalFoundCount ?? 0) > 0 && (
               <span data-tooltip={buildInlineTooltip('Critical', item.criticalIssueTitles, item.criticalPostedCount, item.criticalFoundCount)}>
                 <Badge variant={item.criticalPostedCount !== null && item.criticalPostedCount < (item.criticalFoundCount ?? 0) ? 'warning' : 'info'}>
@@ -308,6 +311,7 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
             </>
           )}
           <QueueReviewButton item={item} onRefresh={onRefresh} />
+          <AutoVerdictToggle item={item} onRefresh={onRefresh} />
           <AuditButton
             owner={item.repo.split('/')[0] ?? ''}
             repo={item.repo.split('/')[1] ?? ''}

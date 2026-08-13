@@ -12,6 +12,12 @@ interface QueueReviewButtonProps {
   onRefresh: () => void
 }
 
+const REVIEWER_LABELS: Record<string, string> = {
+  default: 'code',
+  pb: 'product brief',
+  ed: 'engineering design',
+}
+
 export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
   const [starting, setStarting] = useState(false)
   const [reviewerPickerOpen, setReviewerPickerOpen] = useState(false)
@@ -116,23 +122,50 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
     )
   }
 
+  // An armed card already knows which agent to use, so skip the picker on the
+  // primary click and start that reviewer straight away. The ▾ still overrides
+  // for a one-off run; overriding does not change the stored arming.
+  const armedReviewer = item.autoVerdict?.enabled ? item.autoVerdict.reviewerType : null
+
   return (
     <>
       <div className="mx-reviewer-picker__wrapper">
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => setReviewerPickerOpen((open) => !open)}
+          onClick={() =>
+            armedReviewer
+              ? handleStartReview(armedReviewer)
+              : setReviewerPickerOpen((open) => !open)
+          }
           disabled={starting}
+          data-tooltip={
+            armedReviewer
+              ? `Run the ${REVIEWER_LABELS[armedReviewer]} review and auto-verdict it`
+              : undefined
+          }
         >
           {starting ? (
             <Spinner size="sm" />
+          ) : armedReviewer ? (
+            `${item.hasReview ? '🔄' : '📋'} 🤖 Review`
           ) : item.hasReview ? (
             '🔄 Re-review ▾'
           ) : (
             '📋 Review ▾'
           )}
         </Button>
+        {armedReviewer && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setReviewerPickerOpen((open) => !open)}
+            disabled={starting}
+            data-tooltip="Choose a different reviewer for this run"
+          >
+            ▾
+          </Button>
+        )}
         {reviewerPickerOpen && (
           <ReviewerPickerMenu
             onSelect={handleStartReview}

@@ -54,6 +54,14 @@ const GROUPS: GroupDef[] = [
     ],
   },
   {
+    label: 'Auto Verdict',
+    chips: [
+      { key: 'auto:armed',           label: '🤖 Armed' },
+      { key: 'auto:posted',          label: '🤖 Verdict Posted' },
+      { key: 'auto:needs_approval',  label: '🤖 Needs Manual Approval' },
+    ],
+  },
+  {
     label: 'Other',
     chips: [
       { key: 'new_commits',         label: 'New Commits' },

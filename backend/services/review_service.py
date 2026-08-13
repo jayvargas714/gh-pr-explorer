@@ -3,6 +3,7 @@
 import json
 import logging
 import subprocess
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +42,8 @@ def save_review_to_db(key, review, status, reviews_db):
 
     Reads both .md and .json files. If .json exists and validates, uses it directly.
     Otherwise falls back to parsing the .md file via markdown_to_json().
+
+    Returns the new review id, or None if the review could not be saved.
     """
     try:
         parts = key.split("/")
@@ -149,7 +152,7 @@ def save_review_to_db(key, review, status, reviews_db):
                     )
             pr_state_at_review = fetch_pr_state(owner, repo, pr_number)
 
-            reviews_db.save_review(
+            review_id = reviews_db.save_review(
                 pr_number=pr_number,
                 repo=full_repo,
                 pr_title=pr_title,
@@ -165,8 +168,10 @@ def save_review_to_db(key, review, status, reviews_db):
                 reviewer_agent=reviewer_agent
             )
             logger.info(f"Saved review to database for {key}")
+            return review_id
     except Exception as e:
         logger.error(f"Failed to save review to database for {key}: {e}")
+    return None
 
 
 def check_review_status(key, active_reviews, reviews_lock, reviews_db):
@@ -201,9 +206,39 @@ def check_review_status(key, active_reviews, reviews_lock, reviews_db):
                     error_msg = review.get("error_output", "Unknown error")
                     logger.error(f"Review failed: {key} (exit code: {exit_code})\nError: {error_msg}")
 
-                save_review_to_db(key, review, status, reviews_db)
+                review_id = save_review_to_db(key, review, status, reviews_db)
+
+                if review_id and status == "completed":
+                    _spawn_auto_verdict(key, review_id)
 
         return review
+
+
+def _spawn_auto_verdict(key, review_id):
+    """Evaluate auto verdicts for a just-completed review, off the polling thread.
+
+    The verdict path makes several gh subprocess calls, so it must not run while
+    reviews_lock is held or it would stall every review poll for seconds. The
+    running -> terminal transition happens once per review, so this spawns once;
+    AutoVerdictsDB.claim() guards against any other path racing it.
+    """
+    parts = key.split("/")
+    if len(parts) < 3:
+        return
+    full_repo = f"{parts[0]}/{parts[1]}"
+    try:
+        pr_number = int(parts[2])
+    except ValueError:
+        return
+
+    def run():
+        try:
+            from backend.services.auto_verdict_service import maybe_post_auto_verdict
+            maybe_post_auto_verdict(full_repo, pr_number, review_id)
+        except Exception as e:
+            logger.error(f"Auto verdict evaluation failed for {key}: {e}")
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 VALID_REVIEWER_TYPES = ("default", "pb", "ed")

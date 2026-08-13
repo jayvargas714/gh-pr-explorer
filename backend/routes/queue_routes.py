@@ -6,6 +6,7 @@ from backend.extensions import logger
 from backend.database import get_queue_db
 from backend.services.github_service import fetch_pr_state_and_sha
 from backend.services.queue_enrichment import enrich_queue_items
+from backend.services.review_service import VALID_REVIEWER_TYPES
 from backend.routes import error_response
 
 queue_bp = Blueprint("queue", __name__)
@@ -89,6 +90,39 @@ def remove_from_merge_queue(pr_number):
 
     except Exception as e:
         return error_response("Internal server error", 500, f"Error removing from merge queue: {e}")
+
+
+@queue_bp.route("/api/merge-queue/<int:pr_number>/auto-verdict", methods=["PUT"])
+def set_queue_auto_verdict(pr_number):
+    """Arm or disarm auto verdicts for a queued PR."""
+    try:
+        repo = request.args.get("repo")
+        if not repo:
+            return jsonify({"error": "Missing 'repo' query parameter"}), 400
+
+        data = request.get_json()
+        if data is None or "enabled" not in data:
+            return jsonify({"error": "Missing 'enabled' in request body"}), 400
+
+        reviewer_type = data.get("reviewerType") or "default"
+        if reviewer_type not in VALID_REVIEWER_TYPES:
+            return jsonify({"error": f"Invalid reviewerType: {reviewer_type}"}), 400
+
+        enabled = bool(data["enabled"])
+        row = get_queue_db().set_auto_verdict(pr_number, repo, enabled, reviewer_type)
+        if row is None:
+            return jsonify({"error": "PR not found in queue"}), 404
+
+        logger.info(f"Auto verdict {'armed' if enabled else 'disarmed'} for {repo}#{pr_number} "
+                    f"(reviewer={reviewer_type})")
+        return jsonify({
+            "autoVerdict": {"enabled": enabled, "reviewerType": reviewer_type},
+            "message": "Auto verdict updated",
+        })
+
+    except Exception as e:
+        return error_response("Internal server error", 500,
+                              f"Error updating auto verdict for PR #{pr_number}: {e}")
 
 
 @queue_bp.route("/api/merge-queue/reorder", methods=["POST"])

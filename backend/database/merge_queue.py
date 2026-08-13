@@ -85,6 +85,30 @@ class MergeQueueDB:
                 WHERE pr_number = ? AND repo = ?
             """, (pr_state, datetime.now(), pr_number, repo))
 
+    def set_auto_verdict(
+        self,
+        pr_number: int,
+        repo: str,
+        enabled: bool,
+        reviewer_type: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Arm or disarm auto verdicts for a queued PR. Returns the updated row."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE merge_queue
+                SET auto_verdict_enabled = ?, auto_verdict_reviewer = ?
+                WHERE pr_number = ? AND repo = ?
+            """, (1 if enabled else 0, reviewer_type, pr_number, repo))
+            if cursor.rowcount == 0:
+                return None
+            cursor.execute(
+                "SELECT * FROM merge_queue WHERE pr_number = ? AND repo = ?",
+                (pr_number, repo)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
     def remove_from_queue(self, pr_number: int, repo: Optional[str] = None) -> bool:
         """Remove a PR from the merge queue. Returns True if removed."""
         with self.db.connection() as conn:
@@ -148,6 +172,17 @@ class MergeQueueDB:
                 (pr_number, repo)
             )
             return cursor.fetchone() is not None
+
+    def get_queue_item(self, pr_number: int, repo: str) -> Optional[Dict[str, Any]]:
+        """Get the full queue row for a PR, or None if it is not queued."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM merge_queue WHERE pr_number = ? AND repo = ?",
+                (pr_number, repo)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     def get_queue_item_id(self, pr_number: int, repo: str) -> Optional[int]:
         """Get the queue item ID for a PR."""

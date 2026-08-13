@@ -1521,3 +1521,135 @@
   font-size: 0.7rem;
   white-space: nowrap;
 }
+
+/* ===========================================================================
+   Auto Verdict — card toggle, popover, and rev-log entry
+   =========================================================================== */
+
+.mx-auto-verdict__wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+.mx-auto-verdict-btn--active {
+  color: var(--mx-color-accent);
+  border-color: color-mix(in srgb, var(--mx-color-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--mx-color-accent) 10%, transparent);
+}
+
+.mx-auto-verdict-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 60;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-spacing-2, 8px);
+  padding: var(--mx-spacing-2, 8px);
+  background: var(--mx-color-bg-elevated);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md, 6px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.mx-auto-verdict-menu__arm {
+  width: 100%;
+  padding: var(--mx-spacing-2, 8px);
+  background: transparent;
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-sm, 4px);
+  color: var(--mx-color-text-primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.mx-auto-verdict-menu__arm:hover:not(:disabled) {
+  background: var(--mx-color-surface-hover);
+}
+
+.mx-auto-verdict-menu__arm--active {
+  color: var(--mx-color-accent);
+  border-color: color-mix(in srgb, var(--mx-color-accent) 45%, transparent);
+}
+
+.mx-auto-verdict-menu__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-spacing-1, 4px);
+  padding-top: var(--mx-spacing-2, 8px);
+  border-top: 1px solid var(--mx-color-border);
+}
+
+.mx-auto-verdict-menu__label {
+  color: var(--mx-color-text-secondary);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.mx-auto-verdict-menu__reviewer {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: var(--mx-spacing-1, 4px) var(--mx-spacing-2, 8px);
+  background: transparent;
+  border: 0;
+  border-radius: var(--mx-radius-sm, 4px);
+  color: var(--mx-color-text-primary);
+  font: inherit;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mx-auto-verdict-menu__reviewer small {
+  color: var(--mx-color-text-secondary);
+  font-size: 0.65rem;
+}
+
+.mx-auto-verdict-menu__reviewer:hover:not(:disabled) {
+  background: var(--mx-color-surface-hover);
+}
+
+.mx-auto-verdict-menu__reviewer--active {
+  background: color-mix(in srgb, var(--mx-color-accent) 12%, transparent);
+  color: var(--mx-color-accent);
+}
+
+.mx-auto-verdict-menu__criteria {
+  color: var(--mx-color-text-secondary);
+  font-size: 0.7rem;
+}
+
+.mx-auto-verdict-menu__link {
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--mx-color-info);
+  font: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* Rev-log row for an auto verdict */
+.mx-revlog-tag--auto_verdict {
+  color: var(--mx-color-accent);
+  background: color-mix(in srgb, var(--mx-color-accent) 10%, transparent);
+}
+
+.mx-revlog-verdict {
+  font-weight: 600;
+  font-size: 0.7rem;
+}
+
+.mx-revlog-verdict--posted     { color: var(--mx-color-text-primary); }
+.mx-revlog-verdict--suppressed { color: var(--mx-color-warning); }
+.mx-revlog-verdict--error      { color: var(--mx-color-error); }
+.mx-revlog-verdict--skipped,
+.mx-revlog-verdict--pending    { color: var(--mx-color-text-secondary); }

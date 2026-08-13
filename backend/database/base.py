@@ -319,6 +319,51 @@ class Database:
                 ON audits(audit_timestamp DESC)
             """)
 
+            # Create auto_verdicts table (one row per review the auto-verdict evaluator handled).
+            # review_id is UNIQUE: the row is claimed before GitHub is contacted, so the
+            # constraint is what makes double-posting impossible when the watcher thread and
+            # the frontend poll notice the same completion.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS auto_verdicts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo TEXT NOT NULL,
+                    pr_number INTEGER NOT NULL,
+                    review_id INTEGER UNIQUE,
+                    event TEXT,
+                    outcome TEXT NOT NULL DEFAULT 'pending',
+                    reason TEXT,
+                    critical_count INTEGER,
+                    major_count INTEGER,
+                    minor_count INTEGER,
+                    criteria_json TEXT,
+                    head_commit_sha TEXT,
+                    error_detail TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (review_id) REFERENCES reviews(id)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_auto_verdicts_repo_pr
+                ON auto_verdicts(repo, pr_number)
+            """)
+
+            # Migration: Add auto-verdict arming columns to merge_queue for existing databases
+            cursor.execute("PRAGMA table_info(merge_queue)")
+            queue_columns = {row[1] for row in cursor.fetchall()}
+
+            queue_new_columns = [
+                ("auto_verdict_enabled", "INTEGER NOT NULL DEFAULT 0"),
+                ("auto_verdict_reviewer", "TEXT"),
+            ]
+
+            for col_name, col_type in queue_new_columns:
+                if col_name not in queue_columns:
+                    try:
+                        cursor.execute(f"ALTER TABLE merge_queue ADD COLUMN {col_name} {col_type}")
+                        logger.info(f"Added column {col_name} to merge_queue table")
+                    except sqlite3.OperationalError:
+                        pass
+
             # Migration: Add is_pinned column to swimlane_assignments for existing databases
             cursor.execute("PRAGMA table_info(swimlane_assignments)")
             swl_assign_columns = {row[1] for row in cursor.fetchall()}

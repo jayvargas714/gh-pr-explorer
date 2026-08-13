@@ -23,10 +23,11 @@ export type BadgeFilterKey =
   | 'ci:success' | 'ci:failure' | 'ci:pending'
   | 'has_review' | 'score:good' | 'score:ok' | 'score:bad'
   | 'new_commits' | 'reviewers_requested' | 'followup'
+  | 'auto:armed' | 'auto:posted' | 'auto:needs_approval'
 
 type BadgeDimension =
   | 'state' | 'draft' | 'review' | 'ci' | 'review_score'
-  | 'new_commits' | 'reviewers' | 'followup'
+  | 'new_commits' | 'reviewers' | 'followup' | 'auto_verdict'
 
 export const BADGE_DIMENSION: Record<BadgeFilterKey, BadgeDimension> = {
   'state:open': 'state',
@@ -46,6 +47,9 @@ export const BADGE_DIMENSION: Record<BadgeFilterKey, BadgeDimension> = {
   new_commits: 'new_commits',
   reviewers_requested: 'reviewers',
   followup: 'followup',
+  'auto:armed': 'auto_verdict',
+  'auto:posted': 'auto_verdict',
+  'auto:needs_approval': 'auto_verdict',
 }
 
 export type BadgeFilterMode = 'OR' | 'AND'
@@ -173,6 +177,9 @@ function cardMatchesBadge(card: MergeQueueItem, key: BadgeFilterKey): boolean {
     case 'new_commits':         return !!card.hasNewCommits
     case 'reviewers_requested': return (card.currentReviewers?.length ?? 0) > 0
     case 'followup':            return !!card.isFollowup
+    case 'auto:armed':          return !!card.autoVerdict?.enabled
+    case 'auto:posted':         return card.autoVerdict?.last?.outcome === 'posted'
+    case 'auto:needs_approval': return card.autoVerdict?.last?.outcome === 'suppressed'
   }
 }
 

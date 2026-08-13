@@ -9,7 +9,7 @@ import type { RevLogEntry } from '../../api/types'
  * timezone. Without the trailing "Z", `new Date` would parse the string as local
  * time and display the UTC wall-clock numbers, landing hours off.
  */
-function formatLocalDateTime(dbTimestamp: string): string {
+export function formatLocalDateTime(dbTimestamp: string): string {
   let s = dbTimestamp.trim().replace(' ', 'T')
   if (!/[zZ]|[+-]\d\d:?\d\d$/.test(s)) s += 'Z'
   const d = new Date(s)
@@ -35,6 +35,18 @@ const AGENT_META: Record<string, { label: string }> = {
   pb: { label: 'PB' },
   ed: { label: 'ED' },
   pb_ed: { label: 'PB/ED' },
+}
+
+const AUTO_EVENT_LABELS: Record<string, string> = {
+  APPROVE: '✓ approved',
+  REQUEST_CHANGES: '✗ changes requested',
+  COMMENT: '💬 comment',
+}
+
+const KIND_LABELS: Record<RevLogEntry['kind'], string> = {
+  review: 'REVIEW',
+  audit: 'AUDIT',
+  auto_verdict: 'AUTO',
 }
 
 function scoreClass(score: number): string {
@@ -63,6 +75,17 @@ export function RevLogBadge({ entries, onOpenReview, onOpenAudit }: RevLogBadgeP
   }
 
   const renderResult = (e: RevLogEntry) => {
+    // Auto verdicts carry an outcome (posted/suppressed/skipped/error) rather
+    // than the completed/failed status reviews and audits use.
+    if (e.kind === 'auto_verdict') {
+      return (
+        <span className="mx-revlog-result">
+          <span className={`mx-revlog-verdict mx-revlog-verdict--${e.status}`}>
+            {e.status === 'posted' ? AUTO_EVENT_LABELS[e.event ?? ''] ?? 'posted' : e.status}
+          </span>
+        </span>
+      )
+    }
     if (e.status !== 'completed') {
       return <span className="mx-revlog-status">{e.status}</span>
     }
@@ -110,10 +133,16 @@ export function RevLogBadge({ entries, onOpenReview, onOpenAudit }: RevLogBadgeP
                 key={`${e.kind}-${e.id}`}
                 type="button"
                 className="mx-revlog-row"
-                onClick={() => (e.kind === 'review' ? onOpenReview(e.id) : onOpenAudit(e.id))}
+                title={e.kind === 'auto_verdict' ? e.reason ?? undefined : undefined}
+                onClick={() => {
+                  if (e.kind === 'review') onOpenReview(e.id)
+                  else if (e.kind === 'audit') onOpenAudit(e.id)
+                  // Auto verdicts open the review they were derived from.
+                  else if (e.reviewId) onOpenReview(e.reviewId)
+                }}
               >
                 <span className={`mx-revlog-tag mx-revlog-tag--${e.kind}`}>
-                  {e.kind === 'review' ? 'REVIEW' : 'AUDIT'}
+                  {KIND_LABELS[e.kind]}
                 </span>
                 {renderResult(e)}
                 {e.reviewerAgent && AGENT_META[e.reviewerAgent] && (

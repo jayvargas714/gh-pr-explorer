@@ -113,6 +113,25 @@ def fetch_github_stats_api(owner, repo, endpoint, jq_query=None, max_retries=3, 
     return []
 
 
+_authenticated_login = None
+
+
+def get_authenticated_login():
+    """Login of the gh-authenticated user, cached for the process lifetime.
+
+    Used to detect self-authored PRs, which GitHub refuses to let you approve.
+    """
+    global _authenticated_login
+    if _authenticated_login is None:
+        try:
+            output = run_gh_command(["api", "user", "--jq", ".login"])
+            _authenticated_login = output.strip() or None
+        except RuntimeError as e:
+            logger.warning(f"Could not determine authenticated gh user: {e}")
+            return None
+    return _authenticated_login
+
+
 def fetch_pr_state(owner, repo, pr_number):
     """Fetch the current state of a PR from GitHub.
 

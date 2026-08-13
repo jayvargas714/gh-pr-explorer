@@ -1,10 +1,11 @@
-"""Settings routes: CRUD for user settings."""
+"""Settings routes: CRUD for user settings, plus the auto-verdict criteria."""
 
 from flask import Blueprint, jsonify, request
 
 from backend.extensions import logger
 from backend.database import get_settings_db
 from backend.routes import error_response
+from backend.services.auto_verdict_config import get_criteria, save_criteria
 
 settings_bp = Blueprint("settings", __name__)
 
@@ -18,6 +19,31 @@ def get_all_settings():
         return jsonify({"settings": settings})
     except Exception as e:
         return error_response("Internal server error", 500, f"Error getting settings: {e}")
+
+
+@settings_bp.route("/api/auto-verdict/config", methods=["GET"])
+def get_auto_verdict_config():
+    """Get the auto-verdict criteria (stored values merged over the defaults)."""
+    try:
+        return jsonify({"config": get_criteria()})
+    except Exception as e:
+        return error_response("Internal server error", 500, f"Error getting auto-verdict config: {e}")
+
+
+@settings_bp.route("/api/auto-verdict/config", methods=["PUT", "POST"])
+def set_auto_verdict_config():
+    """Update the auto-verdict criteria."""
+    try:
+        data = request.get_json()
+        if data is None:
+            return jsonify({"error": "Missing request body"}), 400
+        try:
+            config = save_criteria(data.get("config", data))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"config": config, "message": "Auto-verdict config saved"})
+    except Exception as e:
+        return error_response("Internal server error", 500, f"Error saving auto-verdict config: {e}")
 
 
 @settings_bp.route("/api/settings/<key>", methods=["GET"])

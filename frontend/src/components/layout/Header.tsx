@@ -1,11 +1,16 @@
+import { useState } from 'react'
 import { useUIStore } from '../../stores/useUIStore'
 import { useQueueStore } from '../../stores/useQueueStore'
+import { describeCriteria, useAutoVerdictStore } from '../../stores/useAutoVerdictStore'
+import { AutoVerdictConfigModal } from '../autoVerdict/AutoVerdictConfigModal'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
 
 export function Header() {
   const { darkMode, toggleTheme, toggleQueuePanel, toggleHistoryPanel, toggleSwimlaneBoard } = useUIStore()
   const queueCount = useQueueStore((state) => state.getQueueCount())
+  const autoVerdictConfig = useAutoVerdictStore((state) => state.config)
+  const [showAutoVerdictConfig, setShowAutoVerdictConfig] = useState(false)
 
   return (
     <header className="mx-header">
@@ -44,6 +49,22 @@ export function Header() {
           <span className="mx-icon">📊</span>
         </Button>
 
+        {/* Auto Verdict Criteria */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setShowAutoVerdictConfig(true)}
+          className="mx-header__action"
+          data-tooltip={`Auto Verdict Criteria — ${describeCriteria(autoVerdictConfig)}`}
+        >
+          <span className="mx-icon">🤖</span>
+          {autoVerdictConfig.enabled && (
+            <Badge variant="success" size="sm">
+              on
+            </Badge>
+          )}
+        </Button>
+
         {/* History Toggle */}
         <Button
           variant="ghost"
@@ -66,6 +87,10 @@ export function Header() {
           <span className="mx-icon">{darkMode ? '☀️' : '🌙'}</span>
         </Button>
       </div>
+
+      {showAutoVerdictConfig && (
+        <AutoVerdictConfigModal onClose={() => setShowAutoVerdictConfig(false)} />
+      )}
     </header>
   )
 }
