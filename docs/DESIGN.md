@@ -1598,7 +1598,7 @@ When a PR has **both** a completed review and a completed audit, the verdict mod
 
 ### Auto Verdicts
 
-Auto verdicts remove the manual click-path for the mechanical case: a PR card is **armed** with a 🤖 toggle, and when a review for that PR completes, the backend compares the review's issue counts against configurable thresholds and posts the verdict to GitHub itself. The full review report becomes the comment body. Every auto-generated verdict is badged in the UI so it can be audited after the fact.
+Auto verdicts remove the manual click-path for the mechanical case: a PR card is **armed** with a 🤖 toggle, and when a review for that PR completes, the backend compares the review's issue counts against configurable thresholds and posts the verdict to GitHub itself. The comment body is composed the same way a manually posted verdict is (summary, issue sections, recommendations — no score or metadata). Every auto-generated verdict is badged in the UI so it can be audited after the fact.
 
 #### How It Works
 
@@ -1638,7 +1638,7 @@ GitHub rejects `APPROVE` on your own PR with a 422, so a self-authored passing P
 
 #### Verdict Body
 
-The body is `json_to_markdown(content_json)` — the same canonical renderer the review viewer uses, so the posted comment is the full report: summary, every severity section with Location/Problem/Fix, highlights, recommendations, and score. It is truncated at 60 000 characters (GitHub's cap is 65 536) with a trailing notice. No inline comments are posted, and no auto-generated header is injected into the body; the auto-generated marker lives in the UI badge instead.
+The body is composed by `compose_report_body(content_json)` to match what the manual verdict modal posts by default: the summary, each severity section that has issues (with Location/Problem/Fix per issue), and recommendations, joined with horizontal rules. The report title, metadata block, positive highlights, and the 0-10 score are deliberately excluded so auto-posted verdicts are indistinguishable in format from manually posted ones. It is truncated at 60 000 characters (GitHub's cap is 65 536) with a trailing notice. No inline comments are posted, and no auto-generated header is injected into the body; the auto-generated marker lives in the UI badge instead.
 
 Note there is no per-issue resolved/dismissed state anywhere in the system, so "remaining issues" necessarily means *the issues in the latest review*. For a follow-up review that is already the remaining set.
 

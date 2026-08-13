@@ -118,6 +118,60 @@ def validate_review_json(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
 # JSON -> Markdown
 # ---------------------------------------------------------------------------
 
+def format_issue_lines(issues: List[Dict[str, Any]]) -> List[str]:
+    """Render a section's issues as markdown lines (numbered, with details)."""
+    lines: List[str] = []
+    for idx, issue in enumerate(issues, 1):
+        lines.append(f"**{idx}. {issue.get('title', 'Untitled')}**")
+        loc = issue.get("location", {})
+        loc_str = loc.get("file", "")
+        start = loc.get("start_line")
+        end = loc.get("end_line")
+        if start is not None and end is not None and start != end:
+            loc_str += f":{start}-{end}"
+        elif start is not None:
+            loc_str += f":{start}"
+        if loc_str:
+            lines.append(f"- Location: `{loc_str}`")
+        if issue.get("principle"):
+            lines.append(f"- Principle: {issue['principle']}")
+        if issue.get("problem"):
+            lines.append(f"- Problem: {issue['problem']}")
+        if issue.get("fix"):
+            lines.append(f"- Fix: {issue['fix']}")
+        if issue.get("code_snippet"):
+            lines.append("")
+            lines.append("```")
+            lines.append(issue["code_snippet"])
+            lines.append("```")
+        lines.append("")
+    return lines
+
+
+def format_recommendation_lines(recs: List[Dict[str, Any]]) -> List[str]:
+    """Render recommendations as markdown lines grouped by priority."""
+    lines: List[str] = []
+    priority_labels = {
+        "must_fix": "Must Fix Before Merge:",
+        "high": "High Priority:",
+        "medium": "Medium Priority:",
+        "low": "Low Priority:",
+    }
+    current_priority = None
+    rec_num = 1
+    for rec in recs:
+        p = rec.get("priority", "medium")
+        label = priority_labels.get(p, f"{p.title()}:")
+        if p != current_priority:
+            if current_priority is not None:
+                lines.append("")
+            lines.append(f"**{label}**")
+            current_priority = p
+        lines.append(f"{rec_num}. {rec.get('text', '')}")
+        rec_num += 1
+    return lines
+
+
 def json_to_markdown(review: Dict[str, Any]) -> str:
     """Convert a structured review JSON dict to clean markdown.
 
@@ -187,30 +241,7 @@ def json_to_markdown(review: Dict[str, Any]) -> str:
             lines.append("")
             continue
 
-        for idx, issue in enumerate(issues, 1):
-            lines.append(f"**{idx}. {issue.get('title', 'Untitled')}**")
-            loc = issue.get("location", {})
-            loc_str = loc.get("file", "")
-            start = loc.get("start_line")
-            end = loc.get("end_line")
-            if start is not None and end is not None and start != end:
-                loc_str += f":{start}-{end}"
-            elif start is not None:
-                loc_str += f":{start}"
-            if loc_str:
-                lines.append(f"- Location: `{loc_str}`")
-            if issue.get("principle"):
-                lines.append(f"- Principle: {issue['principle']}")
-            if issue.get("problem"):
-                lines.append(f"- Problem: {issue['problem']}")
-            if issue.get("fix"):
-                lines.append(f"- Fix: {issue['fix']}")
-            if issue.get("code_snippet"):
-                lines.append("")
-                lines.append("```")
-                lines.append(issue["code_snippet"])
-                lines.append("```")
-            lines.append("")
+        lines.extend(format_issue_lines(issues))
 
     # Highlights
     highlights = review.get("highlights", [])
@@ -230,24 +261,7 @@ def json_to_markdown(review: Dict[str, Any]) -> str:
         lines.append("")
         lines.append("**Recommendations**")
         lines.append("")
-        priority_labels = {
-            "must_fix": "Must Fix Before Merge:",
-            "high": "High Priority:",
-            "medium": "Medium Priority:",
-            "low": "Low Priority:",
-        }
-        current_priority = None
-        rec_num = 1
-        for rec in recs:
-            p = rec.get("priority", "medium")
-            label = priority_labels.get(p, f"{p.title()}:")
-            if p != current_priority:
-                if current_priority is not None:
-                    lines.append("")
-                lines.append(f"**{label}**")
-                current_priority = p
-            lines.append(f"{rec_num}. {rec.get('text', '')}")
-            rec_num += 1
+        lines.extend(format_recommendation_lines(recs))
         lines.append("")
 
     # Score

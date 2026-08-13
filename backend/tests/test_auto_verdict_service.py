@@ -130,6 +130,17 @@ def test_report_body_contains_summary_and_issues():
     assert "Minor Issues" in body
 
 
+def test_report_body_excludes_score_metadata_and_empty_sections():
+    """The auto verdict body must match a manually posted verdict: no title,
+    metadata block, or 0-10 score, and no 'None' entries for empty sections."""
+    body = compose_report_body(_review(critical=1))
+    assert "Score" not in body
+    assert "/10" not in body
+    assert "# Code Review" not in body
+    assert "**Repository**" not in body
+    assert "Major Concerns" not in body  # empty section is omitted, not 'None'
+
+
 def test_report_body_is_truncated_for_github():
     from backend.services import auto_verdict_service as svc
 

@@ -15,7 +15,11 @@ from backend.services.github_service import (
     fetch_pr_state_and_sha,
     get_authenticated_login,
 )
-from backend.services.review_schema import json_to_markdown
+from backend.services.review_schema import (
+    format_issue_lines,
+    format_recommendation_lines,
+    get_section_display_names,
+)
 from backend.services.verdict_service import post_verdict
 
 logger = logging.getLogger(__name__)
@@ -68,13 +72,35 @@ def evaluate_criteria(
 
 
 def compose_report_body(content_json: Dict[str, Any]) -> str:
-    """Render the full review report as the verdict body.
+    """Compose the verdict body the same way the manual verdict modal does.
 
-    Reuses the canonical renderer so the posted comment matches what the review
-    viewer shows: summary, every severity section with Location/Problem/Fix,
-    highlights, recommendations, and score.
+    Summary, each severity section that has issues, and recommendations —
+    joined with horizontal rules. Deliberately excludes the report title,
+    metadata block, highlights, and the 0-10 score so auto-posted verdicts
+    match manually posted ones.
     """
-    body = json_to_markdown(content_json)
+    parts = []
+
+    summary = (content_json.get("summary") or "").strip()
+    if summary:
+        parts.append(f"**Summary**\n\n{summary}")
+
+    section_names = get_section_display_names()
+    for section in content_json.get("sections", []) or []:
+        issues = section.get("issues") or []
+        if not issues:
+            continue
+        sec_type = section.get("type", "")
+        display_name = section.get("display_name") or section_names.get(sec_type, sec_type.title())
+        content = "\n".join(format_issue_lines(issues)).strip()
+        parts.append(f"**{display_name}**\n\n{content}")
+
+    recs = content_json.get("recommendations") or []
+    if recs:
+        content = "\n".join(format_recommendation_lines(recs)).strip()
+        parts.append(f"**Recommendations**\n\n{content}")
+
+    body = "\n\n---\n\n".join(parts)
     if len(body) > MAX_BODY_CHARS:
         body = body[:MAX_BODY_CHARS] + _TRUNCATION_NOTICE
     return body
