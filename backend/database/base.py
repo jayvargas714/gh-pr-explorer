@@ -391,6 +391,7 @@ class Database:
                 ("minor_posted_count", "INTEGER"),
                 ("minor_found_count", "INTEGER"),
                 ("reviewer_agent", "TEXT"),
+                ("auto_started", "BOOLEAN DEFAULT FALSE"),
             ]
 
             for col_name, col_type in review_new_columns:

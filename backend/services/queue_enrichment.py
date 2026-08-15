@@ -201,6 +201,7 @@ def build_rev_log(reviews, audits, auto_verdicts=None):
             "status": r["status"],
             "score": r.get("score"),
             "isFollowup": bool(r.get("is_followup", False)),
+            "autoStarted": bool(r.get("auto_started", False)),
         }
         if r.get("reviewer_agent"):
             entry["reviewerAgent"] = r["reviewer_agent"]

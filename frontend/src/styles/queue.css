@@ -1506,6 +1506,13 @@
   color: var(--mx-color-info);
 }
 
+.mx-revlog-autostart {
+  font-size: 0.65rem;
+  color: var(--mx-color-warning);
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
 .mx-revlog-blocking { color: var(--mx-color-error); }
 .mx-revlog-clean { color: var(--mx-color-text-secondary); }
 

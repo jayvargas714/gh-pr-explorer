@@ -227,6 +227,7 @@ CREATE TABLE reviews (
     parent_review_id INTEGER,
     head_commit_sha TEXT,
     inline_comments_posted BOOLEAN DEFAULT FALSE,
+    auto_started BOOLEAN DEFAULT FALSE,      -- Started by the auto follow-up review watcher
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (parent_review_id) REFERENCES reviews(id)
 );
@@ -1662,6 +1663,8 @@ With `autoFollowupReview` on, the loop closes completely for armed cards: review
 5. That head SHA has not already been attempted (in-memory `_attempted_shas` map, so a failed spawn is not retried every cycle; a restart may retry once).
 
 The review is started through `review_service.begin_review` — the same function `POST /api/reviews` uses — with `is_followup=True` and the card's armed reviewer agent (`auto_verdict_reviewer`), so previous-review lookup, prompt composition, and `active_reviews` registration are identical to a manually started follow-up. Loop safety needs no persistent state beyond the reviews table: a finished review (completed *or* failed) records the then-current head SHA, which clears the trigger condition itself.
+
+Auto-started reviews are marked for auditability: the watcher passes `auto_started=True` through `begin_review`, which carries it through `active_reviews` into the `reviews.auto_started` column (tracked `ALTER TABLE` migration). The flag surfaces as a `🤖 auto` chip on the review's rev-log entry, a `🤖 Auto-started` badge in the Review History panel, and an `auto_started` field on `GET /api/reviews` so an in-flight auto review is identifiable while still running.
 
 The setting is deliberately independent of the master `enabled` switch: `enabled` gates posting verdicts to GitHub, while `autoFollowupReview` only starts local reviews and posts nothing. Once the follow-up completes, the normal auto-verdict path evaluates it (subject to `enabled` as usual).
 

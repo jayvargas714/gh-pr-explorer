@@ -171,6 +171,11 @@ export function HistoryPanel() {
                       Follow-up
                     </Badge>
                   )}
+                  {review.auto_started && (
+                    <Badge variant="warning" size="sm">
+                      🤖 Auto-started
+                    </Badge>
+                  )}
                 </div>
               ))}
             </div>

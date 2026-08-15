@@ -165,7 +165,8 @@ def save_review_to_db(key, review, status, reviews_db):
                 parent_review_id=parent_review_id,
                 head_commit_sha=head_commit_sha,
                 pr_state_at_review=pr_state_at_review,
-                reviewer_agent=reviewer_agent
+                reviewer_agent=reviewer_agent,
+                auto_started=review.get("auto_started", False)
             )
             logger.info(f"Saved review to database for {key}")
             return review_id
@@ -246,7 +247,8 @@ VALID_REVIEWER_TYPES = ("default", "pb", "ed")
 
 def begin_review(owner, repo, pr_number, pr_url, reviews_db,
                  is_followup=False, previous_review_id=None,
-                 pr_title=None, pr_author=None, reviewer_type="default"):
+                 pr_title=None, pr_author=None, reviewer_type="default",
+                 auto_started=False):
     """Start a review and register it in active_reviews.
 
     Shared by the POST /api/reviews route and the auto follow-up review
@@ -309,7 +311,8 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
             "parent_review_id": parent_id,
             "pr_title": pr_title,
             "pr_author": pr_author,
-            "reviewer_type": reviewer_type
+            "reviewer_type": reviewer_type,
+            "auto_started": auto_started
         }
 
     return {

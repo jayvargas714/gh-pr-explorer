@@ -55,28 +55,28 @@ Keep `docs/DESIGN.md` updated whenever any design aspect changes, and update the
 | **Architecture** | 41 | System diagram, data flow |
 | — Backend Components (Flask) | 117 | Package layout, services, filters, visualizers, cache, 12 route blueprints |
 | — Database Module | 186 | DB classes, full SQL schema, per-class method tables |
-| — Data Migration Module | 516 | One-time legacy JSON/markdown import |
-| — Frontend (React + TS) | 536 | Dir layout, 4-tab + analytics sub-tab architecture |
-| — Styling | 571 | Matrix UI design system, CSS conventions |
-| **Features** | 590 | (one ### per feature below) |
-| — PR List Pagination | 609 | Client-side paging |
-| — PR Filtering System | 635 | 5 filter tabs (Basic/Review/People/Dates/Advanced) |
-| — Analytics (Stats / Lifecycle / Activity / Contributors / Reviews) | 696–820 | Developer + repo analytics sub-tabs |
-| — CI/Workflows Tab | 850 | Workflow runs table, filters, stats |
-| — PR Card Status Badges | 914 | Review/CI/divergence/approved-by-me badges |
-| — Settings Persistence | 982 | DB-backed filter/selection restore |
-| — Repo Stats Tab | 1000 | Repo-level stats, languages, LOC |
-| — Review History | 1029 | Past-review browser, score badges |
-| — PR Timelines | 1074 | Single-PR event timeline modal |
-| — Merge Queue | 1148 | Prioritized cross-repo PR queue |
-| — Swimlane Board (Kanban) | 1227 | Lane CRUD, DnD, badge filtering |
-| — Code Review System (Claude CLI) | 1373 | Reviewer agents, subprocess flow, split Review/Audit triggers |
-| — Inline Comments Posting | 1478 | Post critical issues to GitHub |
-| — Review Verdict | 1526 | Approve/Request-Changes/Comment composer, verdict source toggle |
-| — Auto Verdicts | 1599 | Armed cards, criteria thresholds, auto approve/changes-requested, watcher threads, auto follow-up reviews |
-| **API Endpoints** | 1705 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2344 |
-| **Configuration** | 3123 | `config.json` options |
-| **Technical Details** | 3166 | gh CLI integration, caching, parallel fetch, logging, Review JSON Schema (3425) |
-| **Future Considerations** | 3596 | Improvements, known limitations |
-| **Appendix** | 3658 | Dependencies, file structure, run instructions |
+| — Data Migration Module | 517 | One-time legacy JSON/markdown import |
+| — Frontend (React + TS) | 537 | Dir layout, 4-tab + analytics sub-tab architecture |
+| — Styling | 572 | Matrix UI design system, CSS conventions |
+| **Features** | 591 | (one ### per feature below) |
+| — PR List Pagination | 610 | Client-side paging |
+| — PR Filtering System | 636 | 5 filter tabs (Basic/Review/People/Dates/Advanced) |
+| — Analytics (Stats / Lifecycle / Activity / Contributors / Reviews) | 697–821 | Developer + repo analytics sub-tabs |
+| — CI/Workflows Tab | 851 | Workflow runs table, filters, stats |
+| — PR Card Status Badges | 915 | Review/CI/divergence/approved-by-me badges |
+| — Settings Persistence | 983 | DB-backed filter/selection restore |
+| — Repo Stats Tab | 1001 | Repo-level stats, languages, LOC |
+| — Review History | 1030 | Past-review browser, score badges |
+| — PR Timelines | 1075 | Single-PR event timeline modal |
+| — Merge Queue | 1149 | Prioritized cross-repo PR queue |
+| — Swimlane Board (Kanban) | 1228 | Lane CRUD, DnD, badge filtering |
+| — Code Review System (Claude CLI) | 1374 | Reviewer agents, subprocess flow, split Review/Audit triggers |
+| — Inline Comments Posting | 1479 | Post critical issues to GitHub |
+| — Review Verdict | 1527 | Approve/Request-Changes/Comment composer, verdict source toggle |
+| — Auto Verdicts | 1600 | Armed cards, criteria thresholds, auto approve/changes-requested, watcher threads, auto follow-up reviews |
+| **API Endpoints** | 1708 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2347 |
+| **Configuration** | 3126 | `config.json` options |
+| **Technical Details** | 3169 | gh CLI integration, caching, parallel fetch, logging, Review JSON Schema (3428) |
+| **Future Considerations** | 3599 | Improvements, known limitations |
+| **Appendix** | 3661 | Dependencies, file structure, run instructions |
 

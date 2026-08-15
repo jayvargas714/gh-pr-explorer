@@ -318,6 +318,7 @@ export interface RevLogEntry {
   status: string
   score?: number | null      // reviews only
   isFollowup?: boolean        // reviews only
+  autoStarted?: boolean       // reviews only: started by the auto follow-up watcher
   findingCount?: number       // audits only
   blockingCount?: number      // audits only
   reviewerAgent?: string      // reviewer agent code (default/pb/ed; pb_ed for audits)
@@ -446,6 +447,7 @@ export interface ReviewHistoryItem {
   score: number | null
   is_followup: boolean
   parent_review_id: number | null
+  auto_started?: boolean
 }
 
 // ============================================================================

@@ -87,7 +87,14 @@ export function RevLogBadge({ entries, onOpenReview, onOpenAudit }: RevLogBadgeP
       )
     }
     if (e.status !== 'completed') {
-      return <span className="mx-revlog-status">{e.status}</span>
+      return (
+        <span className="mx-revlog-status">
+          {e.status}
+          {e.kind === 'review' && e.autoStarted && (
+            <span className="mx-revlog-autostart">🤖 auto</span>
+          )}
+        </span>
+      )
     }
     if (e.kind === 'review') {
       return (
@@ -98,6 +105,7 @@ export function RevLogBadge({ entries, onOpenReview, onOpenAudit }: RevLogBadgeP
             <span className="mx-revlog-score mx-revlog-score--neutral">no score</span>
           )}
           {e.isFollowup && <span className="mx-revlog-followup">follow-up</span>}
+          {e.autoStarted && <span className="mx-revlog-autostart">🤖 auto</span>}
         </span>
       )
     }

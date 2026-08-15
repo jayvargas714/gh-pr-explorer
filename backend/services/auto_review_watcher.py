@@ -80,6 +80,7 @@ def scan_and_start_followups():
         payload, status = begin_review(
             owner, repo, pr_number, item["pr_url"], reviews_db,
             is_followup=True,
+            auto_started=True,
             pr_title=item.get("pr_title"),
             pr_author=item.get("pr_author"),
             reviewer_type=reviewer_type,

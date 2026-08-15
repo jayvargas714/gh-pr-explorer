@@ -85,6 +85,7 @@ def test_new_commits_start_a_followup_with_the_armed_reviewer(harness):
     start = harness.started[0]
     assert start["key"] == f"{REPO}/{PR}"
     assert start["is_followup"] is True
+    assert start["auto_started"] is True
     assert start["reviewer_type"] == "ed"
 
 

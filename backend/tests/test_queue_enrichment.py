@@ -16,7 +16,17 @@ def test_reviews_mapped_with_summary_fields():
     assert log == [{
         "kind": "review", "id": 7, "timestamp": "2026-06-09 14:00:00",
         "status": "completed", "score": 8.0, "isFollowup": True,
+        "autoStarted": False,
     }]
+
+
+def test_review_marks_auto_started():
+    reviews = [{
+        "id": 12, "review_timestamp": "2026-06-09 14:00:00", "status": "completed",
+        "score": 8.0, "is_followup": 1, "auto_started": 1,
+    }]
+    log = build_rev_log(reviews, [])
+    assert log[0]["autoStarted"] is True
 
 
 def test_audits_mapped_with_summary_fields():
