@@ -325,6 +325,10 @@ export interface RevLogEntry {
   event?: string | null       // auto verdicts only: APPROVE/REQUEST_CHANGES/COMMENT
   reason?: string | null      // auto verdicts only: the criteria evaluation
   reviewId?: number | null    // auto verdicts only: the review that triggered it
+  // Reviews only: auto verdict derived from this review, folded into the row
+  verdictOutcome?: string | null  // posted/suppressed/skipped/error
+  verdictEvent?: string | null    // APPROVE/REQUEST_CHANGES/COMMENT
+  verdictReason?: string | null   // the criteria evaluation
 }
 
 // ============================================================================

@@ -955,7 +955,7 @@ When the badge shows **CI failed**, hovering it opens a portal-rendered popover 
 
 Merge-queue and swimlane cards carry a neutral **`rev log (N)`** badge in the title row (after the CI badge), shown only when the PR has at least one review or audit. Hovering it opens a portal-rendered popover (same hover/positioning mechanics as `CIStatusBadge`) that lists every review **and** audit run for the PR, newest-first. Each row shows a `REVIEW`/`AUDIT` tag, the result (review → color-coded `N/10` plus a `follow-up` marker when applicable; audit → `N findings · M blocking`, blocking count in red when non-zero), a **reviewer-agent chip** (`Code`/`PB`/`ED` for reviews, `PB/ED` for audits), and the absolute date + time the run completed. The agent chip is driven by the `reviewer_agent` column persisted on each review (the reviewer-picker choice) and by the fixed `pb_ed` audit type; reviews recorded before the column existed have no stored agent and render no chip. Non-`completed` runs show their status (`running`, `failed`, `cancelled`) in place of a result. Rows are clickable: review rows open the review viewer (`openReviewViewer`), audit rows open the `AuditViewer`.
 
-The data is bundled into each card payload by `backend/services/queue_enrichment.py` via the pure `build_rev_log(reviews, audits)` helper (merges `reviews_db.get_reviews_for_pr` + `audits_db.get_audits_for_pr` into a newest-first `revLog` array), so the popover renders without an extra fetch. Rendered by the shared `RevLogBadge` component, so the merge queue panel and the swimlane board behave identically.
+The data is bundled into each card payload by `backend/services/queue_enrichment.py` via the pure `build_rev_log(reviews, audits, auto_verdicts)` helper (merges `reviews_db.get_reviews_for_pr` + `audits_db.get_audits_for_pr` + `auto_verdicts_db.get_for_pr` into a newest-first `revLog` array), so the popover renders without an extra fetch. Auto verdicts are folded into the review entry they were derived from (`verdictOutcome`/`verdictEvent`/`verdictReason` on the review entry), so each review round occupies a single popover row; a verdict only becomes its own `AUTO`-tagged entry when its parent review is not in the list. Rendered by the shared `RevLogBadge` component, so the merge queue panel and the swimlane board behave identically.
 
 #### Branch Divergence Badge
 
@@ -1608,7 +1608,7 @@ Auto verdicts remove the manual click-path for the mechanical case: a PR card is
 3. A review completes — started from anywhere, by any surface.
 4. `check_review_status` saves the review, then spawns a thread running `maybe_post_auto_verdict` (`backend/services/auto_verdict_service.py`).
 5. The evaluator counts issues per severity, compares against the criteria, and posts `REQUEST_CHANGES`, `APPROVE`, `COMMENT`, or nothing.
-6. The decision is recorded in the `auto_verdicts` table and surfaces on the card as a badge plus a rev-log entry.
+6. The decision is recorded in the `auto_verdicts` table and surfaces on the card as a badge plus a verdict chip on the triggering review's rev-log row.
 
 #### Criteria
 
@@ -1695,7 +1695,7 @@ auto_verdict_reviewer TEXT      -- 'default' | 'pb' | 'ed'
 | `AutoVerdictConfigModal` | Overlay | The criteria panel: master toggle, three threshold inputs, auto-approve toggle, auto follow-up review toggle, Cancel/Save |
 | `AutoVerdictBadge` | Card badge row | Outcome badge with a tooltip carrying the reason, tallies, and local timestamp |
 | 🤖 header button | Header | Opens the criteria panel; shows an `on` chip while the master switch is enabled |
-| `RevLogBadge` | Card rev-log popover | Renders `auto_verdict` entries with an `AUTO` tag; clicking one opens the review it was derived from |
+| `RevLogBadge` | Card rev-log popover | Shows the verdict as a chip on the triggering review's row (reason in the tooltip); orphaned verdicts render as standalone `AUTO`-tagged entries whose click opens the derived-from review |
 
 Badge variants: `🤖 auto ✗ changes requested` (error), `🤖 auto ✓ approved` (success), `🤖 auto 💬 comment` (info), `🤖 passed — approve manually` (warning), `🤖 auto verdict failed` (error), `🤖 auto skipped` (neutral).
 

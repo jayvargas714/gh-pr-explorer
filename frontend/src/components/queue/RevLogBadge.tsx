@@ -106,6 +106,13 @@ export function RevLogBadge({ entries, onOpenReview, onOpenAudit }: RevLogBadgeP
           )}
           {e.isFollowup && <span className="mx-revlog-followup">follow-up</span>}
           {e.autoStarted && <span className="mx-revlog-autostart">🤖 auto</span>}
+          {e.verdictOutcome && (
+            <span className={`mx-revlog-verdict mx-revlog-verdict--${e.verdictOutcome}`}>
+              {e.verdictOutcome === 'posted'
+                ? AUTO_EVENT_LABELS[e.verdictEvent ?? ''] ?? 'posted'
+                : e.verdictOutcome}
+            </span>
+          )}
         </span>
       )
     }
@@ -141,7 +148,11 @@ export function RevLogBadge({ entries, onOpenReview, onOpenAudit }: RevLogBadgeP
                 key={`${e.kind}-${e.id}`}
                 type="button"
                 className="mx-revlog-row"
-                title={e.kind === 'auto_verdict' ? e.reason ?? undefined : undefined}
+                title={
+                  e.kind === 'auto_verdict'
+                    ? e.reason ?? undefined
+                    : e.verdictReason ?? undefined
+                }
                 onClick={() => {
                   if (e.kind === 'review') onOpenReview(e.id)
                   else if (e.kind === 'audit') onOpenAudit(e.id)

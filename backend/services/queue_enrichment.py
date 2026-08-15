@@ -190,9 +190,13 @@ def _format_auto_verdict(row):
 def build_rev_log(reviews, audits, auto_verdicts=None):
     """Merge review + audit + auto-verdict rows into one newest-first summary list.
 
-    Each entry carries only summary fields (no content_json parsing).
+    Auto verdicts are folded into the review entry they were derived from
+    (verdictEvent/verdictOutcome/verdictReason), so each review round occupies a
+    single entry. A verdict only gets its own entry when its review is not in
+    the list. Each entry carries only summary fields (no content_json parsing).
     """
     entries = []
+    review_by_id = {}
     for r in reviews:
         entry = {
             "kind": "review",
@@ -206,6 +210,7 @@ def build_rev_log(reviews, audits, auto_verdicts=None):
         if r.get("reviewer_agent"):
             entry["reviewerAgent"] = r["reviewer_agent"]
         entries.append(entry)
+        review_by_id[r["id"]] = entry
     for a in audits:
         entries.append({
             "kind": "audit",
@@ -217,6 +222,15 @@ def build_rev_log(reviews, audits, auto_verdicts=None):
             "reviewerAgent": "pb_ed",
         })
     for v in auto_verdicts or []:
+        parent = review_by_id.get(v.get("review_id"))
+        if parent is not None and "verdictOutcome" not in parent:
+            # Verdicts arrive newest-first, so the first match is the latest
+            # verdict for that review; any older duplicates fall through to
+            # standalone entries below.
+            parent["verdictOutcome"] = v.get("outcome")
+            parent["verdictEvent"] = v.get("event")
+            parent["verdictReason"] = v.get("reason")
+            continue
         entries.append({
             "kind": "auto_verdict",
             "id": v["id"],
