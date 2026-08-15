@@ -9,6 +9,7 @@ export const DEFAULT_AUTO_VERDICT_CONFIG: AutoVerdictConfig = {
   maxMajor: 0,
   maxMinor: 99,
   allowAutoApprove: false,
+  autoFollowupReview: false,
 }
 
 interface AutoVerdictState {

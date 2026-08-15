@@ -340,6 +340,7 @@ export interface AutoVerdictConfig {
   maxMajor: number
   maxMinor: number
   allowAutoApprove: boolean
+  autoFollowupReview: boolean
 }
 
 export type AutoVerdictOutcome = 'pending' | 'posted' | 'suppressed' | 'skipped' | 'error'

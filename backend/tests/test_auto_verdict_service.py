@@ -160,6 +160,11 @@ def test_validate_criteria_coerces_and_fills_defaults():
     assert result["maxMinor"] == DEFAULT_CRITERIA["maxMinor"]
 
 
+def test_validate_criteria_coerces_auto_followup_review():
+    assert validate_criteria({})["autoFollowupReview"] is False
+    assert validate_criteria({"autoFollowupReview": 1})["autoFollowupReview"] is True
+
+
 def test_validate_criteria_rejects_negative_thresholds():
     with pytest.raises(ValueError):
         validate_criteria({"maxMajor": -1})

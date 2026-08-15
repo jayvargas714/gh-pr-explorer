@@ -18,10 +18,11 @@ DEFAULT_CRITERIA: Dict[str, Any] = {
     "maxMajor": 0,
     "maxMinor": 99,
     "allowAutoApprove": False,
+    "autoFollowupReview": False,
 }
 
 _INT_KEYS = ("maxCritical", "maxMajor", "maxMinor")
-_BOOL_KEYS = ("enabled", "allowAutoApprove")
+_BOOL_KEYS = ("enabled", "allowAutoApprove", "autoFollowupReview")
 
 
 def get_criteria() -> Dict[str, Any]:

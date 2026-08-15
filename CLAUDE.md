@@ -73,10 +73,10 @@ Keep `docs/DESIGN.md` updated whenever any design aspect changes, and update the
 | — Code Review System (Claude CLI) | 1373 | Reviewer agents, subprocess flow, split Review/Audit triggers |
 | — Inline Comments Posting | 1478 | Post critical issues to GitHub |
 | — Review Verdict | 1526 | Approve/Request-Changes/Comment composer, verdict source toggle |
-| — Auto Verdicts | 1599 | Armed cards, criteria thresholds, auto approve/changes-requested, watcher thread |
-| **API Endpoints** | 1690 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2329 |
-| **Configuration** | 3106 | `config.json` options |
-| **Technical Details** | 3149 | gh CLI integration, caching, parallel fetch, logging, Review JSON Schema (3408) |
-| **Future Considerations** | 3579 | Improvements, known limitations |
-| **Appendix** | 3641 | Dependencies, file structure, run instructions |
+| — Auto Verdicts | 1599 | Armed cards, criteria thresholds, auto approve/changes-requested, watcher threads, auto follow-up reviews |
+| **API Endpoints** | 1705 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2344 |
+| **Configuration** | 3123 | `config.json` options |
+| **Technical Details** | 3166 | gh CLI integration, caching, parallel fetch, logging, Review JSON Schema (3425) |
+| **Future Considerations** | 3596 | Improvements, known limitations |
+| **Appendix** | 3658 | Dependencies, file structure, run instructions |
 

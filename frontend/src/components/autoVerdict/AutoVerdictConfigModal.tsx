@@ -110,6 +110,20 @@ export function AutoVerdictConfigModal({ onClose }: AutoVerdictConfigModalProps)
           </small>
         </div>
 
+        <div className="mx-auto-verdict-config__switches">
+          <Toggle
+            checked={draft.autoFollowupReview}
+            onChange={(autoFollowupReview) => setDraft({ ...draft, autoFollowupReview })}
+            label="Auto follow-up review on new commits"
+            disabled={saving}
+          />
+          <small className="mx-auto-verdict-config__hint">
+            When an armed PR gets new commits after a review, a follow-up review starts
+            automatically with the card's armed reviewer. Independent of the master
+            switch — it starts reviews but never posts anything itself.
+          </small>
+        </div>
+
         <div className="mx-auto-verdict-config__actions">
           <Button variant="ghost" onClick={onClose} disabled={saving}>
             Cancel

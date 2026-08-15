@@ -8,7 +8,7 @@ from flask import Blueprint, jsonify, request
 from backend.extensions import logger, active_reviews, reviews_lock
 from backend.database import get_reviews_db
 from backend.services.github_service import fetch_pr_head_sha
-from backend.services.review_service import save_review_to_db, check_review_status, start_review_process
+from backend.services.review_service import save_review_to_db, check_review_status, begin_review
 from backend.services.inline_comments_service import post_inline_comments, preview_section_issues
 from backend.services.verdict_service import post_verdict
 from backend.routes import error_response
@@ -82,64 +82,15 @@ def start_review():
 
         logger.info(f"Received {'follow-up ' if is_followup else ''}review request for {key} (reviewer={reviewer_type})")
 
-        with reviews_lock:
-            if key in active_reviews:
-                existing = active_reviews[key]
-                if existing["status"] == "running":
-                    logger.warning(f"Review already in progress for {key}")
-                    return jsonify({"error": "Review already in progress for this PR"}), 409
-
-        previous_review_content = None
-        parent_id = None
-        if is_followup:
-            full_repo = f"{owner}/{repo}"
-            if previous_review_id:
-                prev_review = reviews_db.get_review(previous_review_id)
-                if prev_review:
-                    previous_review_content = prev_review.get("content_json")
-                    parent_id = previous_review_id
-            else:
-                prev_review = reviews_db.get_latest_review_for_pr(full_repo, pr_number)
-                if prev_review:
-                    previous_review_content = prev_review.get("content_json")
-                    parent_id = prev_review.get("id")
-
-            if not previous_review_content:
-                logger.warning(f"No previous review found for follow-up, proceeding as normal review")
-                is_followup = False
-
-        process, result, is_followup = start_review_process(
-            pr_url, owner, repo, pr_number,
+        payload, status = begin_review(
+            owner, repo, pr_number, pr_url, reviews_db,
             is_followup=is_followup,
-            previous_review_content=previous_review_content,
+            previous_review_id=previous_review_id,
+            pr_title=pr_title,
+            pr_author=pr_author,
             reviewer_type=reviewer_type,
         )
-
-        if process is None:
-            logger.error(f"Failed to start review for {key}: {result}")
-            return jsonify({"error": result}), 500
-
-        with reviews_lock:
-            active_reviews[key] = {
-                "process": process,
-                "status": "running",
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "pr_url": pr_url,
-                "review_file": result,
-                "is_followup": is_followup,
-                "parent_review_id": parent_id,
-                "pr_title": pr_title,
-                "pr_author": pr_author,
-                "reviewer_type": reviewer_type
-            }
-
-        return jsonify({
-            "message": "Review started",
-            "key": key,
-            "status": "running",
-            "review_file": result,
-            "is_followup": is_followup
-        }), 201
+        return jsonify(payload), status
 
     except Exception as e:
         logger.exception(f"Unexpected error starting review: {e}")

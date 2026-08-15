@@ -1620,6 +1620,7 @@ Stored as the `auto_verdict_config` key in `user_settings`. Defaults live in exa
 | `maxMajor` | `0` | Major issues tolerated. |
 | `maxMinor` | `99` | Minor issues tolerated — effectively unlimited, so minors alone never block. |
 | `allowAutoApprove` | `false` | When off, a passing review posts nothing; only changes-requested is automated. |
+| `autoFollowupReview` | `false` | When on, an armed PR that gets new commits after a review automatically starts a follow-up review. Independent of `enabled` — it starts reviews but never posts to GitHub itself. |
 
 Thresholds are **inclusive upper bounds**: `maxMajor: 1` allows one major and trips on two. Both switches default off so installing the feature cannot post anything until deliberately enabled.
 
@@ -1650,6 +1651,20 @@ Note there is no per-issue resolved/dismissed state anywhere in the system, so "
 
 `check_review_status` only runs when the frontend polls `GET /api/reviews`, so with no browser tab open a finished review was previously neither persisted nor verdicted until someone reopened the app. `auto_verdict_watcher_loop` (`backend/services/auto_verdict_watcher.py`) polls `check_review_status` for every key in `active_reviews` every 10 seconds. It starts as a daemon thread from `app.py` alongside the existing startup cache-refresh threads, guarded on `WERKZEUG_RUN_MAIN` so Flask's reloader cannot double-start it in debug mode. This also fixes the pre-existing persistence gap for reviews that finish after the tab closes.
 
+#### Auto Follow-Up Reviews
+
+With `autoFollowupReview` on, the loop closes completely for armed cards: review → auto verdict → author pushes fixes → follow-up review → auto verdict again. `auto_review_watcher_loop` (`backend/services/auto_review_watcher.py`) is a second daemon thread (60-second interval, same `WERKZEUG_RUN_MAIN` guard) whose `scan_and_start_followups` pass walks every `merge_queue` row with `auto_verdict_enabled` and starts a follow-up review when **all** of the following hold:
+
+1. No review is currently running for the PR (`active_reviews` check, before any gh call).
+2. The PR has at least one saved review — auto-started reviews are always follow-ups; a first review stays a human action.
+3. The latest review recorded a `head_commit_sha`. An unknown baseline is skipped rather than guessed, because triggering without one could re-review a PR with no new commits.
+4. One `fetch_pr_state_and_sha` call reports the PR is `OPEN` and its head SHA differs from the recorded one — the exact signal behind the "new commits" badge.
+5. That head SHA has not already been attempted (in-memory `_attempted_shas` map, so a failed spawn is not retried every cycle; a restart may retry once).
+
+The review is started through `review_service.begin_review` — the same function `POST /api/reviews` uses — with `is_followup=True` and the card's armed reviewer agent (`auto_verdict_reviewer`), so previous-review lookup, prompt composition, and `active_reviews` registration are identical to a manually started follow-up. Loop safety needs no persistent state beyond the reviews table: a finished review (completed *or* failed) records the then-current head SHA, which clears the trigger condition itself.
+
+The setting is deliberately independent of the master `enabled` switch: `enabled` gates posting verdicts to GitHub, while `autoFollowupReview` only starts local reviews and posts nothing. Once the follow-up completes, the normal auto-verdict path evaluates it (subject to `enabled` as usual).
+
 #### Persistence
 
 ```sql
@@ -1674,7 +1689,7 @@ auto_verdict_reviewer TEXT      -- 'default' | 'pb' | 'ed'
 | Component | Location | Description |
 |-----------|----------|-------------|
 | `AutoVerdictToggle` | Queue / swimlane card action row | `🤖 Auto` button, `--active` when armed. Opens a popover with arm/disarm, a reviewer-agent radio group, the effective criteria, and an "Edit criteria…" link |
-| `AutoVerdictConfigModal` | Overlay | The criteria panel: master toggle, three threshold inputs, auto-approve toggle, Cancel/Save |
+| `AutoVerdictConfigModal` | Overlay | The criteria panel: master toggle, three threshold inputs, auto-approve toggle, auto follow-up review toggle, Cancel/Save |
 | `AutoVerdictBadge` | Card badge row | Outcome badge with a tooltip carrying the reason, tallies, and local timestamp |
 | 🤖 header button | Header | Opens the criteria panel; shows an `on` chip while the master switch is enabled |
 | `RevLogBadge` | Card rev-log popover | Renders `auto_verdict` entries with an `AUTO` tag; clicking one opens the review it was derived from |
@@ -2340,7 +2355,8 @@ Returns the global auto-verdict criteria, stored values merged over `DEFAULT_CRI
     "maxCritical": 0,
     "maxMajor": 0,
     "maxMinor": 99,
-    "allowAutoApprove": false
+    "allowAutoApprove": false,
+    "autoFollowupReview": false
   }
 }
 ```
@@ -2360,7 +2376,8 @@ back to their defaults. Also accepts POST. The payload may be sent either wrappe
     "maxCritical": 0,
     "maxMajor": 1,
     "maxMinor": 99,
-    "allowAutoApprove": false
+    "allowAutoApprove": false,
+    "autoFollowupReview": false
   }
 }
 ```

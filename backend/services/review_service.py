@@ -244,6 +244,83 @@ def _spawn_auto_verdict(key, review_id):
 VALID_REVIEWER_TYPES = ("default", "pb", "ed")
 
 
+def begin_review(owner, repo, pr_number, pr_url, reviews_db,
+                 is_followup=False, previous_review_id=None,
+                 pr_title=None, pr_author=None, reviewer_type="default"):
+    """Start a review and register it in active_reviews.
+
+    Shared by the POST /api/reviews route and the auto follow-up review
+    watcher so both paths keep identical semantics (previous-review lookup,
+    fallback to a normal review, duplicate-run rejection).
+
+    Returns:
+        tuple: (payload dict, status) where status is 201 on success,
+        409 if a review is already running for this PR, 500 on spawn failure.
+    """
+    from backend.extensions import active_reviews, reviews_lock
+
+    key = f"{owner}/{repo}/{pr_number}"
+
+    with reviews_lock:
+        if key in active_reviews:
+            existing = active_reviews[key]
+            if existing["status"] == "running":
+                logger.warning(f"Review already in progress for {key}")
+                return {"error": "Review already in progress for this PR"}, 409
+
+    previous_review_content = None
+    parent_id = None
+    if is_followup:
+        full_repo = f"{owner}/{repo}"
+        if previous_review_id:
+            prev_review = reviews_db.get_review(previous_review_id)
+            if prev_review:
+                previous_review_content = prev_review.get("content_json")
+                parent_id = previous_review_id
+        else:
+            prev_review = reviews_db.get_latest_review_for_pr(full_repo, pr_number)
+            if prev_review:
+                previous_review_content = prev_review.get("content_json")
+                parent_id = prev_review.get("id")
+
+        if not previous_review_content:
+            logger.warning(f"No previous review found for follow-up, proceeding as normal review")
+            is_followup = False
+
+    process, result, is_followup = start_review_process(
+        pr_url, owner, repo, pr_number,
+        is_followup=is_followup,
+        previous_review_content=previous_review_content,
+        reviewer_type=reviewer_type,
+    )
+
+    if process is None:
+        logger.error(f"Failed to start review for {key}: {result}")
+        return {"error": result}, 500
+
+    with reviews_lock:
+        active_reviews[key] = {
+            "process": process,
+            "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "pr_url": pr_url,
+            "review_file": result,
+            "is_followup": is_followup,
+            "parent_review_id": parent_id,
+            "pr_title": pr_title,
+            "pr_author": pr_author,
+            "reviewer_type": reviewer_type
+        }
+
+    return {
+        "message": "Review started",
+        "key": key,
+        "status": "running",
+        "review_file": result,
+        "is_followup": is_followup
+    }, 201
+
+
 def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, previous_review_content=None, reviewer_type="default"):
     """Start a Claude CLI review process in the background.
 
