@@ -10,6 +10,7 @@ from pathlib import Path
 
 from backend.config import get_reviews_dir
 from backend.services.github_service import fetch_pr_head_sha, fetch_pr_state
+from backend.services.review_started_service import post_review_started_comment
 from backend.services.review_schema import (
     extract_markdown_summary,
     markdown_to_json,
@@ -314,6 +315,13 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
             "reviewer_type": reviewer_type,
             "auto_started": auto_started
         }
+
+    post_review_started_comment(
+        owner, repo, pr_number,
+        is_followup=is_followup,
+        reviewer_type=reviewer_type,
+        auto_started=auto_started,
+    )
 
     return {
         "message": "Review started",

@@ -1391,6 +1391,18 @@ The Code Review feature integrates with Claude CLI to perform automated code rev
 
 The reviewer choice is plumbed through the `reviewer_type` field on `POST /api/reviews` (`"default"`, `"pb"`, or `"ed"`). When `"pb"` is selected, the prompt invokes the `product-brief-reviewer` agent and asks it to identify and review the PB-NNN brief file(s) touched in the PR diff. When `"ed"` is selected, the prompt invokes the `ed-reviewer` agent and asks it to identify and review the ED-NNN engineering design file(s) under `docs/designs/` touched in the PR diff. All three reviewers must emit the same JSON schema and write to the same `.md` + `.json` paths so downstream parsing, inline-comment posting, and verdict composition are reviewer-agnostic.
 
+#### Review Underway PR Comment
+
+When a review starts, GitHub PR Explorer posts a plain conversation comment to the PR announcing that a review is in progress, so anyone watching the PR knows work is underway before any results land.
+
+- **Where**: `backend/services/review_started_service.py`, called from `begin_review()` in `review_service.py` after the Claude CLI subprocess spawns successfully and the review is registered in `active_reviews`. Because both `POST /api/reviews` and the auto follow-up watcher funnel through `begin_review()`, manual and auto-started reviews are both covered by this one hook.
+- **What**: an issue comment (`POST repos/{owner}/{repo}/issues/{pr_number}/comments`) — deliberately *not* a formal PR review, which is reserved for the verdict posted by `verdict_service` once findings exist. The body names the reviewer agent and the start time, and its lead line varies for normal, follow-up, and auto-started reviews.
+- **Failure handling**: the post is wrapped so that no exception escapes — a comment failure is logged and the review continues. Announcing a review must never be able to stop one.
+- **Lifecycle**: the comment is posted once and left in place; it is not edited or deleted when the review completes. A PR that goes through several follow-up rounds therefore accumulates one such comment per round.
+- **Config**: set `post_review_started_comment` to `false` in `config.json` to suppress the comment (default `true`).
+
+No comment is posted when the review is rejected as a duplicate (409) or when the subprocess fails to spawn (500).
+
 #### Split Review / Audit Triggers
 
 Every PR card — on the **PR list**, the **Merge Queue**, and the **Swimlane board** (queue and swimlane cards both render through `QueueItem`) — shows **two independent controls side by side**, so a review and a PB↔ED audit can run on the **same** PR at the same time, each tracking its own running/failed state (the backend already executes them independently):
@@ -3140,6 +3152,7 @@ Clears the in-memory cache.
 | `review_sample_limit` | integer | 250 | Maximum PRs to sample for review statistics and lifecycle metrics |
 | `review_section_names` | object | `{"critical": "Critical Issues", "major": "Major Concerns", "minor": "Minor Issues"}` | Custom display names for review sections |
 | `reviews_dir` | string | `~/code-reviews` | Directory where Claude code reviews (`.md`/`.json`) are written. Supports `~` and `$VAR` expansion so it stays machine-agnostic. Falls back to `~/code-reviews` if omitted. |
+| `post_review_started_comment` | boolean | true | Post a "review underway" comment to the PR when a code review starts. Set to `false` to suppress the comment entirely. |
 | `past_reviews_dir` | string | `<reviews_dir>/past-reviews` | Legacy reviews directory used only by the one-time `migrate_data.py` import. Supports `~`/`$VAR` expansion. |
 
 ### Example Configuration
@@ -3156,6 +3169,7 @@ Clears the in-memory cache.
   "workflow_cache_max_runs": 1000,
   "review_sample_limit": 250,
   "reviews_dir": "~/code-reviews",
+  "post_review_started_comment": true,
   "review_section_names": {
     "critical": "Critical Issues",
     "major": "Major Concerns",

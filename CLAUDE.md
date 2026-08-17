@@ -70,13 +70,13 @@ Keep `docs/DESIGN.md` updated whenever any design aspect changes, and update the
 | — PR Timelines | 1075 | Single-PR event timeline modal |
 | — Merge Queue | 1149 | Prioritized cross-repo PR queue |
 | — Swimlane Board (Kanban) | 1228 | Lane CRUD, DnD, badge filtering |
-| — Code Review System (Claude CLI) | 1374 | Reviewer agents, subprocess flow, split Review/Audit triggers |
-| — Inline Comments Posting | 1479 | Post critical issues to GitHub |
-| — Review Verdict | 1527 | Approve/Request-Changes/Comment composer, verdict source toggle |
-| — Auto Verdicts | 1600 | Armed cards, criteria thresholds, auto approve/changes-requested, watcher threads, auto follow-up reviews |
-| **API Endpoints** | 1708 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2347 |
-| **Configuration** | 3126 | `config.json` options |
-| **Technical Details** | 3169 | gh CLI integration, caching, parallel fetch, logging, Review JSON Schema (3428) |
-| **Future Considerations** | 3599 | Improvements, known limitations |
-| **Appendix** | 3661 | Dependencies, file structure, run instructions |
+| — Code Review System (Claude CLI) | 1374 | Reviewer agents, subprocess flow, review-underway PR comment, split Review/Audit triggers |
+| — Inline Comments Posting | 1491 | Post critical issues to GitHub |
+| — Review Verdict | 1539 | Approve/Request-Changes/Comment composer, verdict source toggle |
+| — Auto Verdicts | 1612 | Armed cards, criteria thresholds, auto approve/changes-requested, watcher threads, auto follow-up reviews |
+| **API Endpoints** | 1720 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2359 |
+| **Configuration** | 3138 | `config.json` options |
+| **Technical Details** | 3183 | gh CLI integration, caching, parallel fetch, logging, Review JSON Schema (3442) |
+| **Future Considerations** | 3613 | Improvements, known limitations |
+| **Appendix** | 3675 | Dependencies, file structure, run instructions |
 
