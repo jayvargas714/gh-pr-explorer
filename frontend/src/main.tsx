@@ -17,6 +17,7 @@ import './styles/markdown.css'
 import './styles/timeline.css'
 import './styles/swimlane.css'
 import './styles/audits.css'
+import './styles/review-logs.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

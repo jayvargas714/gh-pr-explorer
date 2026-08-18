@@ -1,0 +1,173 @@
+/* ============================================================================
+   Review Logs tab — operational log of review starts, attempts and failures
+   ========================================================================== */
+
+.mx-review-logs {
+  padding: var(--mx-space-4);
+}
+
+.mx-review-logs__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--mx-space-3);
+  margin-bottom: var(--mx-space-4);
+}
+
+.mx-review-logs__header h2 {
+  margin: 0;
+  font-size: var(--mx-font-size-xl);
+  color: var(--mx-color-text-primary);
+}
+
+.mx-review-logs__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-space-3);
+}
+
+.mx-review-logs__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-space-1);
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mx-review-logs__select {
+  background: var(--mx-color-bg-input);
+  color: var(--mx-color-text-primary);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-sm);
+  padding: var(--mx-space-1) var(--mx-space-2);
+  font-family: inherit;
+  font-size: var(--mx-font-size-sm);
+}
+
+.mx-review-logs__select:focus {
+  outline: none;
+  border-color: var(--mx-color-border-focus);
+}
+
+/* Summary strip ------------------------------------------------------------ */
+
+.mx-review-logs__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mx-space-3);
+  margin-bottom: var(--mx-space-4);
+}
+
+.mx-review-logs__stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 6rem;
+  padding: var(--mx-space-3) var(--mx-space-4);
+  background: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+}
+
+.mx-review-logs__stat--reason {
+  border-color: var(--mx-color-warning);
+  background: var(--mx-color-warning-bg);
+}
+
+.mx-review-logs__stat-value {
+  font-size: var(--mx-font-size-2xl);
+  font-weight: var(--mx-font-weight-semibold);
+  color: var(--mx-color-text-primary);
+  font-family: var(--mx-font-mono);
+}
+
+.mx-review-logs__stat-label {
+  font-size: var(--mx-font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--mx-color-text-secondary);
+  text-align: center;
+}
+
+/* Run table --------------------------------------------------------------- */
+
+.mx-review-logs__table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--mx-color-surface);
+  border: 1px solid var(--mx-color-border);
+  border-radius: var(--mx-radius-md);
+  overflow: hidden;
+  font-size: var(--mx-font-size-sm);
+}
+
+.mx-review-logs__table th {
+  text-align: left;
+  padding: var(--mx-space-2) var(--mx-space-3);
+  border-bottom: 1px solid var(--mx-color-border);
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-xs);
+  font-weight: var(--mx-font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.mx-review-logs__table td {
+  padding: var(--mx-space-2) var(--mx-space-3);
+  border-bottom: 1px solid var(--mx-color-border);
+  color: var(--mx-color-text-primary);
+  vertical-align: top;
+}
+
+.mx-review-logs__run {
+  cursor: pointer;
+  transition: var(--mx-transition-base);
+}
+
+.mx-review-logs__run:hover {
+  background: var(--mx-color-surface-hover);
+}
+
+.mx-review-logs__event {
+  background: var(--mx-color-bg-primary);
+}
+
+.mx-review-logs__event td {
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-xs);
+}
+
+.mx-review-logs__reason {
+  margin-left: var(--mx-space-2);
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-xs);
+}
+
+.mx-review-logs__detail code {
+  font-family: var(--mx-font-mono);
+  font-size: var(--mx-font-size-xs);
+  color: var(--mx-color-text-tertiary);
+  word-break: break-all;
+}
+
+.mx-review-logs__footer {
+  margin-top: var(--mx-space-3);
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-sm);
+}
+
+@media (max-width: 768px) {
+  .mx-review-logs__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .mx-review-logs__table {
+    display: block;
+    overflow-x: auto;
+  }
+}
