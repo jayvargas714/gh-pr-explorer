@@ -195,6 +195,7 @@ The database module provides SQLite-based persistence for reviews and merge queu
 |-------|-------------|
 | `Database` | Base class managing SQLite connection and schema initialization |
 | `ReviewsDB` | Handles review storage, retrieval, and search operations |
+| `ReviewEventsDB` | Appends and queries review lifecycle events (start/completion/failure/retry) for the Review Logs tab |
 | `AuditsDB` | Handles PB↔ED audit storage, retrieval, and search operations (parallel to `ReviewsDB`) |
 | `MergeQueueDB` | Manages merge queue persistence and ordering |
 | `SwimlanesDB` | Manages swimlane definitions and per-card lane assignments (including pin state) for the Kanban view of the merge queue |
@@ -231,6 +232,32 @@ CREATE TABLE reviews (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (parent_review_id) REFERENCES reviews(id)
 );
+
+-- Review events table: Append-only operational log of review attempts.
+-- One row per lifecycle event; all attempts of one review share a run_id.
+CREATE TABLE IF NOT EXISTS review_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,                -- ISO8601 UTC
+    run_id TEXT NOT NULL,                    -- Groups every attempt of one review
+    event TEXT NOT NULL,                     -- started|completed|failed|retry_scheduled|gave_up|cancelled
+    repo TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    reviewer_agent TEXT,                     -- default|pb|ed
+    is_followup BOOLEAN DEFAULT FALSE,
+    auto_started BOOLEAN DEFAULT FALSE,
+    attempt INTEGER,
+    max_attempts INTEGER,
+    exit_code INTEGER,
+    reason TEXT,                             -- NULL unless the event is a failure
+    detail TEXT,                             -- stderr tail or human-readable specifics
+    review_file TEXT,
+    review_id INTEGER,                       -- reviews.id when an attempt was persisted
+    score REAL,
+    pid INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_review_events_repo_pr ON review_events(repo, pr_number);
+CREATE INDEX IF NOT EXISTS idx_review_events_run ON review_events(run_id);
+CREATE INDEX IF NOT EXISTS idx_review_events_created ON review_events(created_at DESC);
 
 -- Audits table: Stores PB↔ED audit history and structured JSON content (parallel to reviews)
 CREATE TABLE IF NOT EXISTS audits (
@@ -550,7 +577,7 @@ The frontend uses React 18 with TypeScript, built via Vite. State management use
 
 #### Main Tab Architecture
 
-The application uses a 4-tab layout as the primary navigation:
+The application uses a 5-tab layout as the primary navigation:
 
 | Tab | View Key | Description |
 |-----|----------|-------------|
@@ -558,6 +585,7 @@ The application uses a 4-tab layout as the primary navigation:
 | Analytics | `analytics` | 5 sub-tabs for developer and repository analytics |
 | CI/Workflows | `workflows` | Workflow run history with filters and aggregate stats |
 | Repo Stats | `repo-stats` | Repository-level statistics, language breakdown, LOC analysis |
+| Review Logs | `review-logs` | Review lifecycle event log: starts, attempts, failures and reasons |
 
 #### Analytics Sub-tabs
 
@@ -1716,6 +1744,93 @@ Badge variants: `🤖 auto ✗ changes requested` (error), `🤖 auto ✓ approv
 An armed card's **Review** button skips the reviewer picker on its primary click and starts the armed agent directly (labelled `🤖 Review`); the adjacent `▾` still opens the picker to override for one run without changing the stored arming.
 
 The swimlane badge filter gains an **Auto Verdict** dimension with chips *🤖 Armed*, *🤖 Verdict Posted*, and *🤖 Needs Manual Approval*, mirroring the rendered badges one-for-one as `cardMatchesBadge` requires.
+
+---
+
+### Review Event Log
+
+An append-only operational record of every review the app starts, every attempt
+it makes, and why any attempt failed — surfaced in the **📜 Review Logs** tab.
+
+This is deliberately distinct from **Review History**, which browses *finished
+reviews and their findings*. The event log answers a different class of
+question: did a review start at all, how many attempts did it take, what killed
+the ones that died, and is the retry loop actually saving runs. Before it
+existed, a review that failed silently left no trace beyond the server's stdout,
+which is not persisted anywhere.
+
+#### Why a table rather than a log file
+
+The events live in SQLite (`review_events`) rather than a JSON/JSONL file on
+disk. Both were considered: a file is greppable without the app and survives
+database problems, but a table reuses the existing schema init, migrations,
+connection pooling, and filter/paginate helpers, so the same feature costs a
+fraction of the code and needs no rotation logic. Retention is a scheduled
+delete instead (see `review_log_retention_days`).
+
+#### Run grouping
+
+Every event carries a `run_id` — a UUID minted in `begin_review()`, stored on
+the `active_reviews` entry, and stamped onto each event for that review. All
+attempts of one review therefore share a `run_id`, so the UI groups a run's
+attempts with a `GROUP BY` rather than inferring the grouping from timestamps.
+This is what makes the per-attempt event model legible: a review that succeeded
+on its third try reads as one collapsible group, not three unrelated rows.
+
+#### Event vocabulary
+
+Both vocabularies are closed sets. Recorders never invent a value.
+
+| `event` | When | Key fields |
+|---------|------|-----------|
+| `started` | An attempt's subprocess spawned | `attempt`, `pid` |
+| `completed` | Attempt produced output and the review was saved | `review_id`, `score` |
+| `failed` | Attempt failed | `reason`, `exit_code`, `detail` |
+| `retry_scheduled` | Backoff armed before the next attempt | `detail` (delay) |
+| `gave_up` | Attempt limit reached; review recorded as failed | `attempt`, `max_attempts` |
+| `cancelled` | User cancelled the review | — |
+
+| `reason` | Meaning |
+|----------|---------|
+| `no_output` | Exited 0 without writing either output file (see "Attempt Outcome and Retries") |
+| `nonzero_exit` | CLI exited non-zero; `detail` carries the stderr tail |
+| `spawn_failed` | The subprocess could not be started at all |
+| `attempts_exhausted` | Set on the `gave_up` event |
+| `cancelled` | User-initiated termination |
+
+#### Recording
+
+`backend/services/review_event_log.py` exposes one named recorder per event
+(`record_started`, `record_completed`, `record_failed`, `record_retry_scheduled`,
+`record_gave_up`, `record_cancelled`). Call sites pass domain values, never
+dicts, so the vocabulary above is enforced in one place.
+
+**Every recorder swallows its own exceptions.** This mirrors
+`post_review_started_comment()`: observing a review must never be able to break
+the review it observes. A failed write is logged at WARNING and the review
+continues.
+
+Call sites:
+
+| Site | Event |
+|------|-------|
+| `begin_review()` | `started` (attempt 1) |
+| `check_review_status()` | `completed`, `failed`, `gave_up` |
+| `_schedule_review_retry()` | `retry_scheduled` |
+| `_respawn_review()` | `started` (attempt N) |
+| `DELETE /api/reviews/<owner>/<repo>/<pr>` | `cancelled` |
+
+#### UI
+
+`components/reviewLogs/ReviewLogsView.tsx` renders a summary strip (successes,
+failures by reason, and how many runs a retry rescued) above a table grouped by
+`run_id`, each group collapsible to its attempt rows. The view defaults to the
+selected repository with an **All repos** toggle, since the tab only renders once
+a repo is chosen but the log is useful across repos.
+
+The tab is repo-independent in every other respect: it reads only
+`/api/review-logs`, so it works even when PR fetching is failing — which is
+precisely when it is most needed.
 
 ---
 
@@ -3098,6 +3213,79 @@ Checks if a PR has been reviewed.
 
 ---
 
+### Review Logs
+
+**GET** `/api/review-logs`
+
+Returns review lifecycle events, newest first. Powers the Review Logs tab.
+
+**Query Parameters**:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `repo` | string | Filter to one `owner/name` repository |
+| `pr_number` | integer | Filter to one PR |
+| `event` | string | Filter by event type (`started`, `failed`, …) |
+| `reason` | string | Filter by failure reason (`no_output`, `nonzero_exit`, …) |
+| `since` | string | ISO8601 lower bound on `created_at` |
+| `limit` | integer | Page size (default 200) |
+| `offset` | integer | Page offset (default 0) |
+
+**Response**:
+```json
+{
+  "events": [
+    {
+      "id": 412,
+      "created_at": "2026-08-18T21:42:30Z",
+      "run_id": "7c1f...",
+      "event": "completed",
+      "repo": "scala-computing/scala",
+      "pr_number": 3179,
+      "reviewer_agent": "default",
+      "is_followup": true,
+      "auto_started": true,
+      "attempt": 2,
+      "max_attempts": 3,
+      "exit_code": 0,
+      "reason": null,
+      "detail": null,
+      "review_id": 969,
+      "score": 8.0,
+      "pid": 196753
+    }
+  ],
+  "total": 1
+}
+```
+
+**GET** `/api/review-logs/stats`
+
+Returns aggregate counts for the summary strip.
+
+**Query Parameters**: `repo`, `since` (both optional).
+
+**Response**:
+```json
+{
+  "stats": {
+    "runs": 42,
+    "completed": 38,
+    "failed": 4,
+    "rescued_by_retry": 6,
+    "by_reason": {
+      "no_output": 5,
+      "nonzero_exit": 3
+    }
+  }
+}
+```
+
+`rescued_by_retry` counts runs that completed on an attempt after their first —
+the direct measure of whether the retry loop is earning its keep.
+
+---
+
 ### Repo Stats
 
 **GET** `/api/repos/<owner>/<repo>/repo-stats`
@@ -3157,6 +3345,7 @@ Clears the in-memory cache.
 | `post_review_started_comment` | boolean | true | Post a "review underway" comment to the PR when a code review starts. Set to `false` to suppress the comment entirely. |
 | `review_max_attempts` | integer | 3 | Total review attempts (including the first) before a review is recorded as failed. Clamped to 1–5; `1` disables retries. |
 | `review_retry_delay_seconds` | number | 30 | Backoff before each retry attempt. Gives a transient API or GitHub outage time to clear. |
+| `review_log_retention_days` | integer | 90 | How long review lifecycle events are kept. Purged once on startup; `0` disables purging. |
 | `past_reviews_dir` | string | `<reviews_dir>/past-reviews` | Legacy reviews directory used only by the one-time `migrate_data.py` import. Supports `~`/`$VAR` expansion. |
 
 ### Example Configuration
@@ -3175,6 +3364,7 @@ Clears the in-memory cache.
   "reviews_dir": "~/code-reviews",
   "review_max_attempts": 3,
   "review_retry_delay_seconds": 30,
+  "review_log_retention_days": 90,
   "post_review_started_comment": true,
   "review_section_names": {
     "critical": "Critical Issues",
