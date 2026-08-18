@@ -11,5 +11,6 @@
   "reviews_dir": "~/code-reviews",
   "review_max_attempts": 3,
   "review_retry_delay_seconds": 30,
+  "review_log_retention_days": 90,
   "post_review_started_comment": true
 }

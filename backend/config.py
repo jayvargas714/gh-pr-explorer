@@ -19,6 +19,9 @@ DEFAULT_REVIEW_MAX_ATTEMPTS = 3
 REVIEW_MAX_ATTEMPTS_CAP = 5
 DEFAULT_REVIEW_RETRY_DELAY_SECONDS = 30
 
+# How long review lifecycle events are kept before the startup purge drops them.
+DEFAULT_REVIEW_LOG_RETENTION_DAYS = 90
+
 
 def _resolve_path(raw: str) -> Path:
     """Expand ~ and environment variables in a configured path."""
@@ -75,6 +78,20 @@ def get_review_retry_settings() -> tuple:
     delay = max(0.0, delay)
 
     return max_attempts, delay
+
+
+def get_review_log_retention_days() -> int:
+    """Get the review event log retention window in days.
+
+    Reads config.json's "review_log_retention_days". Zero or negative disables
+    purging; a malformed value falls back to the default.
+    """
+    config = get_config()
+    try:
+        days = int(config.get("review_log_retention_days", DEFAULT_REVIEW_LOG_RETENTION_DAYS))
+    except (TypeError, ValueError):
+        days = DEFAULT_REVIEW_LOG_RETENTION_DAYS
+    return max(0, days)
 
 
 # Database file path

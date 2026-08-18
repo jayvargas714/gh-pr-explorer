@@ -9,7 +9,12 @@ from flask import Flask
 
 from backend.config import get_config, PROJECT_ROOT
 from backend.extensions import logger
-from backend.database import get_workflow_cache_db, get_dev_stats_db, get_swimlanes_db
+from backend.database import (
+    get_workflow_cache_db,
+    get_dev_stats_db,
+    get_swimlanes_db,
+    get_review_events_db,
+)
 from backend.routes import register_blueprints
 
 
@@ -60,6 +65,20 @@ def startup_refresh_workflow_caches():
                             workflow_refresh_in_progress.discard(repo_key)
     except Exception as e:
         logger.error(f"Startup workflow cache refresh failed: {e}")
+
+
+def startup_purge_review_events():
+    """Background task: drop review events past the retention window."""
+    from backend.config import get_review_log_retention_days
+
+    days = get_review_log_retention_days()
+    if days <= 0:
+        return
+
+    try:
+        get_review_events_db().purge_older_than(days)
+    except Exception as e:
+        logger.error(f"Failed to purge review events: {e}")
 
 
 def startup_refresh_stats_caches():

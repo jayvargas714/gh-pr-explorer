@@ -173,3 +173,36 @@ def test_purge_zero_days_is_a_noop(events_db):
     assert events_db.purge_older_than(0) == 0
     _, total = events_db.list_events(repo=REPO)
     assert total == 1
+
+
+# --- retention config -------------------------------------------------------
+
+def test_retention_default(monkeypatch):
+    from backend.config import DEFAULT_REVIEW_LOG_RETENTION_DAYS, get_review_log_retention_days
+    monkeypatch.setattr("backend.config.get_config", lambda: {})
+    assert get_review_log_retention_days() == DEFAULT_REVIEW_LOG_RETENTION_DAYS
+
+
+def test_retention_read_from_config(monkeypatch):
+    from backend.config import get_review_log_retention_days
+    monkeypatch.setattr("backend.config.get_config", lambda: {"review_log_retention_days": 7})
+    assert get_review_log_retention_days() == 7
+
+
+def test_retention_zero_disables_purging(monkeypatch):
+    from backend.config import get_review_log_retention_days
+    monkeypatch.setattr("backend.config.get_config", lambda: {"review_log_retention_days": 0})
+    assert get_review_log_retention_days() == 0
+
+
+def test_retention_falls_back_on_garbage(monkeypatch):
+    from backend.config import DEFAULT_REVIEW_LOG_RETENTION_DAYS, get_review_log_retention_days
+    monkeypatch.setattr("backend.config.get_config",
+                        lambda: {"review_log_retention_days": "forever"})
+    assert get_review_log_retention_days() == DEFAULT_REVIEW_LOG_RETENTION_DAYS
+
+
+def test_negative_retention_treated_as_disabled(monkeypatch):
+    from backend.config import get_review_log_retention_days
+    monkeypatch.setattr("backend.config.get_config", lambda: {"review_log_retention_days": -1})
+    assert get_review_log_retention_days() == 0

@@ -8,7 +8,12 @@ and starts the development server.
 import os
 import threading
 
-from backend import create_app, startup_refresh_workflow_caches, startup_refresh_stats_caches
+from backend import (
+    create_app,
+    startup_refresh_workflow_caches,
+    startup_refresh_stats_caches,
+    startup_purge_review_events,
+)
 from backend.config import get_config
 from backend.services.auto_review_watcher import auto_review_watcher_loop
 from backend.services.auto_verdict_watcher import auto_verdict_watcher_loop
@@ -21,6 +26,7 @@ if __name__ == "__main__":
     # Refresh stale caches in background on startup
     threading.Thread(target=startup_refresh_workflow_caches, daemon=True).start()
     threading.Thread(target=startup_refresh_stats_caches, daemon=True).start()
+    threading.Thread(target=startup_purge_review_events, daemon=True).start()
 
     # Watch for review completions so auto verdicts fire without a browser attached.
     # Under debug mode Flask's reloader runs this module twice; only the child
