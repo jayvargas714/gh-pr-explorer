@@ -9,6 +9,7 @@ from backend.extensions import logger, active_reviews, reviews_lock
 from backend.database import get_reviews_db
 from backend.services.github_service import fetch_pr_head_sha
 from backend.services.review_service import save_review_to_db, check_review_status, begin_review
+from backend.services.review_event_log import record_cancelled
 from backend.services.inline_comments_service import post_inline_comments, preview_section_issues
 from backend.services.verdict_service import post_verdict
 from backend.routes import error_response
@@ -126,6 +127,12 @@ def cancel_review(owner, repo, pr_number):
                 review["status"] = "cancelled"
             except Exception as e:
                 return error_response("Failed to terminate review process", 500, f"Failed to terminate review process for {key}: {e}")
+
+        if review.get("run_id"):
+            record_cancelled(
+                review["run_id"], f"{owner}/{repo}", pr_number,
+                attempt=review.get("attempt", 1),
+            )
 
         del active_reviews[key]
         logger.info(f"Review cancelled and removed: {key}")

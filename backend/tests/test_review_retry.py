@@ -74,6 +74,8 @@ def register(review_file, process, **overrides):
         "is_followup": False,
         "attempt": 1,
         "retry_at": None,
+        "run_id": "run-test",
+        "max_attempts": 3,
         "spawn": {
             "pr_url": PR_URL,
             "owner": OWNER,
@@ -322,3 +324,118 @@ def test_retry_settings_fall_back_on_garbage(monkeypatch):
 def test_negative_delay_floored_to_zero(monkeypatch):
     monkeypatch.setattr("backend.config.get_config", lambda: {"review_retry_delay_seconds": -5})
     assert get_review_retry_settings()[1] == 0.0
+
+
+# --- event log integration ---------------------------------------------------
+
+def test_retry_lifecycle_emits_the_full_event_sequence(monkeypatch, saved, tmp_path):
+    """One review that fails once then succeeds must read as one run."""
+    set_retry_policy(monkeypatch, max_attempts=3)
+
+    recorded = []
+    for name in ("record_started", "record_completed", "record_failed",
+                 "record_retry_scheduled", "record_gave_up"):
+        monkeypatch.setattr(
+            review_service, name,
+            lambda *a, _n=name, **kw: recorded.append((_n, a, kw)),
+        )
+
+    retry_file = tmp_path / "retry.md"
+
+    def fake_spawn(**kwargs):
+        retry_file.write_text("# Review")
+        return FakeProcess(exit_code=0, pid=555), str(retry_file), False
+
+    monkeypatch.setattr(review_service, "start_review_process", fake_spawn)
+    register(tmp_path / "review.md", FakeProcess(exit_code=0), run_id="run-xyz")
+
+    poll()   # attempt 1: exit 0, no output -> failed + retry armed
+    poll()   # backoff elapsed -> attempt 2 spawns
+    poll()   # attempt 2: exit 0 with output -> completed
+
+    assert [name for name, _, _ in recorded] == [
+        "record_failed", "record_retry_scheduled", "record_started", "record_completed",
+    ]
+
+    failed_kwargs = recorded[0][2]
+    assert failed_kwargs["reason"] == "no_output"
+    assert failed_kwargs["attempt"] == 1
+
+    started_kwargs = recorded[2][2]
+    assert started_kwargs["attempt"] == 2
+    assert started_kwargs["pid"] == 555
+
+    # Every event belongs to the same run.
+    assert {args[0] for _, args, _ in recorded} == {"run-xyz"}
+    # ...and names the same repo and PR.
+    assert {args[1:] for _, args, _ in recorded} == {(f"{OWNER}/{REPO}", PR)}
+
+
+def test_gave_up_is_recorded_once_at_the_limit(monkeypatch, saved, tmp_path):
+    set_retry_policy(monkeypatch, max_attempts=1)
+
+    recorded = []
+    monkeypatch.setattr(review_service, "record_gave_up",
+                        lambda *a, **kw: recorded.append(kw))
+    monkeypatch.setattr(review_service, "record_failed", lambda *a, **kw: None)
+
+    register(tmp_path / "review.md", FakeProcess(exit_code=1), run_id="run-1")
+    poll()
+
+    assert len(recorded) == 1
+    assert recorded[0]["attempt"] == 1
+    assert recorded[0]["max_attempts"] == 1
+
+
+def test_nonzero_exit_records_reason_and_stderr(monkeypatch, saved, tmp_path):
+    set_retry_policy(monkeypatch, max_attempts=1)
+
+    recorded = []
+    monkeypatch.setattr(review_service, "record_failed",
+                        lambda *a, **kw: recorded.append(kw))
+    monkeypatch.setattr(review_service, "record_gave_up", lambda *a, **kw: None)
+
+    register(tmp_path / "review.md", FakeProcess(exit_code=1), run_id="run-1",
+             error_output="API Error: 529 Overloaded")
+    poll()
+
+    assert len(recorded) == 1
+    assert recorded[0]["reason"] == "nonzero_exit"
+    assert recorded[0]["exit_code"] == 1
+    assert "529" in recorded[0]["detail"]
+
+
+def test_spawn_failure_records_spawn_failed(monkeypatch, saved, tmp_path):
+    set_retry_policy(monkeypatch, max_attempts=5)
+    monkeypatch.setattr(
+        review_service, "start_review_process",
+        lambda **kwargs: (None, "Claude CLI not found.", False),
+    )
+
+    reasons = []
+    monkeypatch.setattr(review_service, "record_failed",
+                        lambda *a, **kw: reasons.append(kw["reason"]))
+    monkeypatch.setattr(review_service, "record_retry_scheduled", lambda *a, **kw: None)
+
+    register(tmp_path / "review.md", FakeProcess(exit_code=1), run_id="run-1")
+    poll()      # attempt 1 failed -> retry armed
+    poll()      # respawn fails -> finalize
+
+    assert "spawn_failed" in reasons
+
+
+def test_events_are_skipped_when_no_run_id_is_recorded(monkeypatch, saved, tmp_path):
+    """Entries registered before this feature existed must not crash the poller."""
+    set_retry_policy(monkeypatch, max_attempts=1)
+
+    recorded = []
+    monkeypatch.setattr(review_service, "record_failed",
+                        lambda *a, **kw: recorded.append(kw))
+    monkeypatch.setattr(review_service, "record_gave_up",
+                        lambda *a, **kw: recorded.append(kw))
+
+    register(tmp_path / "review.md", FakeProcess(exit_code=1), run_id=None)
+    review = poll()
+
+    assert review["status"] == "failed"
+    assert recorded == []

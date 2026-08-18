@@ -11,6 +11,17 @@ from pathlib import Path
 from backend.config import get_review_retry_settings, get_reviews_dir
 from backend.services.github_service import fetch_pr_head_sha, fetch_pr_state
 from backend.services.review_started_service import post_review_started_comment
+from backend.services.review_event_log import (
+    new_run_id,
+    record_completed,
+    record_failed,
+    record_gave_up,
+    record_retry_scheduled,
+    record_started,
+    REASON_NO_OUTPUT,
+    REASON_NONZERO_EXIT,
+    REASON_SPAWN_FAILED,
+)
 from backend.services.review_schema import (
     extract_markdown_summary,
     markdown_to_json,
@@ -61,6 +72,33 @@ def review_produced_output(review_file):
         return False
     review_path = Path(review_file)
     return review_path.exists() or review_path.with_suffix(".json").exists()
+
+
+def _event_target_for(key, review):
+    """(run_id, repo, pr_number) for the event recorders.
+
+    Returns None when the key is unparseable or the review predates run_id
+    tracking, in which case the event is simply not recorded — the log must
+    never be the reason a review stops progressing.
+    """
+    parts = key.split("/")
+    if len(parts) < 3 or not review.get("run_id"):
+        return None
+    try:
+        return review["run_id"], f"{parts[0]}/{parts[1]}", int(parts[2])
+    except ValueError:
+        return None
+
+
+def _review_score(review_id, reviews_db):
+    """Best-effort score lookup for the event log; never raises."""
+    if not review_id or reviews_db is None:
+        return None
+    try:
+        row = reviews_db.get_review(review_id)
+        return row.get("score") if row else None
+    except Exception:
+        return None
 
 
 def save_review_to_db(key, review, status, reviews_db):
@@ -221,6 +259,18 @@ def check_review_status(key, active_reviews, reviews_lock, reviews_db):
             review["status"] = status
             review["completed_at"] = datetime.now(timezone.utc).isoformat()
             review_id = save_review_to_db(key, review, status, reviews_db)
+
+            target = _event_target_for(key, review)
+            if target and succeeded:
+                run_id, full_repo, pr_number = target
+                record_completed(
+                    run_id, full_repo, pr_number,
+                    attempt=review.get("attempt", 1),
+                    review_id=review_id,
+                    score=_review_score(review_id, reviews_db),
+                    review_file=review.get("review_file"),
+                )
+
             if review_id and status == "completed":
                 _spawn_auto_verdict(key, review_id)
 
@@ -256,6 +306,8 @@ def check_review_status(key, active_reviews, reviews_lock, reviews_db):
         if exit_code != 0:
             error_msg = review.get("error_output", "Unknown error")
             logger.error(f"Review failed: {key} (exit code: {exit_code})\nError: {error_msg}")
+            failure_reason = REASON_NONZERO_EXIT
+            failure_detail = error_msg[:500]
         elif not produced_output:
             # Exit 0 with nothing on disk: the CLI reported success but wrote no
             # review. Recording this as "completed" would store a 0-score stub
@@ -264,8 +316,26 @@ def check_review_status(key, active_reviews, reviews_lock, reviews_db):
                 f"Review process for {key} exited 0 without writing "
                 f"{review.get('review_file')} — treating as a failed attempt"
             )
+            failure_reason = REASON_NO_OUTPUT
+            failure_detail = f"exited 0 without writing {review.get('review_file')}"
         else:
             logger.info(f"Review completed successfully: {key}")
+            failure_reason = None
+            failure_detail = None
+
+        if failure_reason:
+            target = _event_target_for(key, review)
+            if target:
+                run_id, full_repo, pr_number = target
+                record_failed(
+                    run_id, full_repo, pr_number,
+                    attempt=review.get("attempt", 1),
+                    max_attempts=review.get("max_attempts"),
+                    reason=failure_reason,
+                    exit_code=exit_code,
+                    detail=failure_detail,
+                    review_file=review.get("review_file"),
+                )
 
         if exit_code == 0 and produced_output:
             finalize(True)
@@ -287,6 +357,11 @@ def _schedule_review_retry(key, review):
 
     if attempt >= max_attempts:
         logger.error(f"Review for {key} failed after {attempt} attempt(s) — giving up")
+        target = _event_target_for(key, review)
+        if target:
+            run_id, full_repo, pr_number = target
+            record_gave_up(run_id, full_repo, pr_number,
+                           attempt=attempt, max_attempts=max_attempts)
         return False
 
     if not review.get("spawn"):
@@ -299,6 +374,13 @@ def _schedule_review_retry(key, review):
         f"Review attempt {attempt}/{max_attempts} failed for {key} — "
         f"retrying in {retry_delay:g}s"
     )
+
+    target = _event_target_for(key, review)
+    if target:
+        run_id, full_repo, pr_number = target
+        record_retry_scheduled(run_id, full_repo, pr_number,
+                               attempt=attempt, max_attempts=max_attempts,
+                               delay_seconds=retry_delay)
     return True
 
 
@@ -315,6 +397,14 @@ def _respawn_review(key, review):
     process, result, _ = start_review_process(**review["spawn"])
     if process is None:
         logger.error(f"Could not start retry attempt {review['attempt']} for {key}: {result}")
+        target = _event_target_for(key, review)
+        if target:
+            run_id, full_repo, pr_number = target
+            record_failed(run_id, full_repo, pr_number,
+                          attempt=review["attempt"],
+                          max_attempts=review.get("max_attempts"),
+                          reason=REASON_SPAWN_FAILED,
+                          detail=str(result)[:500])
         return False
 
     review["process"] = process
@@ -324,6 +414,21 @@ def _respawn_review(key, review):
     logger.info(
         f"Started retry attempt {review['attempt']} for {key} (PID {process.pid})"
     )
+
+    target = _event_target_for(key, review)
+    if target:
+        run_id, full_repo, pr_number = target
+        spawn = review.get("spawn") or {}
+        record_started(
+            run_id, full_repo, pr_number,
+            attempt=review["attempt"],
+            max_attempts=review.get("max_attempts"),
+            reviewer_agent=spawn.get("reviewer_type", "default"),
+            is_followup=spawn.get("is_followup", False),
+            auto_started=review.get("auto_started", False),
+            review_file=result,
+            pid=getattr(process, "pid", None),
+        )
     return True
 
 
@@ -425,6 +530,9 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
         "reviewer_type": reviewer_type,
     }
 
+    run_id = new_run_id()
+    max_attempts, _ = get_review_retry_settings()
+
     with reviews_lock:
         active_reviews[key] = {
             "process": process,
@@ -440,8 +548,21 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
             "auto_started": auto_started,
             "spawn": spawn_args,
             "attempt": 1,
-            "retry_at": None
+            "retry_at": None,
+            "run_id": run_id,
+            "max_attempts": max_attempts
         }
+
+    record_started(
+        run_id, f"{owner}/{repo}", pr_number,
+        attempt=1,
+        max_attempts=max_attempts,
+        reviewer_agent=reviewer_type,
+        is_followup=is_followup,
+        auto_started=auto_started,
+        review_file=result,
+        pid=getattr(process, "pid", None),
+    )
 
     post_review_started_comment(
         owner, repo, pr_number,
