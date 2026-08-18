@@ -5,6 +5,7 @@ from typing import Optional
 
 from backend.database.base import Database
 from backend.database.reviews import ReviewsDB
+from backend.database.review_events import ReviewEventsDB
 from backend.database.audits import AuditsDB
 from backend.database.auto_verdicts import AutoVerdictsDB
 from backend.database.merge_queue import MergeQueueDB
@@ -26,6 +27,7 @@ _db_lock = threading.Lock()
 
 _db_instance: Optional[Database] = None
 _reviews_db: Optional[ReviewsDB] = None
+_review_events_db: Optional[ReviewEventsDB] = None
 _audits_db: Optional[AuditsDB] = None
 _auto_verdicts_db: Optional[AutoVerdictsDB] = None
 _queue_db: Optional[MergeQueueDB] = None
@@ -58,6 +60,16 @@ def get_reviews_db() -> ReviewsDB:
             if _reviews_db is None:
                 _reviews_db = ReviewsDB(db)
     return _reviews_db
+
+
+def get_review_events_db() -> ReviewEventsDB:
+    global _review_events_db
+    if _review_events_db is None:
+        db = get_database()
+        with _db_lock:
+            if _review_events_db is None:
+                _review_events_db = ReviewEventsDB(db)
+    return _review_events_db
 
 
 def get_audits_db() -> AuditsDB:
@@ -191,11 +203,12 @@ def get_timeline_cache_db() -> TimelineCacheDB:
 
 
 __all__ = [
-    "Database", "ReviewsDB", "AuditsDB", "AutoVerdictsDB", "MergeQueueDB", "SwimlanesDB", "SettingsDB",
+    "Database", "ReviewsDB", "ReviewEventsDB", "AuditsDB", "AutoVerdictsDB", "MergeQueueDB", "SwimlanesDB", "SettingsDB",
     "DeveloperStatsDB", "LifecycleCacheDB", "WorkflowCacheDB",
     "ContributorTimeSeriesCacheDB", "CodeActivityCacheDB",
     "RepoStatsCacheDB", "RepoLOCCacheDB", "TimelineCacheDB",
-    "get_database", "get_reviews_db", "get_audits_db", "get_auto_verdicts_db",
+    "get_database", "get_reviews_db", "get_review_events_db",
+    "get_audits_db", "get_auto_verdicts_db",
     "get_queue_db", "get_swimlanes_db",
     "get_settings_db", "get_dev_stats_db", "get_lifecycle_cache_db",
     "get_workflow_cache_db", "get_contributor_ts_cache_db",

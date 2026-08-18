@@ -288,6 +288,46 @@ class Database:
                 ON swimlane_assignments(swimlane_id)
             """)
 
+            # Review events table: append-only operational log of review attempts.
+            # No FOREIGN KEY on review_id: events are written for attempts that
+            # never produced a reviews row, and foreign_keys is ON for every
+            # connection — a FK would reject exactly the failures this log exists
+            # to record.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS review_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    event TEXT NOT NULL,
+                    repo TEXT NOT NULL,
+                    pr_number INTEGER NOT NULL,
+                    reviewer_agent TEXT,
+                    is_followup BOOLEAN DEFAULT FALSE,
+                    auto_started BOOLEAN DEFAULT FALSE,
+                    attempt INTEGER,
+                    max_attempts INTEGER,
+                    exit_code INTEGER,
+                    reason TEXT,
+                    detail TEXT,
+                    review_file TEXT,
+                    review_id INTEGER,
+                    score REAL,
+                    pid INTEGER
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_review_events_repo_pr
+                ON review_events(repo, pr_number)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_review_events_run
+                ON review_events(run_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_review_events_created
+                ON review_events(created_at DESC)
+            """)
+
             # Create audits table (PB↔ED audits — parallel to reviews)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS audits (
