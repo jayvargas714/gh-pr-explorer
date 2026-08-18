@@ -1095,3 +1095,60 @@ export interface ActiveAudit {
 export interface ActiveAuditsResponse {
   audits: ActiveAudit[]
 }
+
+// ============================================================================
+// Review Logs
+// ============================================================================
+
+export type ReviewLogEventName =
+  | 'started'
+  | 'completed'
+  | 'failed'
+  | 'retry_scheduled'
+  | 'gave_up'
+  | 'cancelled'
+
+export type ReviewLogReason =
+  | 'no_output'
+  | 'nonzero_exit'
+  | 'spawn_failed'
+  | 'attempts_exhausted'
+  | 'cancelled'
+
+export interface ReviewLogEvent {
+  id: number
+  created_at: string
+  run_id: string
+  event: ReviewLogEventName
+  repo: string
+  pr_number: number
+  reviewer_agent: string | null
+  is_followup: number
+  auto_started: number
+  attempt: number | null
+  max_attempts: number | null
+  exit_code: number | null
+  reason: ReviewLogReason | null
+  detail: string | null
+  review_file: string | null
+  review_id: number | null
+  score: number | null
+  pid: number | null
+}
+
+export interface ReviewLogsResponse {
+  events: ReviewLogEvent[]
+  total: number
+}
+
+export interface ReviewLogStats {
+  runs: number
+  completed: number
+  failed: number
+  rescued_by_retry: number
+  by_reason: Record<string, number>
+}
+
+export interface ReviewLogStatsResponse {
+  stats: ReviewLogStats
+}
