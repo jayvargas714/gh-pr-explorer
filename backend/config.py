@@ -12,6 +12,13 @@ PROJECT_ROOT = Path(__file__).parent.parent
 # Kept machine-agnostic via ~ expansion so it works on any host.
 DEFAULT_REVIEWS_DIR = "~/code-reviews"
 
+# Review retry policy. An attempt fails when the Claude CLI exits non-zero or
+# exits 0 without writing its review files; the run is retried up to
+# DEFAULT_REVIEW_MAX_ATTEMPTS times in total before being recorded as failed.
+DEFAULT_REVIEW_MAX_ATTEMPTS = 3
+REVIEW_MAX_ATTEMPTS_CAP = 5
+DEFAULT_REVIEW_RETRY_DELAY_SECONDS = 30
+
 
 def _resolve_path(raw: str) -> Path:
     """Expand ~ and environment variables in a configured path."""
@@ -40,6 +47,35 @@ def get_past_reviews_dir() -> Path:
     if past_path:
         return _resolve_path(past_path)
     return get_reviews_dir() / "past-reviews"
+
+
+def get_review_retry_settings() -> tuple:
+    """Get the review retry policy from config.
+
+    Reads config.json's "review_max_attempts" (total attempts including the
+    first, clamped to 1..REVIEW_MAX_ATTEMPTS_CAP) and
+    "review_retry_delay_seconds" (backoff before each retry). A malformed value
+    falls back to its default rather than breaking the retry loop.
+
+    Returns:
+        tuple: (max_attempts, retry_delay_seconds)
+    """
+    config = get_config()
+
+    try:
+        max_attempts = int(config.get("review_max_attempts", DEFAULT_REVIEW_MAX_ATTEMPTS))
+    except (TypeError, ValueError):
+        max_attempts = DEFAULT_REVIEW_MAX_ATTEMPTS
+    max_attempts = max(1, min(max_attempts, REVIEW_MAX_ATTEMPTS_CAP))
+
+    try:
+        delay = float(config.get("review_retry_delay_seconds", DEFAULT_REVIEW_RETRY_DELAY_SECONDS))
+    except (TypeError, ValueError):
+        delay = DEFAULT_REVIEW_RETRY_DELAY_SECONDS
+    delay = max(0.0, delay)
+
+    return max_attempts, delay
+
 
 # Database file path
 DB_PATH = PROJECT_ROOT / "pr_explorer.db"

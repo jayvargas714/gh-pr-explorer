@@ -1391,6 +1391,8 @@ The Code Review feature integrates with Claude CLI to perform automated code rev
 
 The reviewer choice is plumbed through the `reviewer_type` field on `POST /api/reviews` (`"default"`, `"pb"`, or `"ed"`). When `"pb"` is selected, the prompt invokes the `product-brief-reviewer` agent and asks it to identify and review the PB-NNN brief file(s) touched in the PR diff. When `"ed"` is selected, the prompt invokes the `ed-reviewer` agent and asks it to identify and review the ED-NNN engineering design file(s) under `docs/designs/` touched in the PR diff. All three reviewers must emit the same JSON schema and write to the same `.md` + `.json` paths so downstream parsing, inline-comment posting, and verdict composition are reviewer-agnostic.
 
+Every prompt also carries `_FOREGROUND_INSTRUCTIONS`, requiring the wrapper CLI to dispatch the reviewer agent in the foreground and to confirm both files exist before ending its turn. This is load-bearing, not advisory: in `claude -p` a text-only turn ends the run, so a wrapper that backgrounds the reviewer and then narrates progress exits 0 while its agent is killed mid-review, leaving no output. See "Attempt Outcome and Retries" for how such a run is detected and retried.
+
 #### Review Underway PR Comment
 
 When a review starts, GitHub PR Explorer posts a plain conversation comment to the PR announcing that a review is in progress, so anyone watching the PR knows work is underway before any results land.
@@ -3153,6 +3155,8 @@ Clears the in-memory cache.
 | `review_section_names` | object | `{"critical": "Critical Issues", "major": "Major Concerns", "minor": "Minor Issues"}` | Custom display names for review sections |
 | `reviews_dir` | string | `~/code-reviews` | Directory where Claude code reviews (`.md`/`.json`) are written. Supports `~` and `$VAR` expansion so it stays machine-agnostic. Falls back to `~/code-reviews` if omitted. |
 | `post_review_started_comment` | boolean | true | Post a "review underway" comment to the PR when a code review starts. Set to `false` to suppress the comment entirely. |
+| `review_max_attempts` | integer | 3 | Total review attempts (including the first) before a review is recorded as failed. Clamped to 1–5; `1` disables retries. |
+| `review_retry_delay_seconds` | number | 30 | Backoff before each retry attempt. Gives a transient API or GitHub outage time to clear. |
 | `past_reviews_dir` | string | `<reviews_dir>/past-reviews` | Legacy reviews directory used only by the one-time `migrate_data.py` import. Supports `~`/`$VAR` expansion. |
 
 ### Example Configuration
@@ -3169,6 +3173,8 @@ Clears the in-memory cache.
   "workflow_cache_max_runs": 1000,
   "review_sample_limit": 250,
   "reviews_dir": "~/code-reviews",
+  "review_max_attempts": 3,
+  "review_retry_delay_seconds": 30,
   "post_review_started_comment": true,
   "review_section_names": {
     "critical": "Critical Issues",
@@ -3407,6 +3413,10 @@ logger = logging.getLogger(__name__)
 | Review process started | INFO | Includes PID and PR details |
 | Review completed | INFO | Successful review completion |
 | Review failed | ERROR | Includes exit code and error output |
+| Exited 0 without output | ERROR | Clean exit that wrote no review file; counted as a failed attempt |
+| Review attempt failed | WARNING | Includes attempt number, limit, and retry delay |
+| Retry attempt started | INFO | Includes attempt number and new PID |
+| Gave up after N attempts | ERROR | Attempt limit reached; review recorded as failed |
 | Review cancelled | INFO | When user cancels a review |
 | Process termination | WARNING | If process required kill signal |
 
@@ -3435,9 +3445,55 @@ process = subprocess.Popen(
 2. Process reference stored in `active_reviews`
 3. Frontend polls `/api/reviews` every 5 seconds
 4. On poll, backend calls `poll()` on each process
-5. When `poll()` returns exit code, status updated
+5. When `poll()` returns exit code, the attempt is judged (see below) and the status updated
 6. stderr captured for failed reviews
 7. Process removed on cancellation or after viewing error
+
+#### Attempt Outcome and Retries
+
+An exit code of 0 is **not** sufficient to call a review successful. The Claude
+CLI can exit cleanly having written neither output file — most often because the
+wrapper delegated the review to a background agent and then ended its turn,
+which kills the agent mid-review. Recording that as `completed` stores a
+0-score error stub that is indistinguishable in the UI from a genuine failing
+review, and (for follow-ups) feeds an empty "previous review" into the next
+round's prompt.
+
+`check_review_status()` therefore classifies each attempt as successful only
+when **both** conditions hold:
+
+- the process exited 0, and
+- `review_produced_output()` finds either the `.md` or the `.json` file on disk
+
+A failed attempt is retried up to `review_max_attempts` times in total, with a
+`review_retry_delay_seconds` backoff between attempts:
+
+| State | Meaning |
+|-------|---------|
+| `attempt` | 1-based index of the attempt currently running |
+| `retry_at` | `time.monotonic()` deadline; non-`None` means a retry is armed |
+| `spawn` | The verbatim `start_review_process()` kwargs, so a retry reproduces the same run (including `is_followup` and the previous review content) |
+
+Design notes:
+
+- **The reported status stays `running` across retries.** The frontend's
+  `ActiveReview.status` is a closed union of `running | completed | failed`, and
+  `ReviewPollingManager` stops polling once nothing is `running`; a distinct
+  `retrying` status would stall the UI. Retries are an internal detail — the
+  review is genuinely still in progress. The attempt number is surfaced as the
+  `attempt` field on `GET /api/reviews` for visibility.
+- **The backoff never sleeps under the lock.** A retry arms a `retry_at`
+  deadline; the next poll (the auto-verdict watcher ticks every 10s) spawns the
+  next attempt. Sleeping inside `check_review_status()` would stall every other
+  review's poll and hold `reviews_lock` for the duration.
+- **Retries do not re-announce the review.** `post_review_started_comment()` is
+  called once from `begin_review()`, not per attempt, so a retried review does
+  not spam the PR conversation.
+- **A spawn failure is terminal.** If `start_review_process()` cannot start the
+  CLI at all (missing binary), the review is recorded as failed immediately
+  rather than burning the remaining attempts on an unfixable error.
+- Each attempt writes to a freshly timestamped file for follow-ups, so a
+  partial file from a dead attempt is never mistaken for the retry's output.
 
 ### Review JSON Schema
 

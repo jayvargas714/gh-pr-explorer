@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backend.config import get_reviews_dir
+from backend.config import get_review_retry_settings, get_reviews_dir
 from backend.services.github_service import fetch_pr_head_sha, fetch_pr_state
 from backend.services.review_started_service import post_review_started_comment
 from backend.services.review_schema import (
@@ -36,6 +36,31 @@ _SCHEMA_INSTRUCTIONS = (
     "problem (string), and optionally principle (string — the engineering principle violated, "
     "e.g. 'DRY / Single Source of Truth (violates DRY)'), fix (string), and code_snippet (string). "
 )
+
+# The wrapper CLI must not hand the review off to a background agent. In
+# `claude -p`, a text-only turn ends the run, which kills any still-running
+# background subagent before it writes its output files — producing a silent
+# success with no review on disk. Requiring a foreground dispatch keeps the
+# wrapper alive until the files exist.
+_FOREGROUND_INSTRUCTIONS = (
+    "Run the reviewer agent in the FOREGROUND and wait for it to return. Do NOT "
+    "dispatch it as a background or async agent, and do not end your turn while it "
+    "is still running — ending your turn early kills the agent before it can write "
+    "anything. Confirm both output files exist on disk before you finish. "
+)
+
+
+def review_produced_output(review_file):
+    """True when a review run actually wrote something we can ingest.
+
+    The Claude CLI can exit 0 having written neither file — most often because
+    it delegated to a background agent and ended its turn, killing the agent
+    mid-review. Such a run is a failure however clean its exit code looks.
+    """
+    if not review_file:
+        return False
+    review_path = Path(review_file)
+    return review_path.exists() or review_path.with_suffix(".json").exists()
 
 
 def save_review_to_db(key, review, status, reviews_db):
@@ -177,43 +202,129 @@ def save_review_to_db(key, review, status, reviews_db):
 
 
 def check_review_status(key, active_reviews, reviews_lock, reviews_db):
-    """Check and update the status of a review process."""
+    """Check and update the status of a review process.
+
+    A run that exits non-zero, or exits 0 without writing its review files, is
+    retried up to the configured attempt limit before being recorded as failed.
+    The reported status stays "running" across retries so callers see one
+    continuous review rather than a burst of failures.
+    """
     with reviews_lock:
         if key not in active_reviews:
             return None
         review = active_reviews[key]
+        if review["status"] != "running":
+            return review
+
+        def finalize(succeeded):
+            status = "completed" if succeeded else "failed"
+            review["status"] = status
+            review["completed_at"] = datetime.now(timezone.utc).isoformat()
+            review_id = save_review_to_db(key, review, status, reviews_db)
+            if review_id and status == "completed":
+                _spawn_auto_verdict(key, review_id)
+
+        # Waiting out the backoff before the next attempt. Spawning here rather
+        # than sleeping keeps the poll cheap and the lock short.
+        if review.get("retry_at") is not None:
+            if time.monotonic() >= review["retry_at"]:
+                if not _respawn_review(key, review):
+                    finalize(False)
+            return review
+
         process = review.get("process")
-        if process and review["status"] == "running":
-            exit_code = process.poll()
-            if exit_code is not None:
-                try:
-                    stdout, stderr = process.communicate(timeout=1)
-                    if stderr:
-                        review["error_output"] = stderr.strip()[-2000:]
-                    if stdout:
-                        review["stdout"] = stdout.strip()[-500:]
-                except subprocess.TimeoutExpired:
-                    pass
-                except Exception as e:
-                    logger.error(f"Error reading process output for {key}: {e}")
+        if process is None:
+            return review
+        exit_code = process.poll()
+        if exit_code is None:
+            return review
 
-                status = "completed" if exit_code == 0 else "failed"
-                review["status"] = status
-                review["exit_code"] = exit_code
-                review["completed_at"] = datetime.now(timezone.utc).isoformat()
+        try:
+            stdout, stderr = process.communicate(timeout=1)
+            if stderr:
+                review["error_output"] = stderr.strip()[-2000:]
+            if stdout:
+                review["stdout"] = stdout.strip()[-500:]
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception as e:
+            logger.error(f"Error reading process output for {key}: {e}")
 
-                if exit_code == 0:
-                    logger.info(f"Review completed successfully: {key}")
-                else:
-                    error_msg = review.get("error_output", "Unknown error")
-                    logger.error(f"Review failed: {key} (exit code: {exit_code})\nError: {error_msg}")
+        review["exit_code"] = exit_code
+        produced_output = review_produced_output(review.get("review_file"))
 
-                review_id = save_review_to_db(key, review, status, reviews_db)
+        if exit_code != 0:
+            error_msg = review.get("error_output", "Unknown error")
+            logger.error(f"Review failed: {key} (exit code: {exit_code})\nError: {error_msg}")
+        elif not produced_output:
+            # Exit 0 with nothing on disk: the CLI reported success but wrote no
+            # review. Recording this as "completed" would store a 0-score stub
+            # that reads like a real verdict, so treat it as a failed attempt.
+            logger.error(
+                f"Review process for {key} exited 0 without writing "
+                f"{review.get('review_file')} — treating as a failed attempt"
+            )
+        else:
+            logger.info(f"Review completed successfully: {key}")
 
-                if review_id and status == "completed":
-                    _spawn_auto_verdict(key, review_id)
+        if exit_code == 0 and produced_output:
+            finalize(True)
+        elif not _schedule_review_retry(key, review):
+            finalize(False)
 
         return review
+
+
+def _schedule_review_retry(key, review):
+    """Arm a delayed retry for a failed attempt.
+
+    Returns:
+        bool: True if another attempt was armed, False if the limit is reached
+        and the caller should record the review as failed.
+    """
+    max_attempts, retry_delay = get_review_retry_settings()
+    attempt = review.get("attempt", 1)
+
+    if attempt >= max_attempts:
+        logger.error(f"Review for {key} failed after {attempt} attempt(s) — giving up")
+        return False
+
+    if not review.get("spawn"):
+        logger.error(f"Cannot retry review for {key}: no spawn arguments recorded")
+        return False
+
+    review["retry_at"] = time.monotonic() + retry_delay
+    review["process"] = None
+    logger.warning(
+        f"Review attempt {attempt}/{max_attempts} failed for {key} — "
+        f"retrying in {retry_delay:g}s"
+    )
+    return True
+
+
+def _respawn_review(key, review):
+    """Start the next review attempt.
+
+    Returns:
+        bool: True if a new process is running, False if the spawn itself
+        failed (a missing or unusable CLI, which a further retry cannot fix).
+    """
+    review["retry_at"] = None
+    review["attempt"] = review.get("attempt", 1) + 1
+
+    process, result, _ = start_review_process(**review["spawn"])
+    if process is None:
+        logger.error(f"Could not start retry attempt {review['attempt']} for {key}: {result}")
+        return False
+
+    review["process"] = process
+    review["review_file"] = result
+    review["exit_code"] = None
+    review["error_output"] = ""
+    logger.info(
+        f"Started retry attempt {review['attempt']} for {key} (PID {process.pid})"
+    )
+    return True
 
 
 def _spawn_auto_verdict(key, review_id):
@@ -301,6 +412,19 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
         logger.error(f"Failed to start review for {key}: {result}")
         return {"error": result}, 500
 
+    # Recorded verbatim so a retry reproduces the same run. is_followup comes
+    # from start_review_process, which downgrades it when no previous review
+    # was usable — retries must not silently re-promote the review.
+    spawn_args = {
+        "pr_url": pr_url,
+        "owner": owner,
+        "repo": repo,
+        "pr_number": pr_number,
+        "is_followup": is_followup,
+        "previous_review_content": previous_review_content,
+        "reviewer_type": reviewer_type,
+    }
+
     with reviews_lock:
         active_reviews[key] = {
             "process": process,
@@ -313,7 +437,10 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
             "pr_title": pr_title,
             "pr_author": pr_author,
             "reviewer_type": reviewer_type,
-            "auto_started": auto_started
+            "auto_started": auto_started,
+            "spawn": spawn_args,
+            "attempt": 1,
+            "retry_at": None
         }
 
     post_review_started_comment(
@@ -408,6 +535,7 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
             f'"notes" (string — brief explanation of what changed or why). '
             f'Do NOT use "title", "details", or "id" as alternative field names. '
             f"Use the {agent_name} agent. "
+            f"{_FOREGROUND_INSTRUCTIONS}"
             f"Write the review to {review_file}. "
             f"ALSO write a structured JSON version to {json_file} following this schema: "
             f"{_SCHEMA_INSTRUCTIONS} "
@@ -418,6 +546,7 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
             f"Review PR #{pr_number} at {pr_url}. "
             f"{pb_context}"
             f"Use the {agent_name} agent. "
+            f"{_FOREGROUND_INSTRUCTIONS}"
             f"Write the review to {review_file}. "
             f"ALSO write a structured JSON version to {json_file} following this schema: "
             f"{_SCHEMA_INSTRUCTIONS} "
