@@ -53,30 +53,31 @@ Keep `docs/DESIGN.md` updated whenever any design aspect changes, and update the
 |---------|------|--------|
 | **Overview** | 15 | Purpose, value props, target users |
 | **Architecture** | 41 | System diagram, data flow |
-| — Backend Components (Flask) | 117 | Package layout, services, filters, visualizers, cache, 12 route blueprints |
+| — Backend Components (Flask) | 117 | Package layout, services, filters, visualizers, cache, 13 route blueprints |
 | — Database Module | 186 | DB classes, full SQL schema, per-class method tables |
-| — Data Migration Module | 517 | One-time legacy JSON/markdown import |
-| — Frontend (React + TS) | 537 | Dir layout, 4-tab + analytics sub-tab architecture |
-| — Styling | 572 | Matrix UI design system, CSS conventions |
-| **Features** | 591 | (one ### per feature below) |
-| — PR List Pagination | 610 | Client-side paging |
-| — PR Filtering System | 636 | 5 filter tabs (Basic/Review/People/Dates/Advanced) |
-| — Analytics (Stats / Lifecycle / Activity / Contributors / Reviews) | 697–821 | Developer + repo analytics sub-tabs |
-| — CI/Workflows Tab | 851 | Workflow runs table, filters, stats |
-| — PR Card Status Badges | 915 | Review/CI/divergence/approved-by-me badges |
-| — Settings Persistence | 983 | DB-backed filter/selection restore |
-| — Repo Stats Tab | 1001 | Repo-level stats, languages, LOC |
-| — Review History | 1030 | Past-review browser, score badges |
-| — PR Timelines | 1075 | Single-PR event timeline modal |
-| — Merge Queue | 1149 | Prioritized cross-repo PR queue |
-| — Swimlane Board (Kanban) | 1228 | Lane CRUD, DnD, badge filtering |
-| — Code Review System (Claude CLI) | 1374 | Reviewer agents, subprocess flow, foreground-dispatch requirement, review-underway PR comment, split Review/Audit triggers |
-| — Inline Comments Posting | 1493 | Post critical issues to GitHub |
-| — Review Verdict | 1541 | Approve/Request-Changes/Comment composer, verdict source toggle |
-| — Auto Verdicts | 1614 | Armed cards, criteria thresholds, auto approve/changes-requested, watcher threads, auto follow-up reviews |
-| **API Endpoints** | 1722 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2361 |
-| **Configuration** | 3140 | `config.json` options, incl. review retry policy |
-| **Technical Details** | 3189 | gh CLI integration, caching, parallel fetch, logging, subprocess mgmt + review retry policy (3421), Review JSON Schema (3498) |
-| **Future Considerations** | 3669 | Improvements, known limitations |
-| **Appendix** | 3731 | Dependencies, file structure, run instructions |
+| — Data Migration Module | 544 | One-time legacy JSON/markdown import |
+| — Frontend (React + TS) | 564 | Dir layout, 5-tab + analytics sub-tab architecture |
+| — Styling | 600 | Matrix UI design system, CSS conventions |
+| **Features** | 619 | (one ### per feature below) |
+| — PR List Pagination | 638 | Client-side paging |
+| — PR Filtering System | 664 | 5 filter tabs (Basic/Review/People/Dates/Advanced) |
+| — Analytics (Stats / Lifecycle / Activity / Contributors / Reviews) | 725–849 | Developer + repo analytics sub-tabs |
+| — CI/Workflows Tab | 879 | Workflow runs table, filters, stats |
+| — PR Card Status Badges | 943 | Review/CI/divergence/approved-by-me badges |
+| — Settings Persistence | 1011 | DB-backed filter/selection restore |
+| — Repo Stats Tab | 1029 | Repo-level stats, languages, LOC |
+| — Review History | 1058 | Past-review browser, score badges |
+| — PR Timelines | 1103 | Single-PR event timeline modal |
+| — Merge Queue | 1177 | Prioritized cross-repo PR queue |
+| — Swimlane Board (Kanban) | 1256 | Lane CRUD, DnD, badge filtering |
+| — Code Review System (Claude CLI) | 1402 | Reviewer agents, subprocess flow, foreground-dispatch requirement, review-underway PR comment, split Review/Audit triggers |
+| — Inline Comments Posting | 1521 | Post critical issues to GitHub |
+| — Review Verdict | 1569 | Approve/Request-Changes/Comment composer, verdict source toggle |
+| — Auto Verdicts | 1642 | Armed cards, criteria thresholds, auto approve/changes-requested, watcher threads, auto follow-up reviews |
+| — Review Event Log | 1750 | Per-attempt event log, run_id grouping, closed event/reason vocabularies, Review Logs tab |
+| **API Endpoints** | 1837 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2476, Review Logs at 3216 |
+| **Configuration** | 3328 | `config.json` options, incl. review retry + log retention |
+| **Technical Details** | 3379 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (3642), Review JSON Schema (3688) |
+| **Future Considerations** | 3859 | Improvements, known limitations |
+| **Appendix** | 3921 | Dependencies, file structure, run instructions |
 
