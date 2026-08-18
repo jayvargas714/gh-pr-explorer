@@ -130,3 +130,18 @@ def test_recorders_never_raise_on_bad_vocabulary(monkeypatch, events_db):
     rel._record("failed", RUN, REPO, PR, reason="not-a-real-reason")  # must not raise
     _, total = events_db.list_events(repo=REPO)
     assert total == 0
+
+
+def test_recorders_do_not_touch_the_application_database():
+    """The autouse conftest guard must redirect recorder writes away from the app DB.
+
+    Regression guard: driving a review lifecycle in a test used to write fake
+    events into the real pr_explorer.db, polluting the Review Logs tab.
+    """
+    from backend.config import DB_PATH
+    from backend.database import get_review_events_db as real_getter
+
+    assert rel.get_review_events_db is not real_getter, \
+        "conftest must patch the recorders' DB getter"
+    assert str(rel.get_review_events_db().db.db_path) != str(DB_PATH), \
+        "recorders must not resolve the application database during tests"
