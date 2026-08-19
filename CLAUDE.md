@@ -77,7 +77,7 @@ Keep `docs/DESIGN.md` updated whenever any design aspect changes, and update the
 | — Review Event Log | 1750 | Per-attempt event log, run_id grouping, closed event/reason vocabularies, Review Logs tab |
 | **API Endpoints** | 1837 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2476, Review Logs at 3216 |
 | **Configuration** | 3328 | `config.json` options, incl. review retry + log retention |
-| **Technical Details** | 3379 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (3642), Review JSON Schema (3688) |
-| **Future Considerations** | 3859 | Improvements, known limitations |
-| **Appendix** | 3921 | Dependencies, file structure, run instructions |
+| **Technical Details** | 3379 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (3642), follow-up parent selection (3688), Review JSON Schema (3721) |
+| **Future Considerations** | 3892 | Improvements, known limitations |
+| **Appendix** | 3954 | Dependencies, file structure, run instructions |
 

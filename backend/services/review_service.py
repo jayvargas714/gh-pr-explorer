@@ -74,6 +74,43 @@ def review_produced_output(review_file):
     return review_path.exists() or review_path.with_suffix(".json").exists()
 
 
+# How far back to look for a follow-up's parent. A PR accumulates a handful of
+# reviews, so this only needs to outrun a plausible run of consecutive failures.
+PREVIOUS_REVIEW_SEARCH_LIMIT = 20
+
+
+def _is_error_stub(content_json):
+    """True when a stored review holds no findings to follow up on.
+
+    save_review_to_db() writes an {"error": true} stub when a review produced no
+    output. Handing that to a follow-up asks the reviewer to track resolution
+    against an empty issue list. Content that simply is not JSON is left alone —
+    start_review_process() passes it through verbatim, which predates this check.
+    """
+    if not content_json:
+        return True
+    try:
+        return bool(json.loads(content_json).get("error"))
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return False
+
+
+def _find_usable_previous_review(reviews_db, full_repo, pr_number):
+    """Most recent review for a PR that carries real findings.
+
+    Walks back past failure stubs rather than falling back to a fresh review: the
+    PR's earlier findings are still the right thing to track resolution against,
+    and discarding them would waste the follow-up's whole point.
+    """
+    candidates = reviews_db.list_reviews(
+        repo=full_repo, pr_number=pr_number, limit=PREVIOUS_REVIEW_SEARCH_LIMIT
+    )
+    for candidate in candidates:
+        if not _is_error_stub(candidate.get("content_json")):
+            return candidate
+    return None
+
+
 def _event_target_for(key, review):
     """(run_id, repo, pr_number) for the event recorders.
 
@@ -491,16 +528,24 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
     parent_id = None
     if is_followup:
         full_repo = f"{owner}/{repo}"
+        prev_review = None
+
         if previous_review_id:
-            prev_review = reviews_db.get_review(previous_review_id)
-            if prev_review:
-                previous_review_content = prev_review.get("content_json")
-                parent_id = previous_review_id
-        else:
-            prev_review = reviews_db.get_latest_review_for_pr(full_repo, pr_number)
-            if prev_review:
-                previous_review_content = prev_review.get("content_json")
-                parent_id = prev_review.get("id")
+            candidate = reviews_db.get_review(previous_review_id)
+            if candidate and _is_error_stub(candidate.get("content_json")):
+                logger.warning(
+                    f"Previous review {previous_review_id} for {full_repo}#{pr_number} has no "
+                    f"findings (failed review) — looking further back for a usable one"
+                )
+            else:
+                prev_review = candidate
+
+        if prev_review is None:
+            prev_review = _find_usable_previous_review(reviews_db, full_repo, pr_number)
+
+        if prev_review:
+            previous_review_content = prev_review.get("content_json")
+            parent_id = prev_review.get("id")
 
         if not previous_review_content:
             logger.warning(f"No previous review found for follow-up, proceeding as normal review")

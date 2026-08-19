@@ -3685,6 +3685,39 @@ Design notes:
 - Each attempt writes to a freshly timestamped file for follow-ups, so a
   partial file from a dead attempt is never mistaken for the retry's output.
 
+#### Follow-up Parent Selection
+
+A review that exhausts every attempt is still persisted — with the `{"error":
+true}` content stub, which carries no findings. That stub must never become a
+follow-up's parent: `json_to_markdown()` renders it as an empty review body with
+a bare **Score: 0/10**, so the follow-up prompt asks the reviewer to track
+resolution against an empty issue list.
+
+`begin_review()` therefore resolves the parent through `_is_error_stub()` and
+`_find_usable_previous_review()` rather than taking whatever review is newest:
+
+| Situation | Parent chosen |
+|-----------|---------------|
+| Newest review has findings | That review (unchanged) |
+| Newest review is a stub | The most recent earlier review with findings |
+| Every review within `PREVIOUS_REVIEW_SEARCH_LIMIT` is a stub | None — falls back to a normal review |
+| `previous_review_id` names a review with findings | That review (unchanged) |
+| `previous_review_id` names a stub | Falls through to the search above |
+
+**Walking back rather than starting fresh** is the deliberate choice. Falling
+back to a normal review would discard findings the PR still has open, and spend
+a full review run that cannot do resolution tracking. The earlier findings remain
+the right thing to track against — a failed attempt says nothing about the code.
+
+Content that is present but not valid JSON is *not* treated as a stub. It is
+passed through verbatim, matching `start_review_process()`, which falls back to
+the raw string when `json_to_markdown()` cannot parse it.
+
+Note that `get_latest_review_for_pr()` is deliberately left unfiltered. Its other
+callers — the auto follow-up watcher's new-commit check and the divergence badge
+endpoints — want the newest review whatever its content, because a stub still
+records a valid `head_commit_sha`.
+
 ### Review JSON Schema
 
 Reviews are stored as structured JSON in the `content_json` column. The schema is versioned to support future evolution.
