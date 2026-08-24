@@ -15,6 +15,13 @@ from backend.services.github_service import (
     fetch_pr_state_and_sha,
     get_authenticated_login,
 )
+from backend.services.review_event_log import (
+    REASON_AUTO_SKIPPED,
+    REASON_AUTO_SUPPRESSED,
+    REASON_POST_FAILED,
+    record_verdict_not_posted,
+    record_verdict_posted,
+)
 from backend.services.review_schema import (
     format_issue_lines,
     format_recommendation_lines,
@@ -164,6 +171,23 @@ def maybe_post_auto_verdict(repo: str, pr_number: int, review_id: int) -> Option
             review_id, outcome, event=event, reason=reason,
             tallies=tallies, criteria=criteria, error_detail=error_detail,
         )
+        # Mirror the terminal outcome into the review event log so the Review
+        # Logs tab can show whether the run's verdict actually reached GitHub.
+        if outcome == "posted":
+            record_verdict_posted(
+                repo, pr_number, review_id=review_id, event=event,
+                auto_started=True, detail=reason,
+            )
+        else:
+            record_verdict_not_posted(
+                repo, pr_number, review_id=review_id,
+                reason={
+                    "suppressed": REASON_AUTO_SUPPRESSED,
+                    "skipped": REASON_AUTO_SKIPPED,
+                }.get(outcome, REASON_POST_FAILED),
+                event=event,
+                detail=error_detail or reason,
+            )
         return {"outcome": outcome, "event": event, "reason": reason}
 
     if review.get("status") != "completed":

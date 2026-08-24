@@ -15,6 +15,8 @@ const EVENT_LABELS: Record<string, string> = {
   retry_scheduled: 'retry scheduled',
   gave_up: 'gave up',
   cancelled: 'cancelled',
+  verdict_posted: 'verdict posted',
+  verdict_not_posted: 'verdict not posted',
 }
 
 const REASON_LABELS: Record<string, string> = {
@@ -23,17 +25,25 @@ const REASON_LABELS: Record<string, string> = {
   spawn_failed: 'could not start the CLI',
   attempts_exhausted: 'all attempts used',
   cancelled: 'cancelled by user',
+  auto_suppressed: 'suppressed by criteria',
+  auto_skipped: 'not eligible',
+  post_failed: 'GitHub rejected the post',
 }
 
 type BadgeVariant = 'success' | 'error' | 'warning' | 'info' | 'neutral'
 
 function eventVariant(event: string): BadgeVariant {
-  if (event === 'completed') return 'success'
+  if (event === 'completed' || event === 'verdict_posted') return 'success'
   if (event === 'gave_up') return 'error'
-  if (event === 'failed') return 'warning'
+  if (event === 'failed' || event === 'verdict_not_posted') return 'warning'
   if (event === 'retry_scheduled') return 'info'
   return 'neutral'
 }
+
+// Whether a verdict reached GitHub is a separate axis from how the review run
+// itself ended, so these events are held out of the run's Outcome column and
+// summarised in Posted instead.
+const VERDICT_EVENTS = new Set(['verdict_posted', 'verdict_not_posted'])
 
 interface Run {
   runId: string
@@ -41,7 +51,10 @@ interface Run {
   repo: string
   events: ReviewLogEvent[]
   first: ReviewLogEvent
+  /** Latest lifecycle event — what the run's Outcome column reports. */
   last: ReviewLogEvent
+  /** Latest verdict event, if the run's review ever reached a posting decision. */
+  verdict: ReviewLogEvent | null
   attempts: number
 }
 
@@ -61,7 +74,9 @@ function groupIntoRuns(events: ReviewLogEvent[]): Run[] {
 
   return Array.from(byRun.entries()).map(([runId, runEvents]) => {
     // runEvents arrives newest-first, matching the API ordering.
-    const last = runEvents[0]
+    const lifecycle = runEvents.filter((e) => !VERDICT_EVENTS.has(e.event))
+    // Fall back to the raw list when an event filter has left nothing else.
+    const last = lifecycle[0] ?? runEvents[0]
     const first = runEvents[runEvents.length - 1]
     return {
       runId,
@@ -70,9 +85,43 @@ function groupIntoRuns(events: ReviewLogEvent[]): Run[] {
       events: runEvents,
       first,
       last,
-      attempts: Math.max(...runEvents.map((e) => e.attempt || 1)),
+      verdict: runEvents.find((e) => VERDICT_EVENTS.has(e.event)) ?? null,
+      attempts: Math.max(...lifecycle.map((e) => e.attempt || 1), 1),
     }
   })
+}
+
+/**
+ * Render a run's posting outcome.
+ *
+ * The recorders pack the GitHub review event (APPROVE / REQUEST_CHANGES /
+ * COMMENT) into the head of `detail`, followed by the free-text explanation.
+ */
+function PostedCell({ verdict }: { verdict: ReviewLogEvent | null }) {
+  if (!verdict) return <span className="mx-review-logs__posted-none">—</span>
+
+  const [head, ...rest] = (verdict.detail || '').split(' — ')
+  const explanation = rest.join(' — ')
+  const posted = verdict.event === 'verdict_posted'
+  const label = posted
+    ? head || 'posted'
+    : REASON_LABELS[verdict.reason || ''] || verdict.reason || 'not posted'
+
+  return (
+    <div className="mx-review-logs__posted">
+      <Badge variant={posted ? 'success' : 'warning'}>
+        {posted ? '✓' : '✗'} {label}
+      </Badge>
+      {posted && verdict.auto_started ? (
+        <span className="mx-review-logs__posted-by" title="Posted automatically">🤖</span>
+      ) : null}
+      {(posted ? explanation : verdict.detail) && (
+        <span className="mx-review-logs__posted-detail">
+          {posted ? explanation : verdict.detail}
+        </span>
+      )}
+    </div>
+  )
 }
 
 export function ReviewLogsView() {
@@ -195,6 +244,7 @@ export function ReviewLogsView() {
                 <th>Latest</th>
                 <th>Attempts</th>
                 <th>Outcome</th>
+                <th>Posted</th>
               </tr>
             </thead>
             <tbody>
@@ -217,6 +267,9 @@ export function ReviewLogsView() {
                         </span>
                       )}
                     </td>
+                    <td>
+                      <PostedCell verdict={run.verdict} />
+                    </td>
                   </tr>
                   {expanded[run.runId] &&
                     run.events.map((event) => (
@@ -229,7 +282,7 @@ export function ReviewLogsView() {
                         </td>
                         <td colSpan={2}>{event.created_at}</td>
                         <td>{event.attempt ?? '—'}</td>
-                        <td className="mx-review-logs__detail">
+                        <td className="mx-review-logs__detail" colSpan={2}>
                           {event.reason && (
                             <div>{REASON_LABELS[event.reason] || event.reason}</div>
                           )}

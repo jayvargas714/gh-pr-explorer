@@ -10,8 +10,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-VALID_EVENTS = ("started", "completed", "failed", "retry_scheduled", "gave_up", "cancelled")
-VALID_REASONS = ("no_output", "nonzero_exit", "spawn_failed", "attempts_exhausted", "cancelled")
+VALID_EVENTS = (
+    "started", "completed", "failed", "retry_scheduled", "gave_up", "cancelled",
+    "verdict_posted", "verdict_not_posted",
+)
+VALID_REASONS = (
+    "no_output", "nonzero_exit", "spawn_failed", "attempts_exhausted", "cancelled",
+    "auto_suppressed", "auto_skipped", "post_failed",
+)
 
 # Columns callers may set through log_event(**fields), in insert order.
 _OPTIONAL_COLUMNS = (
@@ -83,6 +89,25 @@ class ReviewEventsDB:
             cursor = conn.cursor()
             cursor.execute(sql, values)
             return cursor.lastrowid
+
+    def get_run_id_for_review(self, review_id: int) -> Optional[str]:
+        """Return the run that produced ``review_id``, or None if there isn't one.
+
+        A verdict is posted well after the run that produced its review, so the
+        posting call site knows the review but not the run. The ``completed``
+        event carries ``review_id``, which is what ties the two back together.
+
+        None is a normal outcome, not an error: reviews written before the event
+        log existed, and verdicts posted with no review attached, have no run.
+        """
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT run_id FROM review_events WHERE review_id = ? ORDER BY id DESC LIMIT 1",
+                (review_id,),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
 
     def list_events(
         self,

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { MergeQueueItem, Swimlane, SwimlaneColor } from '../api/types'
+import { AutoVerdictReviewer, MergeQueueItem, Swimlane, SwimlaneColor } from '../api/types'
 import {
   createSwimlane,
   deleteSwimlane,
@@ -54,6 +54,11 @@ export const BADGE_DIMENSION: Record<BadgeFilterKey, BadgeDimension> = {
 
 export type BadgeFilterMode = 'OR' | 'AND'
 
+// Quick auto-mode filter, surfaced in the board header as a segmented control.
+// Deliberately separate from the `auto:armed` badge chip: this is the one-click
+// path, the chip stays available for AND/OR combinations with other badges.
+export type AutoModeFilter = 'all' | 'auto' | 'manual'
+
 interface SwimlaneState {
   lanes: Swimlane[]
   cardsByLane: CardsByLane
@@ -82,6 +87,9 @@ interface SwimlaneState {
   toggleBadgeFilter: (key: BadgeFilterKey) => void
   setBadgeFilterMode: (mode: BadgeFilterMode) => void
   clearBadgeFilters: () => void
+  // Show all cards, only auto-armed ones, or only un-armed ones.
+  autoModeFilter: AutoModeFilter
+  setAutoModeFilter: (mode: AutoModeFilter) => void
 
   loadBoard: (opts?: { force?: boolean }) => Promise<void>
   refreshBoard: () => Promise<void>
@@ -92,6 +100,16 @@ interface SwimlaneState {
   reorderLanesLocal: (fromIndex: number, toIndex: number) => Promise<void>
   pausePolling: () => void
   resumePolling: () => void
+
+  // Apply an arm/disarm to the board's own copy of a card, so the header
+  // counts and the auto-mode filter track the toggle immediately instead of
+  // waiting on the next board fetch. A no-op when the PR isn't on the board
+  // (the merge-queue panel renders the same toggle).
+  applyAutoVerdictLocal: (
+    prNumber: number,
+    repo: string,
+    autoVerdict: { enabled: boolean; reviewerType: AutoVerdictReviewer },
+  ) => void
 
   // Returns true if the move was applied successfully (or restored on failure)
   moveCard: (
@@ -211,18 +229,27 @@ export function cardMatchesBadges(
   return true
 }
 
+/** Visibility check for the auto-mode segmented control. */
+export function cardMatchesAutoMode(card: MergeQueueItem, mode: AutoModeFilter): boolean {
+  if (mode === 'all') return true
+  const armed = !!card.autoVerdict?.enabled
+  return mode === 'auto' ? armed : !armed
+}
+
 /**
  * Combined visibility check: a card is "matching" iff it passes the text
- * search (when active) AND the badge filter (when active). Both empty = match.
+ * search, the badge filter, and the auto-mode filter. All inactive = match.
  */
 export function cardPassesFilters(
   card: MergeQueueItem,
   query: string,
   badges: Set<BadgeFilterKey>,
   mode: BadgeFilterMode,
+  autoMode: AutoModeFilter = 'all',
 ): boolean {
   const passesText = query.trim().length === 0 || cardMatchesQuery(card, query)
   if (!passesText) return false
+  if (!cardMatchesAutoMode(card, autoMode)) return false
   return cardMatchesBadges(card, badges, mode)
 }
 
@@ -247,6 +274,8 @@ export const useSwimlaneStore = create<SwimlaneState>((set, get) => ({
   }),
   setBadgeFilterMode: (mode) => set({ badgeFilterMode: mode }),
   clearBadgeFilters: () => set({ badgeFilters: new Set<BadgeFilterKey>() }),
+  autoModeFilter: 'all',
+  setAutoModeFilter: (mode) => set({ autoModeFilter: mode }),
 
   loadBoard: async (opts = {}) => {
     set({ loading: true, error: null })
@@ -301,6 +330,25 @@ export const useSwimlaneStore = create<SwimlaneState>((set, get) => ({
 
   pausePolling: () => set((s) => ({ pollPauseDepth: s.pollPauseDepth + 1 })),
   resumePolling: () => set((s) => ({ pollPauseDepth: Math.max(0, s.pollPauseDepth - 1) })),
+
+  applyAutoVerdictLocal: (prNumber, repo, autoVerdict) => {
+    const prev = get().cardsByLane
+    let found = false
+    const next: CardsByLane = {}
+    for (const k of Object.keys(prev)) {
+      const laneId = Number(k)
+      next[laneId] = prev[laneId].map((c) => {
+        if (c.number !== prNumber || c.repo !== repo) return c
+        found = true
+        // Preserve `last`: arming says nothing about the previous verdict.
+        return { ...c, autoVerdict: { ...c.autoVerdict, ...autoVerdict, last: c.autoVerdict?.last ?? null } }
+      })
+    }
+    if (!found) return
+    // Bump the epoch so a poll already in flight can't undo this (same guard
+    // the card-move path relies on).
+    set((s) => ({ cardsByLane: next, boardEpoch: s.boardEpoch + 1 }))
+  },
 
   createLane: async (name, color) => {
     try {

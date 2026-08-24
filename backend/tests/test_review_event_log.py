@@ -145,3 +145,71 @@ def test_recorders_do_not_touch_the_application_database():
         "conftest must patch the recorders' DB getter"
     assert str(rel.get_review_events_db().db.db_path) != str(DB_PATH), \
         "recorders must not resolve the application database during tests"
+
+
+def test_get_run_id_for_review_finds_the_completing_run(events_db):
+    events_db.log_event("started", REPO, PR, RUN, attempt=1)
+    events_db.log_event("completed", REPO, PR, RUN, attempt=1, review_id=969)
+    assert events_db.get_run_id_for_review(969) == RUN
+
+
+def test_get_run_id_for_review_is_none_when_no_run_wrote_it(events_db):
+    events_db.log_event("completed", REPO, PR, RUN, attempt=1, review_id=969)
+    assert events_db.get_run_id_for_review(12345) is None
+
+
+def test_record_verdict_posted_attaches_to_the_reviews_run(events_db):
+    events_db.log_event("completed", REPO, PR, RUN, attempt=1, review_id=969)
+    rel.record_verdict_posted(
+        REPO, PR, review_id=969, event="APPROVE", auto_started=True,
+        detail="0 critical, 1 major",
+    )
+    events, _ = events_db.list_events(repo=REPO, event="verdict_posted")
+    assert len(events) == 1
+    row = events[0]
+    assert row["run_id"] == RUN
+    assert row["review_id"] == 969
+    assert row["auto_started"] == 1
+    assert row["detail"] == "APPROVE — 0 critical, 1 major"
+    assert row["reason"] is None
+
+
+def test_record_verdict_posted_marks_manual_posts(events_db):
+    events_db.log_event("completed", REPO, PR, RUN, attempt=1, review_id=969)
+    rel.record_verdict_posted(REPO, PR, review_id=969, event="COMMENT", auto_started=False)
+    row = events_db.list_events(repo=REPO, event="verdict_posted")[0][0]
+    assert row["auto_started"] == 0
+    assert row["detail"] == "COMMENT"
+
+
+def test_record_verdict_not_posted_carries_reason_and_detail(events_db):
+    events_db.log_event("completed", REPO, PR, RUN, attempt=1, review_id=969)
+    rel.record_verdict_not_posted(
+        REPO, PR, review_id=969, reason=rel.REASON_AUTO_SUPPRESSED,
+        detail="auto-approve disabled",
+    )
+    row = events_db.list_events(repo=REPO, event="verdict_not_posted")[0][0]
+    assert row["run_id"] == RUN
+    assert row["reason"] == "auto_suppressed"
+    assert row["detail"] == "auto-approve disabled"
+    assert row["auto_started"] == 1
+
+
+def test_verdict_recorders_skip_reviews_with_no_run(events_db):
+    """A review that predates the log has no run to hang the verdict on."""
+    rel.record_verdict_posted(REPO, PR, review_id=969, event="APPROVE", auto_started=True)
+    rel.record_verdict_not_posted(
+        REPO, PR, review_id=969, reason=rel.REASON_POST_FAILED, detail="boom",
+    )
+    assert events_db.list_events(repo=REPO)[1] == 0
+
+
+def test_verdict_recorders_never_raise(monkeypatch):
+    """A broken log must not take the verdict down with it."""
+    class Exploding:
+        def get_run_id_for_review(self, review_id):
+            raise RuntimeError("db gone")
+
+    monkeypatch.setattr(rel, "get_review_events_db", lambda: Exploding())
+    rel.record_verdict_posted(REPO, PR, review_id=1, event="APPROVE", auto_started=True)
+    rel.record_verdict_not_posted(REPO, PR, review_id=1, reason=rel.REASON_POST_FAILED)

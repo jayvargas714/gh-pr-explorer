@@ -9,7 +9,7 @@ from backend.extensions import logger, active_reviews, reviews_lock
 from backend.database import get_reviews_db
 from backend.services.github_service import fetch_pr_head_sha
 from backend.services.review_service import save_review_to_db, check_review_status, begin_review
-from backend.services.review_event_log import record_cancelled
+from backend.services.review_event_log import record_cancelled, record_verdict_posted
 from backend.services.inline_comments_service import post_inline_comments, preview_section_issues
 from backend.services.verdict_service import post_verdict
 from backend.routes import error_response
@@ -240,6 +240,14 @@ def post_verdict_endpoint(owner, repo, pr_number):
             owner, repo, pr_number, event, body,
             inline_comments=inline_comments, review_id=review_id,
         )
+        # Log the post against the run that produced this review, so the Review
+        # Logs tab shows hand-posted verdicts alongside auto ones. Verdicts sent
+        # without a review_id have no run to attach to and are not recorded.
+        if status_code == 200 and review_id:
+            record_verdict_posted(
+                f"{owner}/{repo}", pr_number, review_id=review_id,
+                event=event, auto_started=False,
+            )
         return jsonify(result), status_code
     except Exception as e:
         return error_response("Internal server error", 500, f"Error posting verdict for PR #{pr_number}: {e}")

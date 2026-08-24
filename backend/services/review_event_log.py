@@ -20,6 +20,9 @@ REASON_NONZERO_EXIT = "nonzero_exit"
 REASON_SPAWN_FAILED = "spawn_failed"
 REASON_ATTEMPTS_EXHAUSTED = "attempts_exhausted"
 REASON_CANCELLED = "cancelled"
+REASON_AUTO_SUPPRESSED = "auto_suppressed"
+REASON_AUTO_SKIPPED = "auto_skipped"
+REASON_POST_FAILED = "post_failed"
 
 
 def new_run_id() -> str:
@@ -103,4 +106,50 @@ def record_cancelled(run_id, repo, pr_number, *, attempt=None):
         "cancelled", run_id, repo, pr_number,
         attempt=attempt,
         reason=REASON_CANCELLED,
+    )
+
+
+def _run_id_for_review(review_id):
+    """Resolve the run that produced ``review_id``, absorbing any failure."""
+    try:
+        return get_review_events_db().get_run_id_for_review(review_id)
+    except Exception as e:
+        logger.warning(f"Could not resolve run for review {review_id}: {e}")
+        return None
+
+
+def record_verdict_posted(repo, pr_number, *, review_id, event, auto_started, detail=None):
+    """A review verdict reached GitHub.
+
+    ``event`` is the GitHub review event (APPROVE / REQUEST_CHANGES / COMMENT).
+    Attaches to the run that produced ``review_id``; a verdict with no such run
+    is not recorded, since the Review Logs tab is grouped by run.
+    """
+    run_id = _run_id_for_review(review_id)
+    if not run_id:
+        return
+    _record(
+        "verdict_posted", run_id, repo, pr_number,
+        review_id=review_id,
+        auto_started=bool(auto_started),
+        detail=" — ".join(part for part in (event, detail) if part),
+    )
+
+
+def record_verdict_not_posted(repo, pr_number, *, review_id, reason, event=None, detail=None):
+    """An auto verdict was evaluated but nothing was posted.
+
+    ``reason`` must be one of REASON_AUTO_SUPPRESSED / REASON_AUTO_SKIPPED /
+    REASON_POST_FAILED. ``event`` is the verdict that would have been posted,
+    when one was chosen before the decision fell through.
+    """
+    run_id = _run_id_for_review(review_id)
+    if not run_id:
+        return
+    _record(
+        "verdict_not_posted", run_id, repo, pr_number,
+        review_id=review_id,
+        auto_started=True,
+        reason=reason,
+        detail=" — ".join(part for part in (event, detail) if part),
     )

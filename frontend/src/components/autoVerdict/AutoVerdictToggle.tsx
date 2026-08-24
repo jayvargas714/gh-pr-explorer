@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { setCardAutoVerdict } from '../../api/autoVerdict'
 import { AutoVerdictReviewer, MergeQueueItem } from '../../api/types'
 import { describeCriteria, useAutoVerdictStore } from '../../stores/useAutoVerdictStore'
+import { useSwimlaneStore } from '../../stores/useSwimlaneStore'
 import { AutoVerdictConfigModal } from './AutoVerdictConfigModal'
 
 interface AutoVerdictToggleProps {
@@ -16,14 +17,33 @@ const REVIEWERS: { key: AutoVerdictReviewer; label: string; agent: string }[] = 
 ]
 
 export function AutoVerdictToggle({ item, onRefresh }: AutoVerdictToggleProps) {
-  const armed = item.autoVerdict?.enabled ?? false
-  const reviewerType = item.autoVerdict?.reviewerType ?? 'default'
+  const serverArmed = item.autoVerdict?.enabled ?? false
+  const serverReviewer = item.autoVerdict?.reviewerType ?? 'default'
   const config = useAutoVerdictStore((s) => s.config)
+  const applyAutoVerdictLocal = useSwimlaneStore((s) => s.applyAutoVerdictLocal)
 
   const [menuOpen, setMenuOpen] = useState(false)
   const [configOpen, setConfigOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  // What the user just asked for, held until the server's copy agrees. Without
+  // it the button can't change until onRefresh() has refetched the whole board
+  // (a `gh pr view` per queued PR), which reads as the toggle being broken.
+  const [pending, setPending] = useState<{
+    enabled: boolean
+    reviewerType: AutoVerdictReviewer
+  } | null>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
+
+  const armed = pending?.enabled ?? serverArmed
+  const reviewerType = pending?.reviewerType ?? serverReviewer
+
+  // Drop the optimistic value once the refreshed card carries it.
+  useEffect(() => {
+    if (!pending) return
+    if (pending.enabled === serverArmed && pending.reviewerType === serverReviewer) {
+      setPending(null)
+    }
+  }, [pending, serverArmed, serverReviewer])
 
   useEffect(() => {
     if (!menuOpen) return
@@ -44,12 +64,22 @@ export function AutoVerdictToggle({ item, onRefresh }: AutoVerdictToggleProps) {
   }, [menuOpen])
 
   const persist = async (enabled: boolean, reviewer: AutoVerdictReviewer) => {
+    setPending({ enabled, reviewerType: reviewer })
+    // Patch the board's own copy too, so the header's auto/manual counts and
+    // the auto-mode filter move with the button. No-op outside the swimlane.
+    applyAutoVerdictLocal(item.number, item.repo, { enabled, reviewerType: reviewer })
     setBusy(true)
     try {
       await setCardAutoVerdict(item.number, item.repo, { enabled, reviewerType: reviewer })
       onRefresh()
     } catch (err) {
       console.error('Failed to update auto verdict:', err)
+      // Roll the optimistic state back to what the server still believes.
+      setPending(null)
+      applyAutoVerdictLocal(item.number, item.repo, {
+        enabled: serverArmed,
+        reviewerType: serverReviewer,
+      })
     } finally {
       setBusy(false)
     }
@@ -69,7 +99,6 @@ export function AutoVerdictToggle({ item, onRefresh }: AutoVerdictToggleProps) {
           type="button"
           className={`mx-button mx-button--ghost mx-button--sm mx-auto-verdict-btn${armed ? ' mx-auto-verdict-btn--active' : ''}`}
           aria-pressed={armed}
-          disabled={busy}
           data-tooltip={tooltip}
           onPointerDown={stopDrag}
           onClick={(e) => {

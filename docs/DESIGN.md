@@ -1280,7 +1280,7 @@ A Trello-style alternative view of the merge queue. Cards displayed inside swiml
 | Component | Responsibility |
 |-----------|----------------|
 | `SwimlaneModal` | Full-screen slide-from-right overlay shell, ESC handling, scroll lock |
-| `SwimlaneHeader` | Title, card count, search input, badge-filter popover, "Clear merged (N)" bulk-remove button, "+ Add Lane" inline form, refresh, close |
+| `SwimlaneHeader` | Title, card count, auto/manual split, search input, badge-filter popover, auto-mode segmented filter, "Clear merged (N)" bulk-remove button, "+ Add Lane" inline form, refresh, close |
 | `BadgeFilterPopover` | Funnel button next to the search input that opens a popover for badge-based card filtering (AND/OR toggle + grouped chips, see "Filtering" below) |
 | `SwimlaneBoard` | `DndContext` orchestrating cross-column and within-column DnD |
 | `SwimlaneColumn` | Single lane: colored header, name (inline-editable on double-click), color swatch popover, count badge, `−` delete button, droppable + sortable body |
@@ -1328,12 +1328,13 @@ swimlane_assignments (id, queue_item_id UNIQUE, swimlane_id, position_in_lane, u
 
 #### Filtering
 
-The header carries two visibility filters that both drive the same "match glow + non-match dim + auto-scroll-to-first-match" visual treatment. Filters are AND'd with each other: a card is visible (highlighted) iff it passes the text search and the badge filter.
+The header carries three visibility filters that all drive the same "match glow + non-match dim + auto-scroll-to-first-match" visual treatment. Filters are AND'd with each other: a card is visible (highlighted) iff it passes the text search, the badge filter, and the auto-mode filter.
 
 | Filter | Surface | Behavior |
 |--------|---------|----------|
 | Text search | Search input | Substring match against PR number, title, author, repo (case-insensitive); exact match on digit-only queries against the PR number |
 | Badge filter | Funnel popover (`BadgeFilterPopover`) | Grouped chip selector with an OR / AND mode toggle |
+| Auto mode | Segmented control (`All` / `🤖 Auto` / `Manual`) | One-click split by `autoVerdict.enabled` — armed cards, un-armed cards, or everything |
 
 Badge filter dimensions:
 
@@ -1344,6 +1345,7 @@ Badge filter dimensions:
 | Review | ✓ Approved, ✗ Changes Requested, 👀 Review Required |
 | CI | CI Passed, CI Failed, CI Running |
 | Review Score | Has review, Score ≥ 7, Score 4–6, Score < 4 |
+| Auto Verdict | 🤖 Armed, 🤖 Verdict Posted, 🤖 Needs Manual Approval |
 | Other | New Commits, Reviewers Requested, Follow-up |
 
 **Combinator semantics**
@@ -1351,7 +1353,15 @@ Badge filter dimensions:
 - **OR mode** — a card matches if any selected chip's predicate is true.
 - **AND mode** — within a single dimension, picks are still OR'd (a card can't be both Open and Merged at the same time); across dimensions each non-empty dimension must have at least one matching chip. Example: `State ∈ {Open, Merged}` AND `CI = Failure`.
 
-Selections live on `useSwimlaneStore` as `badgeFilters: Set<BadgeFilterKey>` and `badgeFilterMode: 'OR' | 'AND'`. The pure helper `cardPassesFilters(card, query, badges, mode)` combines text and badge predicates and is consumed by `SwimlaneColumn` (to drive `searchMatch="match"|"dim"` on each `QueueItem`) and by `SwimlaneHeader` (to compute the live `N matches` count). The match-glow uses the existing `mx-queue-item--search-match` pulse animation; non-matches receive `mx-queue-item--search-dim`.
+Selections live on `useSwimlaneStore` as `badgeFilters: Set<BadgeFilterKey>`, `badgeFilterMode: 'OR' | 'AND'`, and `autoModeFilter: 'all' | 'auto' | 'manual'`. The pure helper `cardPassesFilters(card, query, badges, mode, autoMode)` combines all three predicates and is consumed by `SwimlaneColumn` (to drive `searchMatch="match"|"dim"` on each `QueueItem`) and by `SwimlaneHeader` (to compute the live `N matches` count). The match-glow uses the existing `mx-queue-item--search-match` pulse animation; non-matches receive `mx-queue-item--search-dim`. "Clear all" resets all three.
+
+The auto-mode control overlaps the `🤖 Armed` badge chip deliberately: the segmented control is the one-click path for the common "show me what's on autopilot" question, while the chip remains available for AND/OR combinations with other badge dimensions.
+
+#### Auto/manual split
+
+Next to the card count the header shows `🤖 N auto · M manual`, counting cards by `autoVerdict.enabled` across every lane. The counts are unfiltered — they describe the whole board, not the current filter — so the split stays a stable read on how much of the queue is armed while filters come and go.
+
+Arming a card updates the count and the auto-mode filter immediately, not on the next poll: `AutoVerdictToggle` holds the requested state locally *and* calls `useSwimlaneStore.applyAutoVerdictLocal(prNumber, repo, autoVerdict)`, which patches the board's own copy of the card and bumps `boardEpoch` (so an in-flight poll can't undo it — the same guard the card-move path uses). The store action is a no-op when the PR isn't on the board, which is what makes the shared `QueueItem` safe to render in the merge queue panel. See "Optimistic arming" under Auto Verdicts.
 
 #### Live Updates
 
@@ -1741,6 +1751,18 @@ auto_verdict_reviewer TEXT      -- 'default' | 'pb' | 'ed'
 
 Badge variants: `🤖 auto ✗ changes requested` (error), `🤖 auto ✓ approved` (success), `🤖 auto 💬 comment` (info), `🤖 passed — approve manually` (warning), `🤖 auto verdict failed` (error), `🤖 auto skipped` (neutral).
 
+#### Optimistic arming
+
+Arming or disarming is reflected in the UI on click, not on the next fetch.
+`AutoVerdictToggle` renders from a locally-held `pending` state layered over the
+card's server value, clearing it once a refreshed card carries the same value and
+rolling it back if the `PUT` fails. It also patches the swimlane board's own copy
+via `useSwimlaneStore.applyAutoVerdictLocal` so the header's auto/manual counts
+and auto-mode filter move in step. The trigger button deliberately does *not*
+disable itself while the request is in flight — the previous behaviour left it
+disabled and unchanged for the length of a full board refetch (`gh pr view` per
+queued PR), which read as the toggle being broken.
+
 An armed card's **Review** button skips the reviewer picker on its primary click and starts the armed agent directly (labelled `🤖 Review`); the adjacent `▾` still opens the picker to override for one run without changing the stored arming.
 
 The swimlane badge filter gains an **Auto Verdict** dimension with chips *🤖 Armed*, *🤖 Verdict Posted*, and *🤖 Needs Manual Approval*, mirroring the rendered badges one-for-one as `cardMatchesBadge` requires.
@@ -1789,6 +1811,8 @@ Both vocabularies are closed sets. Recorders never invent a value.
 | `retry_scheduled` | Backoff armed before the next attempt | `detail` (delay) |
 | `gave_up` | Attempt limit reached; review recorded as failed | `attempt`, `max_attempts` |
 | `cancelled` | User cancelled the review | — |
+| `verdict_posted` | A verdict for this run's review reached GitHub | `review_id`, `auto_started`, `detail` |
+| `verdict_not_posted` | An auto verdict was evaluated but nothing was posted | `review_id`, `reason`, `detail` |
 
 | `reason` | Meaning |
 |----------|---------|
@@ -1797,13 +1821,35 @@ Both vocabularies are closed sets. Recorders never invent a value.
 | `spawn_failed` | The subprocess could not be started at all |
 | `attempts_exhausted` | Set on the `gave_up` event |
 | `cancelled` | User-initiated termination |
+| `auto_suppressed` | Criteria were met but auto-approve is off, so nothing was posted |
+| `auto_skipped` | The review was not eligible (PR closed, no usable content, non-completed status) |
+| `post_failed` | A verdict was chosen but GitHub rejected the post |
+
+#### Verdict events
+
+Whether a verdict reached GitHub is a *separate axis* from how the review run
+itself ended: a run can complete cleanly and still post nothing. The two
+`verdict_*` events record that axis.
+
+Both attach to the run that produced the review, resolved by
+`ReviewEventsDB.get_run_id_for_review(review_id)` — the `completed` event carries
+`review_id`, which is what ties a much-later verdict back to its run. **A verdict
+with no such run is not recorded**: reviews written before the event log existed,
+and verdicts posted with no review attached (the audit route), have no run to
+group under, and the Review Logs tab is grouped by run.
+
+`detail` leads with the GitHub review event (`APPROVE` / `REQUEST_CHANGES` /
+`COMMENT`), followed by the free-text explanation after an em dash separator —
+e.g. `APPROVE — 0 critical, 1 major`. `auto_started` distinguishes an auto
+verdict from a hand-posted one.
 
 #### Recording
 
 `backend/services/review_event_log.py` exposes one named recorder per event
 (`record_started`, `record_completed`, `record_failed`, `record_retry_scheduled`,
-`record_gave_up`, `record_cancelled`). Call sites pass domain values, never
-dicts, so the vocabulary above is enforced in one place.
+`record_gave_up`, `record_cancelled`, `record_verdict_posted`,
+`record_verdict_not_posted`). Call sites pass domain values, never dicts, so the
+vocabulary above is enforced in one place.
 
 **Every recorder swallows its own exceptions.** This mirrors
 `post_review_started_comment()`: observing a review must never be able to break
@@ -1819,12 +1865,26 @@ Call sites:
 | `_schedule_review_retry()` | `retry_scheduled` |
 | `_respawn_review()` | `started` (attempt N) |
 | `DELETE /api/reviews/<owner>/<repo>/<pr>` | `cancelled` |
+| `maybe_post_auto_verdict()` (its inner `record()`) | `verdict_posted`, `verdict_not_posted` |
+| `POST /api/repos/<owner>/<repo>/prs/<pr>/verdict` | `verdict_posted` (manual, only when the request carries a `review_id`) |
 
 #### UI
 
 `components/reviewLogs/ReviewLogsView.tsx` renders a summary strip (successes,
 failures by reason, and how many runs a retry rescued) above a table grouped by
-`run_id`, each group collapsible to its attempt rows. The view defaults to the
+`run_id`, each group collapsible to its attempt rows.
+
+Each run row carries two independent outcome columns:
+
+| Column | Sourced from | Shows |
+|--------|--------------|-------|
+| **Outcome** | The run's latest *lifecycle* event | How the review run itself ended (`completed`, `gave up`, …) |
+| **Posted** | The run's latest *verdict* event | `✓ APPROVE` / `✗ suppressed by criteria` / `—` when the run never reached a posting decision |
+
+`groupIntoRuns` holds the `verdict_*` events out of the lifecycle list when
+picking a run's `last` event, so a verdict landing after the review completes
+never displaces `completed` in the Outcome column. A 🤖 marker on a posted
+verdict distinguishes an auto post from a hand-posted one. The view defaults to the
 selected repository with an **All repos** toggle, since the tab only renders once
 a repo is chosen but the log is useful across repos.
 
@@ -3225,8 +3285,8 @@ Returns review lifecycle events, newest first. Powers the Review Logs tab.
 |-----------|------|-------------|
 | `repo` | string | Filter to one `owner/name` repository |
 | `pr_number` | integer | Filter to one PR |
-| `event` | string | Filter by event type (`started`, `failed`, …) |
-| `reason` | string | Filter by failure reason (`no_output`, `nonzero_exit`, …) |
+| `event` | string | Filter by event type (`started`, `failed`, `verdict_posted`, …) |
+| `reason` | string | Filter by failure reason (`no_output`, `auto_suppressed`, …) |
 | `since` | string | ISO8601 lower bound on `created_at` |
 | `limit` | integer | Page size (default 200) |
 | `offset` | integer | Page offset (default 0) |

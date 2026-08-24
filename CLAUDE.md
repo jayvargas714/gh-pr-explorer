@@ -69,15 +69,15 @@ Keep `docs/DESIGN.md` updated whenever any design aspect changes, and update the
 | — Review History | 1058 | Past-review browser, score badges |
 | — PR Timelines | 1103 | Single-PR event timeline modal |
 | — Merge Queue | 1177 | Prioritized cross-repo PR queue |
-| — Swimlane Board (Kanban) | 1256 | Lane CRUD, DnD, badge filtering |
-| — Code Review System (Claude CLI) | 1402 | Reviewer agents, subprocess flow, foreground-dispatch requirement, review-underway PR comment, split Review/Audit triggers |
-| — Inline Comments Posting | 1521 | Post critical issues to GitHub |
-| — Review Verdict | 1569 | Approve/Request-Changes/Comment composer, verdict source toggle |
-| — Auto Verdicts | 1642 | Armed cards, criteria thresholds, auto approve/changes-requested, watcher threads, auto follow-up reviews |
-| — Review Event Log | 1750 | Per-attempt event log, run_id grouping, closed event/reason vocabularies, Review Logs tab |
-| **API Endpoints** | 1837 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2476, Review Logs at 3216 |
-| **Configuration** | 3328 | `config.json` options, incl. review retry + log retention |
-| **Technical Details** | 3379 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (3642), follow-up parent selection (3688), Review JSON Schema (3721) |
-| **Future Considerations** | 3892 | Improvements, known limitations |
-| **Appendix** | 3954 | Dependencies, file structure, run instructions |
+| — Swimlane Board (Kanban) | 1256 | Lane CRUD, DnD, badge + auto-mode filtering, auto/manual header counts |
+| — Code Review System (Claude CLI) | 1412 | Reviewer agents, subprocess flow, foreground-dispatch requirement, review-underway PR comment, split Review/Audit triggers |
+| — Inline Comments Posting | 1531 | Post critical issues to GitHub |
+| — Review Verdict | 1579 | Approve/Request-Changes/Comment composer, verdict source toggle |
+| — Auto Verdicts | 1652 | Armed cards, criteria thresholds, auto approve/changes-requested, watcher threads, auto follow-up reviews, optimistic arming |
+| — Review Event Log | 1772 | Per-attempt event log, run_id grouping, closed event/reason vocabularies, verdict posted/not-posted events, Review Logs tab |
+| **API Endpoints** | 1897 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2536, Review Logs at 3276 |
+| **Configuration** | 3388 | `config.json` options, incl. review retry + log retention |
+| **Technical Details** | 3439 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (3702), follow-up parent selection (3748), Review JSON Schema (3781) |
+| **Future Considerations** | 3952 | Improvements, known limitations |
+| **Appendix** | 4014 | Dependencies, file structure, run instructions |
 

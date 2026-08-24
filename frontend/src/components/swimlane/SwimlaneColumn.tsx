@@ -26,6 +26,7 @@ export function SwimlaneColumn({ lane, cards, canDelete, sortable, isHighlighted
   const searchQuery = useSwimlaneStore((s) => s.searchQuery)
   const badgeFilters = useSwimlaneStore((s) => s.badgeFilters)
   const badgeFilterMode = useSwimlaneStore((s) => s.badgeFilterMode)
+  const autoModeFilter = useSwimlaneStore((s) => s.autoModeFilter)
 
   const [editing, setEditing] = useState(false)
   const [draftName, setDraftName] = useState(lane.name)
@@ -34,15 +35,16 @@ export function SwimlaneColumn({ lane, cards, canDelete, sortable, isHighlighted
   const colorPickerRef = useRef<HTMLDivElement>(null)
   const bodyRef = useRef<HTMLDivElement | null>(null)
 
-  const filterActive = searchQuery.trim().length > 0 || badgeFilters.size > 0
+  const filterActive =
+    searchQuery.trim().length > 0 || badgeFilters.size > 0 || autoModeFilter !== 'all'
   const matchByCardId = useMemo(() => {
     const m: Record<number, boolean> = {}
     if (!filterActive) return m
     for (const c of cards) {
-      m[c.id] = cardPassesFilters(c, searchQuery, badgeFilters, badgeFilterMode)
+      m[c.id] = cardPassesFilters(c, searchQuery, badgeFilters, badgeFilterMode, autoModeFilter)
     }
     return m
-  }, [cards, searchQuery, badgeFilters, badgeFilterMode, filterActive])
+  }, [cards, searchQuery, badgeFilters, badgeFilterMode, autoModeFilter, filterActive])
 
   // Scroll the first match in this column into view whenever the active
   // filters change. Without this, a matching card past the column's scroll
@@ -55,7 +57,7 @@ export function SwimlaneColumn({ lane, cards, canDelete, sortable, isHighlighted
       `[data-pr-number="${firstMatch.number}"]`,
     )
     if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [searchQuery, badgeFilters, badgeFilterMode, filterActive, cards, matchByCardId])
+  }, [searchQuery, badgeFilters, badgeFilterMode, autoModeFilter, filterActive, cards, matchByCardId])
 
   // Card destination droppable — id has `lane-` prefix so it never collides with card numeric ids.
   // Note: we don't use isOver here for highlighting; the board computes overLaneId for us

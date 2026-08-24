@@ -227,3 +227,67 @@ def test_tallies_and_criteria_are_snapshotted_on_the_row(harness, monkeypatch):
     row = harness.auto.get_latest_for_pr(REPO, PR)
     assert (row["critical_count"], row["major_count"], row["minor_count"]) == (1, 2, 5)
     assert json.loads(row["criteria_json"])["maxMinor"] == 2
+
+
+def _run_events(events_db, event):
+    rows, _ = events_db.list_events(repo=REPO, event=event)
+    return rows
+
+
+def test_posted_verdict_is_recorded_against_the_reviews_run(harness, monkeypatch, isolate_review_event_log):
+    """A posted auto verdict shows up in the Review Logs under its own run."""
+    _criteria(monkeypatch)
+    _arm(harness)
+    rid = _review(harness, critical=2)
+    isolate_review_event_log.log_event("completed", REPO, PR, "run-xyz", attempt=1, review_id=rid)
+
+    svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    rows = _run_events(isolate_review_event_log, "verdict_posted")
+    assert len(rows) == 1
+    assert rows[0]["run_id"] == "run-xyz"
+    assert rows[0]["review_id"] == rid
+    assert rows[0]["auto_started"] == 1
+    assert rows[0]["detail"].startswith("REQUEST_CHANGES")
+
+
+def test_suppressed_verdict_is_recorded_as_not_posted(harness, monkeypatch, isolate_review_event_log):
+    _criteria(monkeypatch, allowAutoApprove=False)
+    _arm(harness)
+    rid = _review(harness)
+    isolate_review_event_log.log_event("completed", REPO, PR, "run-xyz", attempt=1, review_id=rid)
+
+    svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert _run_events(isolate_review_event_log, "verdict_posted") == []
+    rows = _run_events(isolate_review_event_log, "verdict_not_posted")
+    assert len(rows) == 1
+    assert rows[0]["reason"] == "auto_suppressed"
+    assert "auto-approve disabled" in rows[0]["detail"]
+
+
+def test_failed_post_is_recorded_as_not_posted(harness, monkeypatch, isolate_review_event_log):
+    _criteria(monkeypatch)
+    _arm(harness)
+    rid = _review(harness, critical=2)
+    isolate_review_event_log.log_event("completed", REPO, PR, "run-xyz", attempt=1, review_id=rid)
+    harness.post_result = ({"error": "GitHub said no"}, 500)
+
+    svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    rows = _run_events(isolate_review_event_log, "verdict_not_posted")
+    assert len(rows) == 1
+    assert rows[0]["reason"] == "post_failed"
+    assert "GitHub said no" in rows[0]["detail"]
+
+
+def test_verdict_for_a_review_with_no_run_is_not_recorded(harness, monkeypatch, isolate_review_event_log):
+    """Reviews predating the event log have no run to group a verdict under."""
+    _criteria(monkeypatch)
+    _arm(harness)
+    rid = _review(harness, critical=2)
+
+    result = svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert result["outcome"] == "posted"          # the verdict still posts
+    assert isolate_review_event_log.list_events(repo=REPO)[1] == 0

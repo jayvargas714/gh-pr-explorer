@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { cardPassesFilters, useSwimlaneStore } from '../../stores/useSwimlaneStore'
+import { AutoModeFilter, cardPassesFilters, useSwimlaneStore } from '../../stores/useSwimlaneStore'
 import { SwimlaneColor } from '../../api/types'
 import { Button } from '../common/Button'
 import { CacheTimestamp } from '../common/CacheTimestamp'
@@ -20,6 +20,16 @@ export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
     () => Object.values(cardsByLane).reduce((sum, list) => sum + list.length, 0),
     [cardsByLane],
   )
+  // Split the board by arming state — the header's at-a-glance answer to
+  // "how much of this queue is on autopilot".
+  const autoCount = useMemo(
+    () => Object.values(cardsByLane).reduce(
+      (sum, list) => sum + list.filter((c) => c.autoVerdict?.enabled).length,
+      0,
+    ),
+    [cardsByLane],
+  )
+  const manualCount = totalCards - autoCount
   const mergedCount = useMemo(
     () => Object.values(cardsByLane).reduce(
       // Pinned cards are never cleared, so don't count them.
@@ -50,23 +60,27 @@ export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
   const badgeFilters = useSwimlaneStore((s) => s.badgeFilters)
   const badgeFilterMode = useSwimlaneStore((s) => s.badgeFilterMode)
   const clearBadgeFilters = useSwimlaneStore((s) => s.clearBadgeFilters)
+  const autoModeFilter = useSwimlaneStore((s) => s.autoModeFilter)
+  const setAutoModeFilter = useSwimlaneStore((s) => s.setAutoModeFilter)
 
   const resetAllFilters = () => {
     setSearchQuery('')
     clearBadgeFilters()
+    setAutoModeFilter('all')
   }
 
-  const filterActive = searchQuery.trim().length > 0 || badgeFilters.size > 0
+  const filterActive =
+    searchQuery.trim().length > 0 || badgeFilters.size > 0 || autoModeFilter !== 'all'
   const matchCount = useMemo(() => {
     if (!filterActive) return 0
     let n = 0
     for (const list of Object.values(cardsByLane)) {
       for (const card of list) {
-        if (cardPassesFilters(card, searchQuery, badgeFilters, badgeFilterMode)) n++
+        if (cardPassesFilters(card, searchQuery, badgeFilters, badgeFilterMode, autoModeFilter)) n++
       }
     }
     return n
-  }, [cardsByLane, searchQuery, badgeFilters, badgeFilterMode, filterActive])
+  }, [cardsByLane, searchQuery, badgeFilters, badgeFilterMode, autoModeFilter, filterActive])
 
   const [showAddForm, setShowAddForm] = useState(false)
   const [name, setName] = useState('')
@@ -86,6 +100,12 @@ export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
       <div className="mx-swl-modal__title">
         <h2>Swimlane Board</h2>
         <span className="mx-swl-modal__count">{totalCards} cards</span>
+        <span
+          className="mx-swl-modal__auto-count"
+          data-tooltip="PRs armed for auto verdict vs. awaiting a manual one"
+        >
+          🤖 {autoCount} auto · {manualCount} manual
+        </span>
         <CacheTimestamp lastUpdated={lastUpdated} refreshing={refreshing} stale={refreshing} />
       </div>
 
@@ -112,6 +132,7 @@ export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
           </button>
         )}
         <BadgeFilterPopover />
+        <AutoModeToggle value={autoModeFilter} onChange={setAutoModeFilter} />
         {filterActive && (
           <button
             type="button"
@@ -174,5 +195,40 @@ export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
         </Button>
       </div>
     </header>
+  )
+}
+
+const AUTO_MODES: { key: AutoModeFilter; label: string; tooltip: string }[] = [
+  { key: 'all', label: 'All', tooltip: 'Show every card' },
+  { key: 'auto', label: '🤖 Auto', tooltip: 'Only PRs armed for auto verdict' },
+  { key: 'manual', label: 'Manual', tooltip: 'Only PRs awaiting a manual verdict' },
+]
+
+function AutoModeToggle({
+  value,
+  onChange,
+}: {
+  value: AutoModeFilter
+  onChange: (mode: AutoModeFilter) => void
+}) {
+  return (
+    <div className="mx-swl-auto-mode" role="radiogroup" aria-label="Auto mode filter">
+      {AUTO_MODES.map(({ key, label, tooltip }) => (
+        <button
+          key={key}
+          type="button"
+          role="radio"
+          aria-checked={value === key}
+          className={
+            'mx-swl-auto-mode__btn' +
+            (value === key ? ' mx-swl-auto-mode__btn--active' : '')
+          }
+          onClick={() => onChange(key)}
+          data-tooltip={tooltip}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
   )
 }

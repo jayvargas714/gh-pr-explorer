@@ -147,6 +147,26 @@
   font-size: var(--mx-font-size-xs);
 }
 
+.mx-review-logs__posted {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-space-2);
+  flex-wrap: wrap;
+}
+
+.mx-review-logs__posted-none {
+  color: var(--mx-color-text-tertiary);
+}
+
+.mx-review-logs__posted-by {
+  font-size: var(--mx-font-size-xs);
+}
+
+.mx-review-logs__posted-detail {
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-xs);
+}
+
 .mx-review-logs__detail code {
   font-family: var(--mx-font-mono);
   font-size: var(--mx-font-size-xs);

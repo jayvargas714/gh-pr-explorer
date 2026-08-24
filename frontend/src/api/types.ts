@@ -1107,6 +1107,8 @@ export type ReviewLogEventName =
   | 'retry_scheduled'
   | 'gave_up'
   | 'cancelled'
+  | 'verdict_posted'
+  | 'verdict_not_posted'
 
 export type ReviewLogReason =
   | 'no_output'
@@ -1114,6 +1116,9 @@ export type ReviewLogReason =
   | 'spawn_failed'
   | 'attempts_exhausted'
   | 'cancelled'
+  | 'auto_suppressed'
+  | 'auto_skipped'
+  | 'post_failed'
 
 export interface ReviewLogEvent {
   id: number
