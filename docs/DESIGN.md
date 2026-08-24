@@ -1888,6 +1888,47 @@ verdict distinguishes an auto post from a hand-posted one. The view defaults to 
 selected repository with an **All repos** toggle, since the tab only renders once
 a repo is chosen but the log is useful across repos.
 
+##### Day grouping
+
+Runs are bucketed into calendar days by `groupIntoDays`, with a separator row
+heading each day: the date plus that day's run count, how those runs ended, and
+how many posted a verdict — answering "how many reviews ran today and what
+happened to them" without expanding anything. Zero-valued counts are omitted, so
+a clean day reads `7 runs · 7 completed · 5 posted`.
+
+Three details carry the correctness of that header:
+
+- **Bucketed by local day, not UTC.** `localDayKey` builds its key from the
+  `Date`'s local getters rather than `toISOString().slice(0, 10)`, which buckets
+  by UTC and would file a late-evening run under the following day for any
+  viewer west of Greenwich.
+- **Ordered by when a run started**, not by its latest event. That is what
+  "reviews done that day" means, and it is what keeps each day's block
+  contiguous — ordering by latest event would let a run started yesterday and
+  retried today sit in today's slot under a yesterday header, heading the same
+  date twice. Runs are re-sorted by `first.created_at` before bucketing.
+- **A truncated page is disclosed.** The view requests 500 events; when the log
+  holds more, the cut lands mid-way through the oldest day shown, whose counts
+  would then describe what loaded rather than what happened. That day's header is
+  marked `≥N runs · partial day`. Only the oldest group can be affected, and only
+  when `events.length < total`.
+
+Counts derive from the same `last` / `verdict` fields the Outcome and Posted
+columns render, so a day header can never disagree with the rows beneath it.
+
+**Everything displayed is in the viewer's local timezone; everything stored is
+UTC.** The recorders write `datetime.now(timezone.utc).isoformat()`, so every
+`created_at` carries an explicit `+00:00` and parses to the correct instant —
+which is what lets the client convert to local without ambiguity. (A timestamp
+written without an offset would be read as *local* by `new Date()` and land in
+the wrong day for any non-UTC viewer; `review_events.created_at` has no
+`DEFAULT CURRENT_TIMESTAMP` precisely so this stays true.)
+
+Because a date header establishes the day, the **Started** and **Latest**
+columns — and the timestamps on the expanded per-event rows — show local clock
+time (`formatClockTime`) rather than relative time or a raw ISO string, with the
+full local timestamp on hover via `title`.
+
 The tab is repo-independent in every other respect: it reads only
 `/api/review-logs`, so it works even when PR fetching is failing — which is
 precisely when it is most needed.

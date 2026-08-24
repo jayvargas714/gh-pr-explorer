@@ -39,6 +39,20 @@ export function formatShortDate(dateString: string): string {
 }
 
 /**
+ * Format a date string to local clock time (e.g., "09:14")
+ *
+ * Used where a date header already establishes the day, so the row only needs
+ * the time of day.
+ */
+export function formatClockTime(dateString: string): string {
+  const date = new Date(dateString)
+  return date.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+/**
  * Format a date string to full date and time
  */
 export function formatFullDateTime(dateString: string): string {

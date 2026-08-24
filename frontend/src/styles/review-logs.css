@@ -123,6 +123,42 @@
   vertical-align: top;
 }
 
+/* Day separator band. Reads as a divider between run groups, not a data row. */
+.mx-review-logs__day > td {
+  padding: var(--mx-space-2) var(--mx-space-3);
+  background: var(--mx-color-bg-primary);
+  border-top: 2px solid var(--mx-color-border);
+  border-bottom: 1px solid var(--mx-color-border);
+}
+
+.mx-review-logs__table tbody tr.mx-review-logs__day:first-child > td {
+  border-top: 0;
+}
+
+.mx-review-logs__day-date {
+  font-size: var(--mx-font-size-xs);
+  font-weight: var(--mx-font-weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mx-color-text-primary);
+}
+
+.mx-review-logs__day-stats {
+  margin-left: var(--mx-space-3);
+  font-size: var(--mx-font-size-xs);
+  color: var(--mx-color-text-secondary);
+}
+
+.mx-review-logs__day-partial {
+  margin-left: var(--mx-space-2);
+  padding: 0 var(--mx-space-2);
+  border: 1px solid var(--mx-color-warning);
+  border-radius: var(--mx-radius-sm);
+  color: var(--mx-color-warning);
+  font-size: var(--mx-font-size-xs);
+  cursor: help;
+}
+
 .mx-review-logs__run {
   cursor: pointer;
   transition: var(--mx-transition-base);

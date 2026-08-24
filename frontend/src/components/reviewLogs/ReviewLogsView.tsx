@@ -6,7 +6,7 @@ import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
-import { formatRelativeTime } from '../../utils/formatters'
+import { formatClockTime, formatFullDateTime, formatShortDate } from '../../utils/formatters'
 
 const EVENT_LABELS: Record<string, string> = {
   started: 'started',
@@ -91,6 +91,108 @@ function groupIntoRuns(events: ReviewLogEvent[]): Run[] {
   })
 }
 
+interface DayStats {
+  runs: number
+  completed: number
+  gaveUp: number
+  posted: number
+}
+
+interface DayGroup {
+  /** Local calendar day, `YYYY-MM-DD`. */
+  key: string
+  /** Any timestamp from that day, for formatting the header. */
+  date: string
+  runs: Run[]
+  stats: DayStats
+}
+
+/**
+ * Local calendar day for a timestamp.
+ *
+ * Built from the local getters rather than `toISOString().slice(0, 10)`, which
+ * buckets by UTC and would file a late-evening run under the following day for
+ * anyone west of Greenwich.
+ */
+function localDayKey(dateString: string): string {
+  const d = new Date(dateString)
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${month}-${day}`
+}
+
+/**
+ * Bucket runs into calendar days, newest day first.
+ *
+ * Runs are sorted by when they *started*, not by their latest event: that is
+ * what "reviews done that day" means, and it is what keeps each day's header
+ * contiguous. Ordering by latest event would let a run started yesterday and
+ * retried today sit in today's slot under a yesterday header, heading the same
+ * date twice.
+ *
+ * Day counts are derived from the same `last` / `verdict` fields the Outcome and
+ * Posted columns render, so a header can never disagree with its own rows.
+ */
+function groupIntoDays(runs: Run[]): DayGroup[] {
+  const byDay = new Map<string, Run[]>()
+  const sorted = [...runs].sort(
+    (a, b) => new Date(b.first.created_at).getTime() - new Date(a.first.created_at).getTime(),
+  )
+
+  sorted.forEach((run) => {
+    const key = localDayKey(run.first.created_at)
+    const bucket = byDay.get(key)
+    if (bucket) bucket.push(run)
+    else byDay.set(key, [run])
+  })
+
+  return Array.from(byDay.entries()).map(([key, dayRuns]) => ({
+    key,
+    date: dayRuns[0].first.created_at,
+    runs: dayRuns,
+    stats: {
+      runs: dayRuns.length,
+      completed: dayRuns.filter((r) => r.last.event === 'completed').length,
+      gaveUp: dayRuns.filter((r) => r.last.event === 'gave_up').length,
+      posted: dayRuns.filter((r) => r.verdict?.event === 'verdict_posted').length,
+    },
+  }))
+}
+
+/**
+ * Day header row. Zero-valued counts are dropped so a clean day reads clean.
+ *
+ * `partial` marks the oldest day when the page cut off mid-day: its counts are
+ * of what loaded, not of what happened, and a header that quietly understates a
+ * day is worse than one that admits it.
+ */
+function DayRow({ group, partial }: { group: DayGroup; partial?: boolean }) {
+  const { stats } = group
+  const parts = [
+    `${partial ? '≥' : ''}${stats.runs} run${stats.runs === 1 ? '' : 's'}`,
+    stats.completed > 0 ? `${stats.completed} completed` : null,
+    stats.gaveUp > 0 ? `${stats.gaveUp} gave up` : null,
+    stats.posted > 0 ? `${stats.posted} posted` : null,
+  ].filter(Boolean)
+
+  return (
+    <tr className="mx-review-logs__day">
+      <td colSpan={8}>
+        <span className="mx-review-logs__day-date">{formatShortDate(group.date)}</span>
+        <span className="mx-review-logs__day-stats">{parts.join(' · ')}</span>
+        {partial && (
+          <span
+            className="mx-review-logs__day-partial"
+            title="Older events beyond this page were not loaded, so this day is incomplete"
+          >
+            partial day
+          </span>
+        )}
+      </td>
+    </tr>
+  )
+}
+
 /**
  * Render a run's posting outcome.
  *
@@ -164,6 +266,9 @@ export function ReviewLogsView() {
   }, [repoScope, eventFilter])
 
   const runs = useMemo(() => groupIntoRuns(events), [events])
+  const days = useMemo(() => groupIntoDays(runs), [runs])
+  // The API caps the page; anything past it lands in the oldest day shown.
+  const truncated = events.length < total
 
   const toggle = (runId: string) =>
     setExpanded((prev) => ({ ...prev, [runId]: !prev[runId] }))
@@ -248,50 +353,70 @@ export function ReviewLogsView() {
               </tr>
             </thead>
             <tbody>
-              {runs.map((run) => (
-                <Fragment key={run.runId}>
-                  <tr className="mx-review-logs__run" onClick={() => toggle(run.runId)}>
-                    <td>{expanded[run.runId] ? '▾' : '▸'}</td>
-                    <td>#{run.prNumber}</td>
-                    <td>{run.repo}</td>
-                    <td>{formatRelativeTime(run.first.created_at)}</td>
-                    <td>{formatRelativeTime(run.last.created_at)}</td>
-                    <td>{run.attempts}</td>
-                    <td>
-                      <Badge variant={eventVariant(run.last.event)}>
-                        {EVENT_LABELS[run.last.event] || run.last.event}
-                      </Badge>
-                      {run.last.reason && (
-                        <span className="mx-review-logs__reason">
-                          {REASON_LABELS[run.last.reason] || run.last.reason}
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      <PostedCell verdict={run.verdict} />
-                    </td>
-                  </tr>
-                  {expanded[run.runId] &&
-                    run.events.map((event) => (
-                      <tr key={event.id} className="mx-review-logs__event">
-                        <td></td>
-                        <td colSpan={2}>
-                          <Badge variant={eventVariant(event.event)}>
-                            {EVENT_LABELS[event.event] || event.event}
-                          </Badge>
+              {days.map((group) => (
+                <Fragment key={group.key}>
+                  <DayRow
+                    group={group}
+                    partial={truncated && group.key === days[days.length - 1].key}
+                  />
+                  {group.runs.map((run) => (
+                    <Fragment key={run.runId}>
+                      <tr className="mx-review-logs__run" onClick={() => toggle(run.runId)}>
+                        <td>{expanded[run.runId] ? '▾' : '▸'}</td>
+                        <td>#{run.prNumber}</td>
+                        <td>{run.repo}</td>
+                        <td>
+                          <span title={formatFullDateTime(run.first.created_at)}>
+                            {formatClockTime(run.first.created_at)}
+                          </span>
                         </td>
-                        <td colSpan={2}>{event.created_at}</td>
-                        <td>{event.attempt ?? '—'}</td>
-                        <td className="mx-review-logs__detail" colSpan={2}>
-                          {event.reason && (
-                            <div>{REASON_LABELS[event.reason] || event.reason}</div>
+                        <td>
+                          <span title={formatFullDateTime(run.last.created_at)}>
+                            {formatClockTime(run.last.created_at)}
+                          </span>
+                        </td>
+                        <td>{run.attempts}</td>
+                        <td>
+                          <Badge variant={eventVariant(run.last.event)}>
+                            {EVENT_LABELS[run.last.event] || run.last.event}
+                          </Badge>
+                          {run.last.reason && (
+                            <span className="mx-review-logs__reason">
+                              {REASON_LABELS[run.last.reason] || run.last.reason}
+                            </span>
                           )}
-                          {event.detail && <div><code>{event.detail}</code></div>}
-                          {event.score !== null && <div>score {event.score}/10</div>}
-                          {event.pid && <div>pid {event.pid}</div>}
+                        </td>
+                        <td>
+                          <PostedCell verdict={run.verdict} />
                         </td>
                       </tr>
-                    ))}
+                      {expanded[run.runId] &&
+                        run.events.map((event) => (
+                          <tr key={event.id} className="mx-review-logs__event">
+                            <td></td>
+                            <td colSpan={2}>
+                              <Badge variant={eventVariant(event.event)}>
+                                {EVENT_LABELS[event.event] || event.event}
+                              </Badge>
+                            </td>
+                            <td colSpan={2}>
+                              <span title={formatFullDateTime(event.created_at)}>
+                                {formatClockTime(event.created_at)}
+                              </span>
+                            </td>
+                            <td>{event.attempt ?? '—'}</td>
+                            <td className="mx-review-logs__detail" colSpan={2}>
+                              {event.reason && (
+                                <div>{REASON_LABELS[event.reason] || event.reason}</div>
+                              )}
+                              {event.detail && <div><code>{event.detail}</code></div>}
+                              {event.score !== null && <div>score {event.score}/10</div>}
+                              {event.pid && <div>pid {event.pid}</div>}
+                            </td>
+                          </tr>
+                        ))}
+                    </Fragment>
+                  ))}
                 </Fragment>
               ))}
             </tbody>
