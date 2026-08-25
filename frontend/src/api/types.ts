@@ -1120,6 +1120,13 @@ export type ReviewLogReason =
   | 'auto_skipped'
   | 'post_failed'
 
+/** Issue tally for a review, or null when the review's content can't be read. */
+export interface ReviewIssueCounts {
+  critical: number
+  major: number
+  minor: number
+}
+
 export interface ReviewLogEvent {
   id: number
   created_at: string
@@ -1139,6 +1146,12 @@ export interface ReviewLogEvent {
   review_id: number | null
   score: number | null
   pid: number | null
+  /**
+   * Tallied server-side from the review's content_json. Null when the event
+   * names no review, or the review is gone / unreadable — which the UI must
+   * treat as unknown rather than as a clean review.
+   */
+  issue_counts: ReviewIssueCounts | null
 }
 
 export interface ReviewLogsResponse {

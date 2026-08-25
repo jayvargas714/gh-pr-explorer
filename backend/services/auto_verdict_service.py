@@ -23,6 +23,8 @@ from backend.services.review_event_log import (
     record_verdict_posted,
 )
 from backend.services.review_schema import (
+    SEVERITIES,
+    count_issues,
     format_issue_lines,
     format_recommendation_lines,
     get_section_display_names,
@@ -31,22 +33,9 @@ from backend.services.verdict_service import post_verdict
 
 logger = logging.getLogger(__name__)
 
-SEVERITIES = ("critical", "major", "minor")
-
 # GitHub caps a review body at 65536 characters. Leave headroom for the notice.
 MAX_BODY_CHARS = 60000
 _TRUNCATION_NOTICE = "\n\n---\n\n_Review report truncated to fit GitHub's comment size limit._"
-
-
-def count_issues(content_json: Dict[str, Any]) -> Dict[str, int]:
-    """Count issues per severity in a review's content_json."""
-    tallies = {sev: 0 for sev in SEVERITIES}
-    for section in content_json.get("sections", []) or []:
-        section_type = section.get("type", "")
-        if section_type in tallies:
-            issues = section.get("issues") or []
-            tallies[section_type] = len(issues)
-    return tallies
 
 
 def evaluate_criteria(

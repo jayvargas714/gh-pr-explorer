@@ -2,7 +2,7 @@
 
 from flask import Blueprint, jsonify, request
 
-from backend.database import get_review_events_db
+from backend.database import get_review_events_db, get_reviews_db
 from backend.database.review_events import VALID_EVENTS, VALID_REASONS
 from backend.routes import error_response
 
@@ -39,9 +39,28 @@ def get_review_logs():
             offset=offset,
         )
 
+        _attach_issue_counts(events)
         return jsonify({"events": events, "total": total})
     except Exception as e:
         return error_response("Internal server error", 500, f"Error listing review logs: {e}")
+
+
+def _attach_issue_counts(events):
+    """Add `issue_counts` to every event that names a review.
+
+    Tallied from the review's stored content_json in one batched lookup rather
+    than persisted on the event, so the counts cover every run in the log —
+    including those recorded before this existed — with no migration. Reviews
+    whose content can't be tallied get None, which the UI reads as "unknown"
+    rather than as a clean review.
+    """
+    review_ids = [e["review_id"] for e in events if e.get("review_id")]
+    # Every event gets the key even when nothing can be tallied, so the client
+    # sees a consistent `null` rather than a sometimes-absent field.
+    counts = get_reviews_db().get_issue_counts(review_ids) if review_ids else {}
+    for event in events:
+        review_id = event.get("review_id")
+        event["issue_counts"] = counts.get(review_id) if review_id else None
 
 
 @review_log_bp.route("/api/review-logs/stats", methods=["GET"])

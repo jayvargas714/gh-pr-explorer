@@ -173,6 +173,49 @@ class ReviewsDB:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def get_issue_counts(self, review_ids: List[int]) -> Dict[int, Dict[str, int]]:
+        """Tally critical/major/minor issues for many reviews at once.
+
+        Reviews with no row, unparseable content_json, or no matching sections
+        are simply absent from the result — callers treat a missing entry as
+        "counts unavailable" rather than as zero, which would claim a clean
+        review where we actually know nothing.
+
+        Args:
+            review_ids: Review row ids to tally.
+
+        Returns:
+            ``{review_id: {"critical": n, "major": n, "minor": n}}``
+        """
+        from backend.services.review_schema import count_issues
+
+        unique_ids = list({rid for rid in review_ids if rid is not None})
+        if not unique_ids:
+            return {}
+
+        counts: Dict[int, Dict[str, int]] = {}
+        # Chunked so a large page can't exceed SQLite's bound-variable ceiling.
+        for start in range(0, len(unique_ids), 500):
+            chunk = unique_ids[start:start + 500]
+            placeholders = ", ".join("?" for _ in chunk)
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"SELECT id, content_json FROM reviews WHERE id IN ({placeholders})",
+                    chunk,
+                )
+                rows = cursor.fetchall()
+
+            for row in rows:
+                try:
+                    parsed = json.loads(row["content_json"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(parsed, dict):
+                    counts[row["id"]] = count_issues(parsed)
+
+        return counts
+
     def get_reviews_for_pr(self, repo: str, pr_number: int) -> List[Dict[str, Any]]:
         """Get all reviews for a specific PR (review chain)."""
         with self.db.connection() as conn:

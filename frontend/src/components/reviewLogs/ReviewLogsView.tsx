@@ -1,12 +1,17 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useAccountStore } from '../../stores/useAccountStore'
 import { fetchReviewLogs, fetchReviewLogStats } from '../../api/reviewLogs'
-import { ReviewLogEvent, ReviewLogStats } from '../../api/types'
+import { ReviewIssueCounts, ReviewLogEvent, ReviewLogStats } from '../../api/types'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
-import { formatClockTime, formatFullDateTime, formatShortDate } from '../../utils/formatters'
+import {
+  formatClockTime,
+  formatDuration,
+  formatFullDateTime,
+  formatShortDate,
+} from '../../utils/formatters'
 
 const EVENT_LABELS: Record<string, string> = {
   started: 'started',
@@ -56,6 +61,8 @@ interface Run {
   /** Latest verdict event, if the run's review ever reached a posting decision. */
   verdict: ReviewLogEvent | null
   attempts: number
+  /** Issue tally of the review this run produced; null when it produced none. */
+  issueCounts: ReviewIssueCounts | null
 }
 
 /**
@@ -87,6 +94,7 @@ function groupIntoRuns(events: ReviewLogEvent[]): Run[] {
       last,
       verdict: runEvents.find((e) => VERDICT_EVENTS.has(e.event)) ?? null,
       attempts: Math.max(...lifecycle.map((e) => e.attempt || 1), 1),
+      issueCounts: runEvents.find((e) => e.issue_counts)?.issue_counts ?? null,
     }
   })
 }
@@ -191,6 +199,45 @@ function DayRow({ group, partial }: { group: DayGroup; partial?: boolean }) {
       </td>
     </tr>
   )
+}
+
+/**
+ * Build the hover panel for a run.
+ *
+ * Rendered through the app's global TooltipProvider, whose portal is styled
+ * `white-space: pre-line` — so newlines here become real line breaks and the
+ * panel escapes the table's overflow container for free.
+ *
+ * A run that produced no review has no counts to show, so it reports why it
+ * ended instead: that is exactly the row you most want to inspect on hover.
+ */
+function runTooltip(run: Run): string {
+  const lines: string[] = []
+
+  if (run.issueCounts) {
+    const { critical, major, minor } = run.issueCounts
+    lines.push(`${critical} critical · ${major} major · ${minor} minor`)
+  } else if (run.last.event === 'completed') {
+    // Completed, but the review's content could not be read back.
+    lines.push('issue counts unavailable')
+  }
+
+  const label = EVENT_LABELS[run.last.event] || run.last.event
+  const attempts = `${run.attempts} attempt${run.attempts === 1 ? '' : 's'}`
+  // Whole-seconds, and never negative if two events share a timestamp.
+  const elapsedSec = Math.max(
+    0,
+    Math.round(
+      (new Date(run.last.created_at).getTime() - new Date(run.first.created_at).getTime()) / 1000,
+    ),
+  )
+  lines.push(`${label} · ${attempts} · took ${formatDuration(elapsedSec)}`)
+
+  if (run.last.reason) {
+    lines.push(REASON_LABELS[run.last.reason] || run.last.reason)
+  }
+
+  return lines.join('\n')
 }
 
 /**
@@ -361,7 +408,11 @@ export function ReviewLogsView() {
                   />
                   {group.runs.map((run) => (
                     <Fragment key={run.runId}>
-                      <tr className="mx-review-logs__run" onClick={() => toggle(run.runId)}>
+                      <tr
+                        className="mx-review-logs__run"
+                        onClick={() => toggle(run.runId)}
+                        data-tooltip={runTooltip(run)}
+                      >
                         <td>{expanded[run.runId] ? '▾' : '▸'}</td>
                         <td>#{run.prNumber}</td>
                         <td>{run.repo}</td>

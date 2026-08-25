@@ -1916,6 +1916,52 @@ Three details carry the correctness of that header:
 Counts derive from the same `last` / `verdict` fields the Outcome and Posted
 columns render, so a day header can never disagree with the rows beneath it.
 
+##### Run hover panel
+
+Hovering a run row shows a panel with the review's issue tally and the run's
+timing:
+
+```
+0 critical · 5 major · 4 minor
+completed · 1 attempt · took 14m 26s
+```
+
+A run that produced no review has no tally to show, so it reports how it ended
+instead — the row you most want to inspect on hover:
+
+```
+gave up · 3 attempts · took 1m 17s
+all attempts used
+```
+
+`runTooltip()` builds the string and hangs it on the row's `data-tooltip`. No
+new tooltip machinery was needed: the app's global `TooltipProvider` already
+portals any `data-tooltip` out of its overflow container, and
+`.mx-tooltip-portal` is styled `white-space: pre-line`, so newlines render as
+line breaks. Elapsed time spans the run's *lifecycle* events only — measuring to
+the latest event would let a verdict posted an hour later inflate "took".
+
+**Issue counts are tallied at query time, not stored.** `GET /api/review-logs`
+collects the `review_id`s on the page, batch-loads those reviews in one query
+(chunked at 500 to stay under SQLite's bound-variable ceiling), and tallies each
+`content_json` through `review_schema.count_issues`. Measured at ~21ms for 223
+reviews, which buys coverage of every run ever logged with no new columns, no
+migration and no backfill.
+
+Two related columns are deliberately *not* the source. `reviews.critical_found_count`
+and friends are written only when inline comments are posted — populated for 2 of
+the 223 reviews in the log — and they count issues *posted to GitHub*, which is a
+different quantity from issues the review found.
+
+`count_issues` lives in `review_schema` rather than `auto_verdict_service` so this
+read-only path can tally a review without importing `verdict_service` and the `gh`
+subprocess layer.
+
+A review whose row is gone or whose `content_json` will not parse yields
+`issue_counts: null`, rendered as "issue counts unavailable" — never as a clean
+review. Every event carries the key even when nothing can be tallied, so the
+client sees a consistent `null` rather than a sometimes-absent field.
+
 **Everything displayed is in the viewer's local timezone; everything stored is
 UTC.** The recorders write `datetime.now(timezone.utc).isoformat()`, so every
 `created_at` carries an explicit `+00:00` and parses to the correct instant —
@@ -3353,12 +3399,18 @@ Returns review lifecycle events, newest first. Powers the Review Logs tab.
       "detail": null,
       "review_id": 969,
       "score": 8.0,
-      "pid": 196753
+      "pid": 196753,
+      "issue_counts": { "critical": 0, "major": 5, "minor": 4 }
     }
   ],
   "total": 1
 }
 ```
+
+`issue_counts` is tallied at query time from the review's `content_json`. It is
+`null` when the event names no review, or when that review is missing or
+unparseable — which the client renders as "unavailable", never as a clean
+review. The key is always present.
 
 **GET** `/api/review-logs/stats`
 

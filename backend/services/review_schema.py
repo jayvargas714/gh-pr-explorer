@@ -23,6 +23,25 @@ DEFAULT_SECTION_NAMES = {
 }
 
 
+SEVERITIES = ("critical", "major", "minor")
+
+
+def count_issues(content_json: Dict[str, Any]) -> Dict[str, int]:
+    """Count issues per severity in a review's content_json.
+
+    Lives here with the other content_json helpers so read-only callers (the
+    review log) can tally a review without importing auto_verdict_service, which
+    pulls in verdict_service and the gh subprocess layer.
+    """
+    tallies = {sev: 0 for sev in SEVERITIES}
+    for section in content_json.get("sections", []) or []:
+        section_type = section.get("type", "")
+        if section_type in tallies:
+            issues = section.get("issues") or []
+            tallies[section_type] = len(issues)
+    return tallies
+
+
 def get_section_display_names() -> Dict[str, str]:
     """Read section display names from config, falling back to defaults."""
     config = get_config()

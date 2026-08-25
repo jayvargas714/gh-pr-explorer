@@ -7,6 +7,7 @@ import pytest
 
 from backend.database.base import Database
 from backend.database.review_events import ReviewEventsDB
+from backend.database.reviews import ReviewsDB
 from backend import create_app
 
 REPO = "owner/repo"
@@ -15,9 +16,14 @@ REPO = "owner/repo"
 @pytest.fixture
 def client(monkeypatch):
     tmp = Path(tempfile.mkdtemp()) / "review_log_routes.db"
-    events_db = ReviewEventsDB(Database(tmp))
+    db = Database(tmp)
+    events_db = ReviewEventsDB(db)
+    # The list route also tallies issue counts out of `reviews`; without this the
+    # tests would read the developer's live application database.
+    reviews_db = ReviewsDB(db)
     import backend.routes.review_log_routes as rlr
     monkeypatch.setattr(rlr, "get_review_events_db", lambda: events_db)
+    monkeypatch.setattr(rlr, "get_reviews_db", lambda: reviews_db)
     app = create_app()
     app.config["TESTING"] = True
     return app.test_client(), events_db
@@ -129,3 +135,45 @@ def test_stats_endpoint_on_empty_log(client):
         "runs": 0, "completed": 0, "failed": 0,
         "rescued_by_retry": 0, "by_reason": {},
     }
+
+
+def _review_with(reviews_db, *, critical=0, major=0, minor=0):
+    import json
+    issues = lambda n: [{"title": f"i{i}"} for i in range(n)]
+    return reviews_db.save_review(
+        pr_number=1, repo=REPO,
+        content_json=json.dumps({"sections": [
+            {"type": "critical", "issues": issues(critical)},
+            {"type": "major", "issues": issues(major)},
+            {"type": "minor", "issues": issues(minor)},
+        ]}),
+    )
+
+
+def test_completed_events_carry_issue_counts(client):
+    c, events_db = client
+    reviews_db = ReviewsDB(events_db.db)
+    rid = _review_with(reviews_db, critical=1, major=2, minor=3)
+    events_db.log_event("completed", REPO, 1, "run-1", attempt=1, review_id=rid)
+
+    events = c.get("/api/review-logs").get_json()["events"]
+    assert events[0]["issue_counts"] == {"critical": 1, "major": 2, "minor": 3}
+
+
+def test_events_without_a_review_have_null_counts(client):
+    c, events_db = client
+    reviews_db = ReviewsDB(events_db.db)
+    _review_with(reviews_db)
+    events_db.log_event("started", REPO, 1, "run-1", attempt=1)
+
+    events = c.get("/api/review-logs").get_json()["events"]
+    assert events[0]["issue_counts"] is None
+
+
+def test_counts_are_null_when_the_review_is_gone(client):
+    """A dangling review_id must read as unknown, never as a clean review."""
+    c, events_db = client
+    events_db.log_event("completed", REPO, 1, "run-1", attempt=1, review_id=424242)
+
+    events = c.get("/api/review-logs").get_json()["events"]
+    assert events[0]["issue_counts"] is None
