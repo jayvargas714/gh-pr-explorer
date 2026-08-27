@@ -74,10 +74,10 @@ Keep `docs/DESIGN.md` updated whenever any design aspect changes, and update the
 | — Inline Comments Posting | 1531 | Post critical issues to GitHub |
 | — Review Verdict | 1579 | Approve/Request-Changes/Comment composer, verdict source toggle |
 | — Auto Verdicts | 1652 | Armed cards, criteria thresholds, auto approve/changes-requested, watcher threads, auto follow-up reviews, optimistic arming |
-| — Review Event Log | 1772 | Per-attempt event log, run_id grouping, closed event/reason vocabularies, verdict posted/not-posted events, day-grouped Review Logs tab, run hover panel w/ issue counts |
-| **API Endpoints** | 1984 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2623, Review Logs at 3363 |
-| **Configuration** | 3481 | `config.json` options, incl. review retry + log retention |
-| **Technical Details** | 3532 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (3795), follow-up parent selection (3841), Review JSON Schema (3874) |
-| **Future Considerations** | 4045 | Improvements, known limitations |
-| **Appendix** | 4107 | Dependencies, file structure, run instructions |
+| — Review Event Log | 1772 | Per-attempt event log, run_id grouping, closed event/reason vocabularies, verdict posted/not-posted events, day-paginated Review Logs tab (day navigator, calendar jump, load-older), run hover panel w/ issue counts |
+| **API Endpoints** | 2019 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2658, Review Logs at 3398 |
+| **Configuration** | 3516 | `config.json` options, incl. review retry + log retention |
+| **Technical Details** | 3567 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (3830), follow-up parent selection (3876), Review JSON Schema (3909) |
+| **Future Considerations** | 4080 | Improvements, known limitations |
+| **Appendix** | 4142 | Dependencies, file structure, run instructions |
 

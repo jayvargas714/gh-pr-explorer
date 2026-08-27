@@ -1907,14 +1907,49 @@ Three details carry the correctness of that header:
   contiguous — ordering by latest event would let a run started yesterday and
   retried today sit in today's slot under a yesterday header, heading the same
   date twice. Runs are re-sorted by `first.created_at` before bucketing.
-- **A truncated page is disclosed.** The view requests 500 events; when the log
-  holds more, the cut lands mid-way through the oldest day shown, whose counts
-  would then describe what loaded rather than what happened. That day's header is
-  marked `≥N runs · partial day`. Only the oldest group can be affected, and only
-  when `events.length < total`.
+- **A truncated page is disclosed.** The view requests 1000 events (the server
+  max); when the log holds more, the cut lands mid-way through the oldest day
+  loaded, whose counts would then describe what loaded rather than what
+  happened. That day's header is marked `≥N runs · partial day`. Only the oldest
+  loaded day can be affected, and only when `events.length < total`.
 
 Counts derive from the same `last` / `verdict` fields the Outcome and Posted
 columns render, so a day header can never disagree with the rows beneath it.
+
+##### Day pagination
+
+The table shows **one day per page**. A navigator bar between the stats strip
+and the table carries ◀ / ▶ arrows, the selected day's label (`Mon, Aug 25,
+2026 · 12 runs`), and a 📅 button that opens a native `<input type="date">`
+picker (via `showPicker()` on a visually hidden input; `display: none` would
+break the picker's anchoring in some browsers, so it is kept in the layout at
+`opacity: 0`).
+
+Selection is a `selectedDayKey` (`YYYY-MM-DD`, `null` = newest day with runs).
+It snaps back to newest when the repo scope or event filter changes, since a
+new scope has a different day list. `navTargets()` resolves each arrow's
+target from the newest-first key list — keys compare chronologically as plain
+strings — and **skips days with no runs**: ▶ is the nearest newer day with
+data, ◀ the nearest older one.
+
+The calendar can land on a day with no runs (its `min`/`max` bound only the
+loaded range, not its gaps). That renders an empty state naming the date, with
+the navigator still live — `navTargets` accepts a key absent from the list, so
+the arrows step out of an empty day to its nearest real neighbours.
+
+When the window is truncated, ◀ on the oldest loaded day fetches the next page
+via the existing `offset` param and jumps to the first day it exposes, so older
+days stay reachable instead of silently missing. Offset paging over a
+newest-first list overlaps when new events arrive between fetches (everything
+shifts down), so the merge dedupes by event id.
+
+The stats strip stays global — the day header row already carries the selected
+day's counts. The footer reports both scopes: runs shown for the day, and runs
+loaded across total events.
+
+`formatDayLabel` parses the day key field-by-field: `new Date('2026-08-25')`
+is UTC midnight, which `toLocaleDateString` would render as the *previous* day
+west of Greenwich.
 
 ##### Run hover panel
 

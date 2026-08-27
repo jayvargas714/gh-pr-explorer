@@ -92,6 +92,43 @@
   text-align: center;
 }
 
+/* Day navigator ------------------------------------------------------------ */
+
+.mx-review-logs__daynav {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-space-3);
+  margin-bottom: var(--mx-space-3);
+}
+
+.mx-review-logs__daynav-label {
+  min-width: 14rem;
+  text-align: center;
+  color: var(--mx-color-text-primary);
+  font-size: var(--mx-font-size-sm);
+  font-weight: var(--mx-font-weight-semibold);
+}
+
+.mx-review-logs__daynav-loading {
+  color: var(--mx-color-text-secondary);
+  font-weight: var(--mx-font-weight-normal);
+}
+
+.mx-review-logs__daynav-picker {
+  position: relative;
+}
+
+/* Kept in the layout (display:none would break showPicker anchoring in some
+   browsers) but invisible and non-interactive — the 📅 button drives it. */
+.mx-review-logs__daynav-date {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  border: 0;
+  padding: 0;
+}
+
 /* Run table --------------------------------------------------------------- */
 
 .mx-review-logs__table {
