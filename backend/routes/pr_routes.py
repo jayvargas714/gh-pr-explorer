@@ -4,12 +4,18 @@ from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, jsonify, request
 
-from backend.config import get_config
+from backend.config import get_config, get_pr_sync_config
 from backend.extensions import logger
 from backend.filters.pr_filter_builder import PRFilterParams, PRFilterBuilder
 from backend.routes import error_response
-from backend.database import get_timeline_cache_db
-from backend.services.github_service import run_gh_command, parse_json_output, TransientGitHubError
+from backend.database import get_timeline_cache_db, get_synced_prs_db
+from backend.services.github_service import (
+    run_gh_command, parse_json_output, TransientGitHubError,
+    PR_LIST_JSON_FIELDS as PR_JSON_FIELDS, fetch_full_pr,
+)
+from backend.services.pr_local_filter import (
+    filter_prs_locally, needs_github_search, sort_prs_locally, states_for,
+)
 from backend.services.pr_service import get_review_status, get_ci_status, get_current_reviewers
 from backend.services.timeline_service import get_timeline
 
@@ -21,15 +27,6 @@ _STATUS_TO_DECISION = {
     "approved": "APPROVED",
     "review_required": "REVIEW_REQUIRED",
 }
-
-PR_JSON_FIELDS = (
-    "number,title,author,state,isDraft,createdAt,updatedAt,closedAt,"
-    "mergedAt,url,body,headRefName,baseRefName,labels,assignees,"
-    "reviewRequests,reviewDecision,reviews,"
-    "mergeable,additions,deletions,changedFiles,"
-    "milestone,statusCheckRollup"
-)
-
 
 def _get_pr_by_number(owner, repo, pr_number):
     """Fetch a single PR by number using gh pr view."""
@@ -59,9 +56,63 @@ def _get_pr_by_number(owner, repo, pr_number):
         return jsonify({"prs": []})
 
 
+def _postprocess_and_filter(prs, params):
+    """Compute serve-time statuses and apply draft/review/CI post-filters.
+
+    Shared by the DB, hybrid, and live paths so all three return identical
+    shapes.
+    """
+    # Post-filter by draft status (gh search qualifier draft: is unreliable)
+    if params.draft == "true":
+        prs = [pr for pr in prs if pr.get("isDraft", False)]
+    elif params.draft == "false":
+        prs = [pr for pr in prs if not pr.get("isDraft", False)]
+
+    # Post-process: add review status and CI status summaries
+    # Compute reviewStatus from full reviews history, then sync reviewDecision
+    # so badges and filters use the same source of truth.
+    for pr in prs:
+        reviews = pr.get("reviews")
+        pr["reviewStatus"] = get_review_status(pr.get("reviewDecision"), reviews)
+        pr["reviewDecision"] = _STATUS_TO_DECISION.get(pr["reviewStatus"], pr.get("reviewDecision"))
+        pr["ciStatus"] = get_ci_status(pr.get("statusCheckRollup"))
+        pr["currentReviewers"] = get_current_reviewers(reviews)
+
+    # Post-filter by review status using our computed reviewStatus
+    # GitHub's review: qualifier can be inconsistent when re-reviews are requested,
+    # so we verify against our reviews-based computation for consistency.
+    if params.review:
+        review_values = {r.strip() for r in params.review.split(",") if r.strip()}
+        review_status_map = {
+            "none": "pending",
+            "required": "review_required",
+            "approved": "approved",
+            "changes_requested": "changes_requested",
+        }
+        allowed = {review_status_map.get(v, v) for v in review_values}
+        prs = [pr for pr in prs if pr.get("reviewStatus") in allowed]
+
+    # Post-filter by CI status (gh search doesn't support status: qualifier for CI checks)
+    if params.status:
+        selected_statuses = {s.strip() for s in params.status.split(",") if s.strip()}
+        prs = [pr for pr in prs if pr.get("ciStatus") in selected_statuses]
+
+    return prs
+
+
+def _sync_meta(status, repo_row=None):
+    return {"status": status, "lastSyncedAt": (repo_row or {}).get("last_synced_at")}
+
+
 @pr_bp.route("/api/repos/<owner>/<repo>/prs")
 def get_prs(owner, repo):
-    """Get PRs with advanced filtering support."""
+    """Get PRs with advanced filtering support.
+
+    Three-way dispatch (see docs/specs/2026-08-28-pr-sync-db-design.md):
+    DB path when the repo's sync backfill is done, hybrid (numbers-only gh
+    search joined against DB rows) when a GitHub-only filter is active, and
+    the live gh query otherwise.
+    """
     try:
         # Direct PR number lookup — bypasses all other filters
         pr_number = request.args.get("prNumber")
@@ -71,47 +122,56 @@ def get_prs(owner, repo):
         config = get_config()
         params = PRFilterParams.from_request_args(request.args, default_per_page=config.get("default_per_page", 30))
         builder = PRFilterBuilder(owner, repo, params)
-        args = builder.build()
 
-        output = run_gh_command(args)
-        prs = parse_json_output(output)
+        sync_cfg = get_pr_sync_config()
+        repo_full = f"{owner}/{repo}"
+        store = get_synced_prs_db()
+        sync_eligible = sync_cfg["enabled"] and repo_full not in sync_cfg["exclude_repos"]
 
-        # Post-filter by draft status (gh search qualifier draft: is unreliable)
-        if params.draft == "true":
-            prs = [pr for pr in prs if pr.get("isDraft", False)]
-        elif params.draft == "false":
-            prs = [pr for pr in prs if not pr.get("isDraft", False)]
+        repo_row = None
+        if sync_eligible:
+            store.register_repo(repo_full)
+            repo_row = store.get_repo(repo_full)
 
-        # Post-process: add review status and CI status summaries
-        # Compute reviewStatus from full reviews history, then sync reviewDecision
-        # so badges and filters use the same source of truth.
-        for pr in prs:
-            reviews = pr.get("reviews")
-            pr["reviewStatus"] = get_review_status(pr.get("reviewDecision"), reviews)
-            pr["reviewDecision"] = _STATUS_TO_DECISION.get(pr["reviewStatus"], pr.get("reviewDecision"))
-            pr["ciStatus"] = get_ci_status(pr.get("statusCheckRollup"))
-            pr["currentReviewers"] = get_current_reviewers(reviews)
+        if repo_row and repo_row["backfill_done"]:
+            if needs_github_search(params):
+                # Hybrid: GitHub decides which PRs and in what order; the DB
+                # supplies the rich rows.
+                numbers = [r["number"] for r in parse_json_output(run_gh_command(builder.build(json_fields="number")))]
+                by_number = store.get_prs_by_numbers(repo_full, numbers)
+                prs = []
+                for n in numbers:
+                    if n in by_number:
+                        prs.append(by_number[n])
+                    else:
+                        # Outside the sync window (e.g. very old closed PR) — hydrate on the spot.
+                        try:
+                            pr = fetch_full_pr(owner, repo, n)
+                            store.upsert_pr(repo_full, pr)
+                            pr["fetchedAt"] = None
+                            prs.append(pr)
+                        except RuntimeError:
+                            logger.warning(f"Hybrid fetch: could not hydrate {repo_full}#{n}")
+            else:
+                prs = store.get_prs(repo_full, states=states_for(params))
+                prs = sort_prs_locally(filter_prs_locally(prs, params), params)
+            prs = _postprocess_and_filter(prs, params)[: params.limit]
+            return jsonify({"prs": prs, "sync": _sync_meta("ready", repo_row)})
 
-        # Post-filter by review status using our computed reviewStatus
-        # GitHub's review: qualifier can be inconsistent when re-reviews are requested,
-        # so we verify against our reviews-based computation for consistency.
-        if params.review:
-            review_values = {r.strip() for r in params.review.split(",") if r.strip()}
-            review_status_map = {
-                "none": "pending",
-                "required": "review_required",
-                "approved": "approved",
-                "changes_requested": "changes_requested",
-            }
-            allowed = {review_status_map.get(v, v) for v in review_values}
-            prs = [pr for pr in prs if pr.get("reviewStatus") in allowed]
-
-        # Post-filter by CI status (gh search doesn't support status: qualifier for CI checks)
-        if params.status:
-            selected_statuses = {s.strip() for s in params.status.split(",") if s.strip()}
-            prs = [pr for pr in prs if pr.get("ciStatus") in selected_statuses]
-
-        return jsonify({"prs": prs})
+        # Live path: unsynced repo, or backfill still running.
+        live_status = "backfilling" if repo_row else "live"
+        try:
+            prs = parse_json_output(run_gh_command(builder.build()))
+            prs = _postprocess_and_filter(prs, params)
+            return jsonify({"prs": prs, "sync": _sync_meta(live_status, repo_row)})
+        except TransientGitHubError:
+            # Mid-backfill upstream flake: partial local data beats an error page.
+            if repo_row and store.count_prs(repo_full):
+                prs = store.get_prs(repo_full, states=states_for(params))
+                prs = sort_prs_locally(filter_prs_locally(prs, params), params)
+                prs = _postprocess_and_filter(prs, params)[: params.limit]
+                return jsonify({"prs": prs, "sync": _sync_meta("backfilling", repo_row)})
+            raise
 
     except TransientGitHubError as e:
         logger.warning(f"GitHub upstream error fetching PRs for {owner}/{repo}: {e}")
@@ -121,6 +181,31 @@ def get_prs(owner, repo):
         }), 503
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 500
+
+
+@pr_bp.route("/api/repos/<owner>/<repo>/prs/<int:pr_number>/refresh", methods=["POST"])
+def refresh_pr(owner, repo, pr_number):
+    """Live-fetch one PR, upsert it into the synced store, return the fresh row."""
+    repo_full = f"{owner}/{repo}"
+    store = get_synced_prs_db()
+    try:
+        pr = fetch_full_pr(owner, repo, pr_number)
+    except TransientGitHubError as e:
+        logger.warning(f"Refresh: upstream error for {repo_full}#{pr_number}: {e}")
+        return jsonify({
+            "error": "GitHub is having a moment (upstream 5xx). Try again in a few seconds.",
+            "transient": True,
+        }), 503
+    except RuntimeError as e:
+        if "Not Found" in str(e) or "404" in str(e):
+            store.delete_pr(repo_full, pr_number)
+            return jsonify({"error": "PR not found"}), 404
+        return jsonify({"error": str(e)}), 500
+
+    store.upsert_pr(repo_full, pr)
+    row = store.get_prs_by_numbers(repo_full, [pr_number]).get(pr_number, pr)
+    processed = _postprocess_and_filter([row], PRFilterParams())
+    return jsonify({"pr": processed[0] if processed else row})
 
 
 @pr_bp.route("/api/repos/<owner>/<repo>/prs/divergence", methods=["POST"])

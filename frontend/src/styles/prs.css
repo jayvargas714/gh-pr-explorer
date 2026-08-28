@@ -40,6 +40,13 @@
   margin: 0;
 }
 
+.mx-pr-list__sync {
+  margin-left: auto;
+  margin-right: var(--mx-space-3);
+  color: var(--mx-color-text-muted);
+  font-size: var(--mx-font-size-sm);
+}
+
 .mx-pr-list__items {
   display: flex;
   flex-direction: column;
@@ -102,6 +109,11 @@
 
 .mx-pr-card__time {
   color: var(--mx-color-text-muted);
+}
+
+.mx-pr-card__freshness {
+  color: var(--mx-color-text-muted);
+  font-size: var(--mx-font-size-xs);
 }
 
 /* ============================================================================

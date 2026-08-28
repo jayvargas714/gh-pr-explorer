@@ -44,6 +44,20 @@ export async function fetchPRDetails(
 }
 
 /**
+ * Live-refresh a single PR (updates the backend's synced store too)
+ */
+export async function refreshPR(
+  owner: string,
+  repo: string,
+  prNumber: number
+): Promise<{ pr: PullRequest }> {
+  return api.post<{ pr: PullRequest }>(
+    `/repos/${owner}/${repo}/prs/${prNumber}/refresh`,
+    {}
+  )
+}
+
+/**
  * Fetch branch divergence for multiple PRs
  */
 export async function fetchDivergence(

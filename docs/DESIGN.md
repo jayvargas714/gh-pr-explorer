@@ -2045,6 +2045,89 @@ The tab is repo-independent in every other respect: it reads only
 `/api/review-logs`, so it works even when PR fetching is failing — which is
 precisely when it is most needed.
 
+### PR List Sync
+
+**Purpose**: Serve the PR list tab from a locally synced SQLite table so navigation
+and filtering are instant and GitHub 5xx flakiness (notably 504s on heavy
+`gh pr list --json` queries) never reaches the UI.
+
+**Motivation**: The live PR list fetch is one `gh pr list --limit 100` requesting
+~25 JSON fields per PR — including `reviews` (full review history) and
+`statusCheckRollup` (every CI check). On busy repos GitHub times that query out
+(504) deterministically, so `run_gh_command`'s retry/backoff cannot save it. The
+fix is to never need a big query on the request path: a background worker keeps a
+local copy fresh using only small, 504-resistant queries, and the route serves
+from SQLite.
+
+**Full design spec**: `docs/specs/2026-08-28-pr-sync-db-design.md`.
+
+**Storage** (`backend/database/synced_prs.py`, schema in `base.py`):
+
+- `synced_repos` — one row per registered repo (`repo` is the full `"owner/name"`
+  string, matching the DB-wide convention): `last_visited_at`, `last_synced_at`,
+  `backfill_done`, `backfill_error`. A repo registers itself the first time its
+  PR list is requested.
+- `synced_prs` — one row per PR, PK `(repo, pr_number)`: scalar columns for cheap
+  SQL narrowing (`state`, `is_draft`, `author`, created/updated/closed/merged
+  timestamps), the **full PR JSON blob** (every field the live path fetches — no
+  data is dropped), and `fetched_at`. `reviewStatus` / `ciStatus` /
+  `currentReviewers` are never stored; they are computed at serve time by the same
+  `pr_service` helpers as the live path.
+
+**Sync worker** (`backend/services/pr_sync_worker.py`, daemon thread started from
+`app.py` behind the `pr_sync.enabled` flag and the WERKZEUG reloader guard):
+
+- **Backfill** (first visit): fetch PR *numbers only* (open, then
+  `is:closed updated:>=<180-day cutoff>`), then hydrate each number with one
+  `gh pr view` (full field set) in a small thread pool — open PRs first so the
+  main view fills within seconds. Every request is single-PR-sized; a single PR's
+  failure is logged and skipped; a failed backfill records `backfill_error` and
+  retries next cycle (hydration is idempotent upserts).
+- **Incremental** (each cycle, default 120s): numbers-only query for PRs
+  `updated:>=` the last sync minus a 10-minute slack, re-hydrate just those
+  (state transitions are picked up naturally), prune CLOSED/MERGED rows older
+  than the window, stamp `last_synced_at`.
+- Eligible repos: registered minus `exclude_repos`, most-recently-visited first,
+  capped at `max_synced_repos`. Each repo's cycle is exception-isolated.
+
+**Route dispatch** (`GET /api/repos/<owner>/<repo>/prs`, three-way):
+
+1. **DB path** — repo backfilled and no GitHub-only filter active: SQL narrows by
+   state, `backend/services/pr_local_filter.py` applies the remaining filters
+   against the stored JSON with gh-qualifier semantics (labels ANDed, inclusive
+   date bounds, `milestone=none`, exclusions, title/body substring search), local
+   `created`/`updated` sort, then the shared post-filter block
+   (draft/review/CI status) and `limit`.
+2. **Hybrid path** — DB ready but a GitHub-only filter is active (`mentions`,
+   `commenter`, `involves`, `reactions`, `interactions`, `comments`, `linked`,
+   `team-review-requested`, search-in-comments, or a comments/reactions/
+   interactions sort): run the normal `PRFilterBuilder` query with
+   `--json number` only (tiny, reliable), then serve the matching rows from the
+   DB **preserving GitHub's order**; numbers outside the sync window are hydrated
+   on the spot.
+3. **Live path** — repo unregistered, excluded, or backfill still running:
+   today's full live query, unchanged. If a live fetch mid-backfill hits a
+   transient 5xx and partial local rows exist, they are served instead of a 503.
+
+The response gains metadata: each PR carries `fetchedAt`, and the top level adds
+`"sync": {"status": "ready"|"backfilling"|"live", "lastSyncedAt": ...}`.
+
+**Per-card refresh**: `POST /api/repos/<owner>/<repo>/prs/<n>/refresh` live-fetches
+one PR with the full field set, upserts it into the store, and returns the fresh
+processed row; a 404 deletes the stale row.
+
+**Frontend**: each PR card shows a muted "⟳ <relative time>" freshness stamp
+(hover for the absolute timestamp) and a 🔄 button that refreshes just that PR in
+place. The list header shows "synced Xs ago" when serving from local data; while
+a repo is backfilling, an info banner appears and the list polls every 5s so it
+flips to local data without a manual refresh.
+
+**Configuration** (`pr_sync` block, all defaults internal — the block is optional):
+`enabled` (true; false is a clean kill switch back to live fetching),
+`poll_interval_seconds` (120), `history_days` (180), `max_synced_repos` (10,
+least-recently-visited repos beyond the cap fall back to the live path),
+`exclude_repos` ([]).
+
 ---
 
 ## API Endpoints
@@ -2211,6 +2294,31 @@ Fetches PRs with advanced filtering.
 |-------|------|-------------|
 | `reviewStatus` | string | Computed from `reviewDecision`: "approved", "changes_requested", "review_required", or "pending" |
 | `ciStatus` | string | Computed from `statusCheckRollup`: "success", "failure", "pending", "neutral", or null |
+
+**Sync metadata** (see the PR List Sync feature): each PR carries `fetchedAt`
+(when its data was last pulled from GitHub), and the response includes a
+top-level `sync` object:
+
+```json
+{
+  "prs": [ ... ],
+  "sync": { "status": "ready", "lastSyncedAt": "2026-08-28 04:10:22" }
+}
+```
+
+`status` is `ready` (served from the local synced store), `backfilling` (first
+sync still running; data is live or partial), or `live` (repo not synced —
+excluded or over the `max_synced_repos` cap).
+
+**POST** `/api/repos/<owner>/<repo>/prs/<pr_number>/refresh`
+
+Live-fetches one PR with the full field set, upserts it into the synced store,
+and returns the fresh processed row.
+
+**Response**: `{"pr": { ...list-item shape, incl. fetchedAt... }}`
+
+**Errors**: `404` when the PR no longer exists on GitHub (the stale local row is
+deleted); `503` with `"transient": true` on upstream 5xx.
 
 ### Repository Metadata
 
@@ -3601,6 +3709,7 @@ Clears the in-memory cache.
 | `review_retry_delay_seconds` | number | 30 | Backoff before each retry attempt. Gives a transient API or GitHub outage time to clear. |
 | `review_log_retention_days` | integer | 90 | How long review lifecycle events are kept. Purged once on startup; `0` disables purging. |
 | `past_reviews_dir` | string | `<reviews_dir>/past-reviews` | Legacy reviews directory used only by the one-time `migrate_data.py` import. Supports `~`/`$VAR` expansion. |
+| `pr_sync` | object | see below | PR List Sync worker settings. Optional block; every key has an internal default. `enabled` (bool, true) — master switch; `false` reverts the PR list to live fetching. `poll_interval_seconds` (int, 120) — worker cycle interval. `history_days` (int, 180) — how far back closed/merged PRs are synced and kept. `max_synced_repos` (int, 10) — most-recently-visited repos kept in sync; the rest fall back to the live path. `exclude_repos` (list, `[]`) — `"owner/name"` strings never synced. |
 
 ### Example Configuration
 

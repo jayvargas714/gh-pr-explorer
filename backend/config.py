@@ -94,6 +94,48 @@ def get_review_log_retention_days() -> int:
     return max(0, days)
 
 
+# PR list sync worker defaults; overridable via config.json's "pr_sync" block.
+DEFAULT_PR_SYNC = {
+    "enabled": True,
+    "poll_interval_seconds": 120,
+    "history_days": 180,
+    "max_synced_repos": 10,
+    "exclude_repos": [],
+}
+
+
+def get_pr_sync_config() -> Dict[str, Any]:
+    """Get the PR sync settings, merged over defaults and sanitized.
+
+    Malformed values fall back to their defaults rather than breaking the
+    worker loop (mirrors get_review_retry_settings' tolerance).
+    """
+    config = get_config()
+    raw = config.get("pr_sync")
+    merged = dict(DEFAULT_PR_SYNC)
+    if isinstance(raw, dict):
+        for key in DEFAULT_PR_SYNC:
+            if key in raw:
+                merged[key] = raw[key]
+
+    merged["enabled"] = bool(merged["enabled"])
+
+    for key, minimum in (("poll_interval_seconds", 30), ("history_days", 1), ("max_synced_repos", 1)):
+        try:
+            value = int(merged[key])
+            if value <= 0 and key != "max_synced_repos":
+                raise ValueError
+            merged[key] = max(minimum, value)
+        except (TypeError, ValueError):
+            merged[key] = DEFAULT_PR_SYNC[key]
+
+    if not isinstance(merged["exclude_repos"], list):
+        merged["exclude_repos"] = []
+    merged["exclude_repos"] = [str(r) for r in merged["exclude_repos"]]
+
+    return merged
+
+
 # Database file path
 DB_PATH = PROJECT_ROOT / "pr_explorer.db"
 

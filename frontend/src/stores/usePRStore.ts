@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { PullRequest, DivergenceMap } from '../api/types'
+import { PullRequest, DivergenceMap, SyncInfo } from '../api/types'
 
 export interface PRReviewInfo {
   reviewId: number
@@ -23,8 +23,13 @@ interface PRState {
   // Review scores (pr_number -> review info)
   prReviewScores: Record<number, PRReviewInfo>
 
+  // Sync metadata from the last /prs response
+  syncInfo: SyncInfo | null
+
   // Actions
   setPRs: (prs: PullRequest[], resetPage?: boolean) => void
+  updatePR: (pr: PullRequest) => void
+  setSyncInfo: (info: SyncInfo | null) => void
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
   setCurrentPage: (page: number) => void
@@ -54,8 +59,16 @@ export const usePRStore = create<PRState>((set, get) => ({
   // Review scores
   prReviewScores: {},
 
+  // Sync metadata
+  syncInfo: null,
+
   // Actions
   setPRs: (prs, resetPage = true) => set(resetPage ? { prs, currentPage: 1 } : { prs }),
+  updatePR: (pr) =>
+    set((state) => ({
+      prs: state.prs.map((existing) => (existing.number === pr.number ? pr : existing)),
+    })),
+  setSyncInfo: (info) => set({ syncInfo: info }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
   setCurrentPage: (page) => set({ currentPage: page }),

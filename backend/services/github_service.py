@@ -15,6 +15,17 @@ _TRANSIENT_ERRORS = (
 )
 
 
+# Full field set for PR list/view fetches. Single source of truth — the route,
+# the filter builder, and the sync worker must all fetch identical shapes.
+PR_LIST_JSON_FIELDS = (
+    "number,title,author,state,isDraft,createdAt,updatedAt,closedAt,"
+    "mergedAt,url,body,headRefName,baseRefName,labels,assignees,"
+    "reviewRequests,reviewDecision,reviews,"
+    "mergeable,additions,deletions,changedFiles,"
+    "milestone,statusCheckRollup"
+)
+
+
 class TransientGitHubError(RuntimeError):
     """Raised when gh CLI fails with a transient upstream error after all retries."""
     pass
@@ -111,6 +122,30 @@ def fetch_github_stats_api(owner, repo, endpoint, jq_query=None, max_retries=3, 
             return []
 
     return []
+
+
+def fetch_full_pr(owner, repo, pr_number):
+    """Fetch one PR with the full field set. Raises on failure (incl. transient)."""
+    output = run_gh_command([
+        "pr", "view", str(pr_number),
+        "-R", f"{owner}/{repo}",
+        "--json", PR_LIST_JSON_FIELDS,
+    ])
+    data = parse_json_output(output)
+    if not isinstance(data, dict) or "number" not in data:
+        raise RuntimeError(f"Unexpected gh pr view output for {owner}/{repo}#{pr_number}")
+    return data
+
+
+def fetch_pr_numbers(owner, repo, state="open", search=None, limit=1000):
+    """Fetch PR numbers only (tiny, 504-resistant query), in GitHub's order."""
+    args = ["pr", "list", "-R", f"{owner}/{repo}", "--state", state,
+            "--limit", str(limit), "--json", "number"]
+    if search:
+        args.extend(["--search", search])
+    output = run_gh_command(args)
+    rows = parse_json_output(output)
+    return [row["number"] for row in rows if isinstance(row, dict) and "number" in row]
 
 
 _authenticated_login = None

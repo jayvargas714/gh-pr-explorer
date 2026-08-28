@@ -7,6 +7,7 @@ import { useReviewStore } from '../../stores/useReviewStore'
 import { useTimelineStore } from '../../stores/useTimelineStore'
 import { addToQueue as apiAddToQueue, removeFromQueue as apiRemoveFromQueue } from '../../api/queue'
 import { fetchMergeQueue } from '../../api/queue'
+import { refreshPR } from '../../api/prs'
 import { Card } from '../common/Card'
 import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
@@ -14,7 +15,7 @@ import { PRBadges } from './PRBadges'
 import { ReviewButton } from '../reviews/ReviewButton'
 import { AuditButton } from '../audits/AuditButton'
 import { DescriptionModal } from '../modals/DescriptionModal'
-import { formatRelativeTime } from '../../utils/formatters'
+import { formatRelativeTime, sqliteUtcToIso } from '../../utils/formatters'
 
 interface PRCardProps {
   pr: PullRequest
@@ -23,6 +24,8 @@ interface PRCardProps {
 export function PRCard({ pr }: PRCardProps) {
   const [showDescription, setShowDescription] = useState(false)
   const [queueLoading, setQueueLoading] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const updatePR = usePRStore((state) => state.updatePR)
   const prDivergence = usePRStore((state) => state.prDivergence)
   const prReviewScores = usePRStore((state) => state.prReviewScores)
   const selectedRepo = useAccountStore((state) => state.selectedRepo)
@@ -39,6 +42,19 @@ export function PRCard({ pr }: PRCardProps) {
   const myLogin = useAccountStore((state) => state.accounts.find((a) => a.is_personal)?.login)
   const approvedByMe =
     !!myLogin && !!pr.currentReviewers?.some((r) => r.login === myLogin && r.state === 'APPROVED')
+
+  const handleRefreshPR = async () => {
+    if (!selectedRepo || refreshing) return
+    try {
+      setRefreshing(true)
+      const response = await refreshPR(selectedRepo.owner.login, selectedRepo.name, pr.number)
+      updatePR(response.pr)
+    } catch (err) {
+      console.error('Failed to refresh PR:', err)
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   const handleQueueToggle = async () => {
     if (queueLoading) return
@@ -131,6 +147,14 @@ export function PRCard({ pr }: PRCardProps) {
           />
           <span className="mx-pr-card__author">{pr.author.login}</span>
           <span className="mx-pr-card__time">{formatRelativeTime(pr.createdAt)}</span>
+          {pr.fetchedAt && (
+            <span
+              className="mx-pr-card__freshness"
+              data-tooltip={`PR data fetched ${new Date(sqliteUtcToIso(pr.fetchedAt)).toLocaleString()}`}
+            >
+              ⟳ {formatRelativeTime(sqliteUtcToIso(pr.fetchedAt))}
+            </span>
+          )}
         </div>
       </div>
 
@@ -224,6 +248,16 @@ export function PRCard({ pr }: PRCardProps) {
           data-tooltip="Open on GitHub"
         >
           🔗
+        </Button>
+
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleRefreshPR}
+          disabled={refreshing}
+          data-tooltip="Refresh this PR's data from GitHub"
+        >
+          {refreshing ? '…' : '🔄'}
         </Button>
       </div>
 

@@ -11,6 +11,7 @@ import { Pagination } from '../common/Pagination'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 import { Button } from '../common/Button'
+import { formatRelativeTime, sqliteUtcToIso } from '../../utils/formatters'
 
 const PR_POLL_INTERVAL = 60_000 // 60 seconds
 
@@ -32,6 +33,8 @@ export function PRList() {
     setPRDivergence,
     setDivergenceLoading,
     setPRReviewScores,
+    syncInfo,
+    setSyncInfo,
   } = usePRStore()
 
   // Track whether initial load has happened to distinguish user-initiated vs silent refresh
@@ -70,6 +73,7 @@ export function PRList() {
 
       // On silent refresh, preserve current page position
       setPRs(response.prs, !silent)
+      setSyncInfo(response.sync ?? null)
 
       // Fetch divergence for open PRs
       const openPRs = response.prs.filter((pr) => pr.state === 'OPEN')
@@ -114,6 +118,10 @@ export function PRList() {
   }, [loadPRs])
 
   usePolling(silentRefresh, PR_POLL_INTERVAL, !!selectedRepo)
+
+  // While the sync worker backfills this repo, poll fast so the list flips
+  // to instant local data (and fills in rows) without a manual refresh.
+  usePolling(silentRefresh, 5_000, !!selectedRepo && syncInfo?.status === 'backfilling')
 
   const loadDivergence = async (openPRs: any[]) => {
     if (!selectedRepo) return
@@ -198,6 +206,11 @@ export function PRList() {
     <div className="mx-pr-list">
       <div className="mx-pr-list__header">
         <h2>{prs.length} Pull Requests</h2>
+        {syncInfo?.status === 'ready' && syncInfo.lastSyncedAt && (
+          <span className="mx-pr-list__sync" data-tooltip="PR list is served from local sync">
+            synced {formatRelativeTime(sqliteUtcToIso(syncInfo.lastSyncedAt))}
+          </span>
+        )}
         <Button
           variant="ghost"
           size="sm"
@@ -208,6 +221,12 @@ export function PRList() {
           {loading ? <Spinner size="sm" /> : '↻ Refresh'}
         </Button>
       </div>
+
+      {syncInfo?.status === 'backfilling' && (
+        <Alert variant="info">
+          Backfilling PR history for this repo — the list will switch to instant local data when done.
+        </Alert>
+      )}
 
       <div className="mx-pr-list__items">
         {paginatedPRs.map((pr) => (

@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from typing import Optional, List
 
+from backend.services.github_service import PR_LIST_JSON_FIELDS
+
 
 @dataclass
 class PRFilterParams:
@@ -99,8 +101,12 @@ class PRFilterBuilder:
         self.repo = repo
         self.params = params
 
-    def build(self) -> List[str]:
-        """Build the full gh pr list command args."""
+    def build(self, json_fields: Optional[str] = None) -> List[str]:
+        """Build the full gh pr list command args.
+
+        json_fields overrides the full field set — the hybrid DB path passes
+        "number" so GitHub only computes/serializes PR numbers.
+        """
         args = ["pr", "list", "-R", f"{self.owner}/{self.repo}"]
         search_parts = []
 
@@ -120,14 +126,7 @@ class PRFilterBuilder:
 
         args.extend(["--limit", str(self.params.limit)])
 
-        args.extend([
-            "--json",
-            "number,title,author,state,isDraft,createdAt,updatedAt,closedAt,"
-            "mergedAt,url,body,headRefName,baseRefName,labels,assignees,"
-            "reviewRequests,reviewDecision,reviews,"
-            "mergeable,additions,deletions,changedFiles,"
-            "milestone,statusCheckRollup"
-        ])
+        args.extend(["--json", json_fields or PR_LIST_JSON_FIELDS])
 
         return args
 

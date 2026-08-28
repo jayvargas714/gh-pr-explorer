@@ -27,6 +27,15 @@ export function formatRelativeTime(dateString: string): string {
 }
 
 /**
+ * Normalize a SQLite UTC timestamp ("YYYY-MM-DD HH:MM:SS") to ISO 8601.
+ * Already-ISO strings pass through unchanged.
+ */
+export function sqliteUtcToIso(timestamp: string): string {
+  if (timestamp.includes('T')) return timestamp
+  return timestamp.replace(' ', 'T') + 'Z'
+}
+
+/**
  * Format a date string to short date (e.g., "Jan 15, 2024")
  */
 export function formatShortDate(dateString: string): string {

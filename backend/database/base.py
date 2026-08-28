@@ -387,6 +387,43 @@ class Database:
                 ON auto_verdicts(repo, pr_number)
             """)
 
+            # PR list sync: registered repos + full PR JSON rows (see docs/specs/2026-08-28-pr-sync-db-design.md)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS synced_repos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo TEXT NOT NULL UNIQUE,
+                    registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    last_visited_at DATETIME,
+                    last_synced_at DATETIME,
+                    backfill_done INTEGER NOT NULL DEFAULT 0,
+                    backfill_error TEXT
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS synced_prs (
+                    repo TEXT NOT NULL,
+                    pr_number INTEGER NOT NULL,
+                    state TEXT NOT NULL,
+                    is_draft INTEGER NOT NULL DEFAULT 0,
+                    author TEXT,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    closed_at TEXT,
+                    merged_at TEXT,
+                    data TEXT NOT NULL,
+                    fetched_at DATETIME NOT NULL,
+                    PRIMARY KEY (repo, pr_number)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_synced_prs_repo_state
+                ON synced_prs(repo, state)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_synced_prs_repo_updated
+                ON synced_prs(repo, updated_at DESC)
+            """)
+
             # Migration: Add auto-verdict arming columns to merge_queue for existing databases
             cursor.execute("PRAGMA table_info(merge_queue)")
             queue_columns = {row[1] for row in cursor.fetchall()}

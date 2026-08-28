@@ -69,6 +69,7 @@ export interface PullRequest {
   deletions: number
   changedFiles: number
   milestone: Milestone | null
+  fetchedAt?: string | null
 }
 
 export interface Label {
@@ -705,8 +706,14 @@ export interface ReposResponse {
   repos: Repository[]
 }
 
+export interface SyncInfo {
+  status: 'ready' | 'backfilling' | 'live'
+  lastSyncedAt: string | null
+}
+
 export interface PRsResponse {
   prs: PullRequest[]
+  sync?: SyncInfo
 }
 
 export interface ContributorsResponse {
