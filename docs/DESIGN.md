@@ -1651,15 +1651,20 @@ When a PR has **both** a completed review and a completed audit, the verdict mod
 
 ### Auto Verdicts
 
-Auto verdicts remove the manual click-path for the mechanical case: a PR card is **armed** with a 🤖 toggle, and when a review for that PR completes, the backend compares the review's issue counts against configurable thresholds and posts the verdict to GitHub itself. The comment body is composed the same way a manually posted verdict is (summary, issue sections, recommendations — no score or metadata). Every auto-generated verdict is badged in the UI so it can be audited after the fact.
+Auto verdicts remove the manual click-path for the mechanical case: a PR card is **armed** with a 🤖 toggle, and when a review for that PR completes, the backend acts on it without a human click. An armed card is in one of two **modes**:
+
+- **Verdict mode** (the default) — the review's issue counts are compared against configurable thresholds and the verdict (`REQUEST_CHANGES`, `APPROVE`, or nothing) is posted to GitHub.
+- **Comment mode** — thresholds are ignored and every completed review's findings are posted as a `COMMENT` review, clean reviews included. This is the self-review path: GitHub rejects both `APPROVE` and `REQUEST_CHANGES` on your own PR (422), so comment mode is how an armed self-authored PR reliably gets its report onto GitHub — and it doubles as an audit trail that the review happened.
+
+The comment body is composed the same way a manually posted verdict is (summary, issue sections, recommendations — no score or metadata). Every auto-generated verdict is badged in the UI so it can be audited after the fact.
 
 #### How It Works
 
-1. The user sets thresholds once in the **Auto Verdict Criteria** panel (🤖 button in the header, or "Edit criteria…" from any card's auto popover).
-2. On a queue or swimlane card, the **🤖 Auto** button arms that PR and picks which reviewer agent its auto review uses.
+1. The user sets thresholds once in the **Auto Verdict Criteria** panel (🤖 button in the header, or "Edit global criteria…" from any card's auto popover).
+2. On a queue or swimlane card, the **🤖 Auto** button arms that PR, picks the mode (verdict / comment), and picks which reviewer agent its auto review uses. Optionally, the popover's "Override for this PR…" sets per-PR criteria (see below).
 3. A review completes — started from anywhere, by any surface.
 4. `check_review_status` saves the review, then spawns a thread running `maybe_post_auto_verdict` (`backend/services/auto_verdict_service.py`).
-5. The evaluator counts issues per severity, compares against the criteria, and posts `REQUEST_CHANGES`, `APPROVE`, `COMMENT`, or nothing.
+5. The evaluator resolves the effective criteria (global config + the card's override, if any). In verdict mode it counts issues per severity, compares against the criteria, and posts `REQUEST_CHANGES`, `APPROVE`, `COMMENT`, or nothing. In comment mode it always posts `COMMENT`.
 6. The decision is recorded in the `auto_verdicts` table and surfaces on the card as a badge plus a verdict chip on the triggering review's rev-log row.
 
 #### Criteria
@@ -1677,7 +1682,19 @@ Stored as the `auto_verdict_config` key in `user_settings`. Defaults live in exa
 
 Thresholds are **inclusive upper bounds**: `maxMajor: 1` allows one major and trips on two. Both switches default off so installing the feature cannot post anything until deliberately enabled.
 
+#### Per-PR Criteria Overrides
+
+The global config is the default; any queued PR can carry its own **criteria override** — a complete snapshot of the five overridable fields (`maxCritical`, `maxMajor`, `maxMinor`, `allowAutoApprove`, `autoFollowupReview`) stored as JSON in `merge_queue.auto_verdict_criteria`. The rules:
+
+- **Whole-config, not per-field.** A PR either follows the global config or has its own full snapshot; there is no partial inheritance. Later changes to the global defaults do not affect overridden PRs.
+- **The master `enabled` switch is never overridable.** `OVERRIDE_KEYS` in `auto_verdict_config.py` deliberately excludes it, `validate_override` strips it, and `apply_override` never copies it — so "the master switch is off" always means nothing posts, board-wide.
+- **Merging is one pure function.** `apply_override(criteria, queue_item)` returns the effective criteria; the evaluator and the follow-up watcher both go through it. A malformed stored override is logged and ignored (global config applies).
+- **History stays honest.** `auto_verdicts.criteria_json` snapshots the *effective* criteria at decision time, so an overridden decision records the override that drove it.
+- The follow-up watcher (`scan_and_start_followups`) resolves `autoFollowupReview` per card, so an override can switch auto follow-ups on or off for one PR independently of the global setting.
+
 #### Decision Table
+
+Verdict mode:
 
 | Condition | Event posted | Recorded outcome |
 |-----------|--------------|------------------|
@@ -1688,7 +1705,17 @@ Thresholds are **inclusive upper bounds**: `maxMajor: 1` allows one major and tr
 | Review failed, content unusable, or PR not `OPEN` | *(nothing)* | `skipped` |
 | `post_verdict` returned non-200 or raised | *(attempted)* | `error` |
 
-GitHub rejects `APPROVE` on your own PR with a 422, so a self-authored passing PR falls back to `COMMENT` and the reason records why. A `suppressed` outcome is the "changes-requested only" mode: the card shows *passed — approve manually* so every approval stays a human action.
+Comment mode:
+
+| Condition | Event posted | Recorded outcome |
+|-----------|--------------|------------------|
+| Review completed (any issue counts, clean included) | `COMMENT` | `posted` |
+| Review failed, content unusable, or PR not `OPEN` | *(nothing)* | `skipped` |
+| `post_verdict` returned non-200 or raised | *(attempted)* | `error` |
+
+Comment mode never suppresses: thresholds and `allowAutoApprove` are irrelevant, and the reason records the issue tallies (`comment mode — review findings posted as comment (N critical, …)`). Both modes are gated by the global master `enabled` switch — while it is off, armed cards in either mode post nothing and per-PR overrides are inert.
+
+GitHub rejects `APPROVE` on your own PR with a 422, so in verdict mode a self-authored passing PR falls back to `COMMENT` and the reason records why. A `suppressed` outcome is the "changes-requested only" mode: the card shows *passed — approve manually* so every approval stays a human action.
 
 #### Verdict Body
 
@@ -1706,7 +1733,7 @@ Note there is no per-issue resolved/dismissed state anywhere in the system, so "
 
 #### Auto Follow-Up Reviews
 
-With `autoFollowupReview` on, the loop closes completely for armed cards: review → auto verdict → author pushes fixes → follow-up review → auto verdict again. `auto_review_watcher_loop` (`backend/services/auto_review_watcher.py`) is a second daemon thread (60-second interval, same `WERKZEUG_RUN_MAIN` guard) whose `scan_and_start_followups` pass walks every `merge_queue` row with `auto_verdict_enabled` and starts a follow-up review when **all** of the following hold:
+With `autoFollowupReview` on (resolved per card: the card's criteria override wins over the global flag when one is set), the loop closes completely for armed cards: review → auto verdict → author pushes fixes → follow-up review → auto verdict again. `auto_review_watcher_loop` (`backend/services/auto_review_watcher.py`) is a second daemon thread (60-second interval, same `WERKZEUG_RUN_MAIN` guard) whose `scan_and_start_followups` pass walks every `merge_queue` row with `auto_verdict_enabled` and starts a follow-up review when **all** of the following hold:
 
 1. No review is currently running for the PR (`active_reviews` check, before any gh call).
 2. The PR has at least one saved review — auto-started reviews are always follow-ups; a first review stays a human action.
@@ -1730,11 +1757,13 @@ auto_verdicts (
 )
 ```
 
-Plus two columns on `merge_queue` (added via tracked `ALTER TABLE` migrations in `base.py`), which is the single record behind both the queue panel and the swimlane board:
+Plus four columns on `merge_queue` (added via tracked `ALTER TABLE` migrations in `base.py`), which is the single record behind both the queue panel and the swimlane board:
 
 ```sql
 auto_verdict_enabled  INTEGER NOT NULL DEFAULT 0
 auto_verdict_reviewer TEXT      -- 'default' | 'pb' | 'ed'
+auto_verdict_mode     TEXT      -- 'verdict' | 'comment'; NULL reads as 'verdict'
+auto_verdict_criteria TEXT      -- per-PR criteria override (JSON); NULL = use global
 ```
 
 `criteria_json` snapshots the thresholds at decision time, so changing the criteria later does not rewrite the history of why a past verdict fired.
@@ -1743,8 +1772,8 @@ auto_verdict_reviewer TEXT      -- 'default' | 'pb' | 'ed'
 
 | Component | Location | Description |
 |-----------|----------|-------------|
-| `AutoVerdictToggle` | Queue / swimlane card action row | `🤖 Auto` button, `--active` when armed. Opens a popover with arm/disarm, a reviewer-agent radio group, the effective criteria, and an "Edit criteria…" link |
-| `AutoVerdictConfigModal` | Overlay | The criteria panel: master toggle, three threshold inputs, auto-approve toggle, auto follow-up review toggle, Cancel/Save |
+| `AutoVerdictToggle` | Queue / swimlane card action row | `🤖 Auto` (or `💬 Auto` in comment mode) button, `--active` when armed. Opens a popover with arm/disarm, a mode radio group (verdict / comment), a reviewer-agent radio group, the effective criteria (with an `overridden` chip when a per-PR override is set), an "Override for this PR…" link, and an "Edit global criteria…" link |
+| `AutoVerdictConfigModal` | Overlay | The criteria panel: master toggle, three threshold inputs, auto-approve toggle, auto follow-up review toggle, Cancel/Save. With the optional `perPR` prop it edits a PR's criteria override instead: seeded from the effective config, master toggle hidden, plus a "Use defaults" button that clears the override |
 | `AutoVerdictBadge` | Card badge row | Outcome badge with a tooltip carrying the reason, tallies, and local timestamp |
 | 🤖 header button | Header | Opens the criteria panel; shows an `on` chip while the master switch is enabled |
 | `RevLogBadge` | Card rev-log popover | Shows the verdict as a chip on the triggering review's row (reason in the tooltip); orphaned verdicts render as standalone `AUTO`-tagged entries whose click opens the derived-from review |
@@ -1763,7 +1792,9 @@ disable itself while the request is in flight — the previous behaviour left it
 disabled and unchanged for the length of a full board refetch (`gh pr view` per
 queued PR), which read as the toggle being broken.
 
-An armed card's **Review** button skips the reviewer picker on its primary click and starts the armed agent directly (labelled `🤖 Review`); the adjacent `▾` still opens the picker to override for one run without changing the stored arming.
+An armed card's **Review** button skips the reviewer picker on its primary click and starts the armed agent directly (labelled `🤖 Review`, or `💬 Review` in comment mode); the adjacent `▾` still opens the picker to override for one run without changing the stored arming. This works identically in both modes.
+
+Arming state (`mode`, `criteriaOverride`) rides the card payload's `autoVerdict` object (shaped by `format_auto_verdict_state` in `queue_enrichment.py`), so both the queue panel and the swimlane board see it. Comment-armed cards count as "auto" in the header's auto/manual split and the auto-mode filter, same as verdict-armed ones — the existing Auto Verdict badge chips cover both modes.
 
 The swimlane badge filter gains an **Auto Verdict** dimension with chips *🤖 Armed*, *🤖 Verdict Posted*, and *🤖 Needs Manual Approval*, mirroring the rendered badges one-for-one as `cardMatchesBadge` requires.
 
@@ -2715,18 +2746,53 @@ Arms or disarms auto verdicts for a queued PR.
 ```json
 {
   "enabled": true,
-  "reviewerType": "default"
+  "reviewerType": "default",
+  "mode": "verdict"
 }
 ```
 
 `reviewerType` is one of `default`, `pb`, `ed` (defaults to `default`); anything else
+returns 400. `mode` is `verdict` or `comment` (defaults to `verdict`); anything else
 returns 400. A PR that is not in the merge queue returns 404.
 
 **Response**:
 ```json
 {
-  "autoVerdict": { "enabled": true, "reviewerType": "default" },
+  "autoVerdict": { "enabled": true, "reviewerType": "default", "mode": "verdict" },
   "message": "Auto verdict updated"
+}
+```
+
+**PUT** `/api/merge-queue/<pr_number>/auto-verdict/criteria`
+
+Sets or clears a queued PR's criteria override (see [Auto Verdicts — Per-PR
+Criteria Overrides](#per-pr-criteria-overrides)).
+
+**Query Parameters**:
+- `repo` (required): Repository in `owner/repo` format
+
+**Request Body** — a full override snapshot, or `null` to clear:
+```json
+{
+  "criteria": {
+    "maxCritical": 3,
+    "maxMajor": 1,
+    "maxMinor": 99,
+    "allowAutoApprove": true,
+    "autoFollowupReview": false
+  }
+}
+```
+
+The override is validated like the global config (integer thresholds ≥ 0, else 400)
+but never contains `enabled` — the master switch is not per-PR and an `enabled` key
+in the payload is dropped. A PR that is not in the merge queue returns 404.
+
+**Response**:
+```json
+{
+  "criteriaOverride": { "...": "the stored override, or null when cleared" },
+  "message": "Auto verdict criteria updated"
 }
 ```
 

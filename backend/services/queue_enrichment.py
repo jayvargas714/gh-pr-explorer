@@ -159,17 +159,33 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db, auto_verd
         "majorIssueTitles": major_issue_titles,
         "minorIssueTitles": minor_issue_titles,
         "isFollowup": is_followup,
-        "autoVerdict": {
-            "enabled": bool(item.get("auto_verdict_enabled")),
-            "reviewerType": item.get("auto_verdict_reviewer") or "default",
-            "last": auto_verdict_last,
-        },
+        "autoVerdict": format_auto_verdict_state(item, auto_verdict_last),
         "reviewDecision": review_decision,
         "ciStatus": ci_status,
         "statusCheckRollup": status_check_rollup,
         "isDraft": is_draft,
         "currentReviewers": current_reviewers,
         "revLog": rev_log,
+    }
+
+
+def format_auto_verdict_state(item: Dict[str, Any], last: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Shape a queue row's auto-verdict arming state for the card payload."""
+    override = None
+    raw = item.get("auto_verdict_criteria")
+    if raw:
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(parsed, dict):
+                override = parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return {
+        "enabled": bool(item.get("auto_verdict_enabled")),
+        "reviewerType": item.get("auto_verdict_reviewer") or "default",
+        "mode": item.get("auto_verdict_mode") or "verdict",
+        "criteriaOverride": override,
+        "last": last,
     }
 
 

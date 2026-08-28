@@ -126,6 +126,8 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
   // primary click and start that reviewer straight away. The ▾ still overrides
   // for a one-off run; overriding does not change the stored arming.
   const armedReviewer = item.autoVerdict?.enabled ? item.autoVerdict.reviewerType : null
+  const armedMode = item.autoVerdict?.mode ?? 'verdict'
+  const armedIcon = armedMode === 'comment' ? '💬' : '🤖'
 
   return (
     <>
@@ -141,14 +143,18 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
           disabled={starting}
           data-tooltip={
             armedReviewer
-              ? `Run the ${REVIEWER_LABELS[armedReviewer]} review and auto-verdict it`
+              ? `Run the ${REVIEWER_LABELS[armedReviewer]} review and ${
+                  armedMode === 'comment'
+                    ? 'post its findings as a comment'
+                    : 'auto-verdict it'
+                }`
               : undefined
           }
         >
           {starting ? (
             <Spinner size="sm" />
           ) : armedReviewer ? (
-            `${item.hasReview ? '🔄' : '📋'} 🤖 Review`
+            `${item.hasReview ? '🔄' : '📋'} ${armedIcon} Review`
           ) : item.hasReview ? (
             '🔄 Re-review ▾'
           ) : (

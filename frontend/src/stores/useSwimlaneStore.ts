@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { AutoVerdictReviewer, MergeQueueItem, Swimlane, SwimlaneColor } from '../api/types'
+import { AutoVerdictMode, AutoVerdictReviewer, MergeQueueItem, Swimlane, SwimlaneColor } from '../api/types'
 import {
   createSwimlane,
   deleteSwimlane,
@@ -108,7 +108,7 @@ interface SwimlaneState {
   applyAutoVerdictLocal: (
     prNumber: number,
     repo: string,
-    autoVerdict: { enabled: boolean; reviewerType: AutoVerdictReviewer },
+    autoVerdict: { enabled: boolean; reviewerType: AutoVerdictReviewer; mode: AutoVerdictMode },
   ) => void
 
   // Returns true if the move was applied successfully (or restored on failure)
@@ -340,8 +340,16 @@ export const useSwimlaneStore = create<SwimlaneState>((set, get) => ({
       next[laneId] = prev[laneId].map((c) => {
         if (c.number !== prNumber || c.repo !== repo) return c
         found = true
-        // Preserve `last`: arming says nothing about the previous verdict.
-        return { ...c, autoVerdict: { ...c.autoVerdict, ...autoVerdict, last: c.autoVerdict?.last ?? null } }
+        // Preserve `last` and the criteria override: arming says nothing about either.
+        return {
+          ...c,
+          autoVerdict: {
+            ...c.autoVerdict,
+            ...autoVerdict,
+            criteriaOverride: c.autoVerdict?.criteriaOverride ?? null,
+            last: c.autoVerdict?.last ?? null,
+          },
+        }
       })
     }
     if (!found) return

@@ -1632,6 +1632,19 @@
   font-size: 0.7rem;
 }
 
+.mx-auto-verdict-menu__override-chip {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: var(--mx-radius-sm, 4px);
+  background: color-mix(in srgb, var(--mx-color-warning) 15%, transparent);
+  color: var(--mx-color-warning);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 .mx-auto-verdict-menu__link {
   align-self: flex-start;
   padding: 0;

@@ -1,5 +1,6 @@
 """MergeQueueDB - Database operations for merge queue."""
 
+import json
 import sqlite3
 import logging
 from datetime import datetime
@@ -91,15 +92,39 @@ class MergeQueueDB:
         repo: str,
         enabled: bool,
         reviewer_type: Optional[str] = None,
+        mode: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Arm or disarm auto verdicts for a queued PR. Returns the updated row."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE merge_queue
-                SET auto_verdict_enabled = ?, auto_verdict_reviewer = ?
+                SET auto_verdict_enabled = ?, auto_verdict_reviewer = ?, auto_verdict_mode = ?
                 WHERE pr_number = ? AND repo = ?
-            """, (1 if enabled else 0, reviewer_type, pr_number, repo))
+            """, (1 if enabled else 0, reviewer_type, mode, pr_number, repo))
+            if cursor.rowcount == 0:
+                return None
+            cursor.execute(
+                "SELECT * FROM merge_queue WHERE pr_number = ? AND repo = ?",
+                (pr_number, repo)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def set_auto_verdict_criteria(
+        self,
+        pr_number: int,
+        repo: str,
+        criteria: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """Set or clear (None) a queued PR's criteria override. Returns the updated row."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE merge_queue
+                SET auto_verdict_criteria = ?
+                WHERE pr_number = ? AND repo = ?
+            """, (json.dumps(criteria) if criteria is not None else None, pr_number, repo))
             if cursor.rowcount == 0:
                 return None
             cursor.execute(

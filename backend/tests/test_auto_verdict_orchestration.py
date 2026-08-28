@@ -79,10 +79,12 @@ def _criteria(monkeypatch, **overrides):
     return criteria
 
 
-def _arm(h, enabled=True, author="someone-else"):
+def _arm(h, enabled=True, author="someone-else", mode=None, criteria_override=None):
     h.queue.add_to_queue(pr_number=PR, repo=REPO, pr_title="t", pr_author=author,
                          pr_url="u", additions=1, deletions=1)
-    h.queue.set_auto_verdict(PR, REPO, enabled, "default")
+    h.queue.set_auto_verdict(PR, REPO, enabled, "default", mode=mode)
+    if criteria_override is not None:
+        h.queue.set_auto_verdict_criteria(PR, REPO, criteria_override)
 
 
 def _review(h, critical=0, major=0, minor=0, status="completed", author="someone-else"):
@@ -227,6 +229,95 @@ def test_tallies_and_criteria_are_snapshotted_on_the_row(harness, monkeypatch):
     row = harness.auto.get_latest_for_pr(REPO, PR)
     assert (row["critical_count"], row["major_count"], row["minor_count"]) == (1, 2, 5)
     assert json.loads(row["criteria_json"])["maxMinor"] == 2
+
+
+def test_comment_mode_posts_findings_as_comment(harness, monkeypatch):
+    """Comment mode ignores thresholds: a failing review still posts as COMMENT."""
+    _criteria(monkeypatch)
+    _arm(harness, mode="comment")
+    rid = _review(harness, critical=2)
+
+    result = svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert result["outcome"] == "posted"
+    assert result["event"] == "COMMENT"
+    assert harness.posted[0]["event"] == "COMMENT"
+    assert "Summary text." in harness.posted[0]["body"]
+    assert "comment mode" in result["reason"]
+
+
+def test_comment_mode_posts_even_on_a_clean_review(harness, monkeypatch):
+    """No suppression in comment mode: allowAutoApprove is irrelevant."""
+    _criteria(monkeypatch, allowAutoApprove=False)
+    _arm(harness, mode="comment")
+    rid = _review(harness)
+
+    result = svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert result["outcome"] == "posted"
+    assert result["event"] == "COMMENT"
+
+
+def test_comment_mode_respects_the_master_switch(harness, monkeypatch):
+    _criteria(monkeypatch, enabled=False)
+    _arm(harness, mode="comment")
+    rid = _review(harness, critical=2)
+
+    assert svc.maybe_post_auto_verdict(REPO, PR, rid) is None
+    assert harness.posted == []
+
+
+def test_comment_mode_still_skips_closed_prs(harness, monkeypatch):
+    _criteria(monkeypatch)
+    monkeypatch.setattr(svc, "fetch_pr_state_and_sha", lambda *a: ("MERGED", "sha123"))
+    _arm(harness, mode="comment")
+    rid = _review(harness)
+
+    result = svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert result["outcome"] == "skipped"
+    assert harness.posted == []
+
+
+def test_per_pr_override_replaces_the_global_thresholds(harness, monkeypatch):
+    """Global would request changes on 2 criticals; the card's override allows 5."""
+    _criteria(monkeypatch, allowAutoApprove=False)
+    _arm(harness, criteria_override={
+        "maxCritical": 5, "maxMajor": 5, "maxMinor": 99,
+        "allowAutoApprove": True, "autoFollowupReview": False,
+    })
+    rid = _review(harness, critical=2)
+
+    result = svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert result["event"] == "APPROVE"
+    assert harness.posted[0]["event"] == "APPROVE"
+
+
+def test_per_pr_override_cannot_enable_a_disabled_master_switch(harness, monkeypatch):
+    _criteria(monkeypatch, enabled=False)
+    _arm(harness, criteria_override={
+        "maxCritical": 5, "maxMajor": 5, "maxMinor": 99,
+        "allowAutoApprove": True, "autoFollowupReview": False,
+    })
+    rid = _review(harness)
+
+    assert svc.maybe_post_auto_verdict(REPO, PR, rid) is None
+    assert harness.posted == []
+
+
+def test_effective_criteria_are_snapshotted_when_overridden(harness, monkeypatch):
+    _criteria(monkeypatch, maxCritical=0)
+    _arm(harness, criteria_override={
+        "maxCritical": 7, "maxMajor": 0, "maxMinor": 99,
+        "allowAutoApprove": False, "autoFollowupReview": False,
+    })
+    rid = _review(harness, critical=1)
+
+    svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    row = harness.auto.get_latest_for_pr(REPO, PR)
+    assert json.loads(row["criteria_json"])["maxCritical"] == 7
 
 
 def _run_events(events_db, event):

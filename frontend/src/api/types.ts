@@ -362,10 +362,19 @@ export interface AutoVerdictRecord {
   createdAt: string
 }
 
+/** How an armed card handles a completed review: threshold-evaluated verdict,
+ * or always posting the findings as a COMMENT (the self-review path). */
+export type AutoVerdictMode = 'verdict' | 'comment'
+
+/** Per-PR criteria override: the global config minus the master switch. */
+export type AutoVerdictCriteriaOverride = Omit<AutoVerdictConfig, 'enabled'>
+
 /** Per-card arming state plus the last recorded outcome. */
 export interface AutoVerdictState {
   enabled: boolean
   reviewerType: AutoVerdictReviewer
+  mode: AutoVerdictMode
+  criteriaOverride: AutoVerdictCriteriaOverride | null
   last: AutoVerdictRecord | null
 }
 

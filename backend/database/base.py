@@ -394,6 +394,8 @@ class Database:
             queue_new_columns = [
                 ("auto_verdict_enabled", "INTEGER NOT NULL DEFAULT 0"),
                 ("auto_verdict_reviewer", "TEXT"),
+                ("auto_verdict_mode", "TEXT"),        # 'verdict' | 'comment'; NULL reads as 'verdict'
+                ("auto_verdict_criteria", "TEXT"),    # per-PR criteria override (JSON), NULL = use global
             ]
 
             for col_name, col_type in queue_new_columns:

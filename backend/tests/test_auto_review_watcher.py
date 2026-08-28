@@ -174,6 +174,37 @@ def test_failed_start_is_not_retried_for_the_same_sha(harness):
     assert len(harness.started) == 1
 
 
+def test_per_pr_override_enables_followup_when_global_is_off(harness, monkeypatch):
+    monkeypatch.setattr(
+        "backend.services.auto_verdict_config.get_criteria",
+        lambda: {"autoFollowupReview": False},
+    )
+    _arm(harness)
+    harness.queue.set_auto_verdict_criteria(PR, REPO, {
+        "maxCritical": 0, "maxMajor": 0, "maxMinor": 99,
+        "allowAutoApprove": False, "autoFollowupReview": True,
+    })
+    _review(harness)
+
+    watcher.scan_and_start_followups()
+
+    assert len(harness.started) == 1
+
+
+def test_per_pr_override_disables_followup_when_global_is_on(harness):
+    _arm(harness)
+    harness.queue.set_auto_verdict_criteria(PR, REPO, {
+        "maxCritical": 0, "maxMajor": 0, "maxMinor": 99,
+        "allowAutoApprove": False, "autoFollowupReview": False,
+    })
+    _review(harness)
+
+    watcher.scan_and_start_followups()
+
+    assert harness.started == []
+    assert harness.sha_fetches == 0
+
+
 def test_a_newer_sha_retries_after_a_failed_attempt(harness):
     _arm(harness)
     _review(harness)

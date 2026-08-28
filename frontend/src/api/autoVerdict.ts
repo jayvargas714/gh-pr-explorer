@@ -1,5 +1,10 @@
 import { api } from './client'
-import { AutoVerdictConfig, AutoVerdictReviewer } from './types'
+import {
+  AutoVerdictConfig,
+  AutoVerdictCriteriaOverride,
+  AutoVerdictMode,
+  AutoVerdictReviewer,
+} from './types'
 
 /**
  * Get the global auto-verdict criteria (stored values merged over the defaults)
@@ -23,10 +28,27 @@ export async function saveAutoVerdictConfig(
 export async function setCardAutoVerdict(
   prNumber: number,
   repo: string,
-  options: { enabled: boolean; reviewerType: AutoVerdictReviewer }
-): Promise<{ autoVerdict: { enabled: boolean; reviewerType: AutoVerdictReviewer }; message: string }> {
+  options: { enabled: boolean; reviewerType: AutoVerdictReviewer; mode: AutoVerdictMode }
+): Promise<{
+  autoVerdict: { enabled: boolean; reviewerType: AutoVerdictReviewer; mode: AutoVerdictMode }
+  message: string
+}> {
   return api.put(
     `/merge-queue/${prNumber}/auto-verdict?repo=${encodeURIComponent(repo)}`,
-    { enabled: options.enabled, reviewerType: options.reviewerType }
+    { enabled: options.enabled, reviewerType: options.reviewerType, mode: options.mode }
+  )
+}
+
+/**
+ * Set (or clear, with null) a queued PR's auto-verdict criteria override
+ */
+export async function setCardAutoVerdictCriteria(
+  prNumber: number,
+  repo: string,
+  criteria: AutoVerdictCriteriaOverride | null
+): Promise<{ criteriaOverride: AutoVerdictCriteriaOverride | null; message: string }> {
+  return api.put(
+    `/merge-queue/${prNumber}/auto-verdict/criteria?repo=${encodeURIComponent(repo)}`,
+    { criteria }
   )
 }

@@ -28,19 +28,22 @@ def scan_and_start_followups():
     """One pass over the armed queue: start follow-up reviews for new commits."""
     from backend.database import get_queue_db, get_reviews_db
     from backend.extensions import active_reviews, reviews_lock
-    from backend.services.auto_verdict_config import get_criteria
+    from backend.services.auto_verdict_config import apply_override, get_criteria
     from backend.services.github_service import fetch_pr_state_and_sha
     from backend.services.review_service import begin_review
-
-    if not get_criteria().get("autoFollowupReview"):
-        return
 
     armed = [item for item in get_queue_db().get_queue() if item.get("auto_verdict_enabled")]
     if not armed:
         return
 
+    # The flag is per-card effective config: a card's criteria override can
+    # switch follow-ups on or off independently of the global setting.
+    global_criteria = get_criteria()
+
     reviews_db = get_reviews_db()
     for item in armed:
+        if not apply_override(global_criteria, item).get("autoFollowupReview"):
+            continue
         repo_full = item["repo"]
         pr_number = item["pr_number"]
         parts = repo_full.split("/")

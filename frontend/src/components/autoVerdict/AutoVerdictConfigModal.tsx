@@ -4,11 +4,23 @@ import { Modal } from '../common/Modal'
 import { Button } from '../common/Button'
 import { Toggle } from '../common/Toggle'
 import { Alert } from '../common/Alert'
+import { setCardAutoVerdictCriteria } from '../../api/autoVerdict'
 import { useAutoVerdictStore } from '../../stores/useAutoVerdictStore'
-import { AutoVerdictConfig } from '../../api/types'
+import { AutoVerdictConfig, AutoVerdictCriteriaOverride } from '../../api/types'
+
+interface PerPRProps {
+  prNumber: number
+  repo: string
+  override: AutoVerdictCriteriaOverride | null
+  onSaved: (override: AutoVerdictCriteriaOverride | null) => void
+}
 
 interface AutoVerdictConfigModalProps {
   onClose: () => void
+  // When set, the modal edits this PR's criteria override instead of the
+  // global config: the master switch is hidden (it is never per-PR) and a
+  // "Use defaults" action clears the override.
+  perPR?: PerPRProps
 }
 
 const THRESHOLDS: { key: keyof AutoVerdictConfig; label: string; hint: string }[] = [
@@ -29,17 +41,26 @@ const THRESHOLDS: { key: keyof AutoVerdictConfig; label: string; hint: string }[
   },
 ]
 
-export function AutoVerdictConfigModal({ onClose }: AutoVerdictConfigModalProps) {
+export function AutoVerdictConfigModal({ onClose, perPR }: AutoVerdictConfigModalProps) {
   const storedConfig = useAutoVerdictStore((s) => s.config)
-  const saving = useAutoVerdictStore((s) => s.saving)
+  const storeSaving = useAutoVerdictStore((s) => s.saving)
   const storeError = useAutoVerdictStore((s) => s.error)
   const save = useAutoVerdictStore((s) => s.save)
 
-  const [draft, setDraft] = useState<AutoVerdictConfig>(storedConfig)
+  const [draft, setDraft] = useState<AutoVerdictConfig>({
+    ...storedConfig,
+    ...(perPR?.override ?? {}),
+  })
+  const [perPRSaving, setPerPRSaving] = useState(false)
+  const [perPRError, setPerPRError] = useState<string | null>(null)
+
+  const saving = perPR ? perPRSaving : storeSaving
+  const error = perPR ? perPRError : storeError
 
   // Adopt the stored config if it loads while the modal is already open.
   useEffect(() => {
-    setDraft(storedConfig)
+    setDraft({ ...storedConfig, ...(perPR?.override ?? {}) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storedConfig])
 
   const setNumber = (key: keyof AutoVerdictConfig, raw: string) => {
@@ -47,8 +68,28 @@ export function AutoVerdictConfigModal({ onClose }: AutoVerdictConfigModalProps)
     setDraft({ ...draft, [key]: Number.isNaN(parsed) || parsed < 0 ? 0 : parsed })
   }
 
+  const persistOverride = async (override: AutoVerdictCriteriaOverride | null) => {
+    if (!perPR) return
+    setPerPRSaving(true)
+    setPerPRError(null)
+    try {
+      await setCardAutoVerdictCriteria(perPR.prNumber, perPR.repo, override)
+      perPR.onSaved(override)
+      onClose()
+    } catch (err) {
+      setPerPRError(err instanceof Error ? err.message : 'Failed to save criteria override')
+    } finally {
+      setPerPRSaving(false)
+    }
+  }
+
   const handleSave = async () => {
-    if (await save(draft)) onClose()
+    if (perPR) {
+      const { enabled: _enabled, ...override } = draft
+      await persistOverride(override)
+    } else if (await save(draft)) {
+      onClose()
+    }
   }
 
   // Portal to body so the fixed-position overlay centers on the viewport. Both
@@ -56,28 +97,43 @@ export function AutoVerdictConfigModal({ onClose }: AutoVerdictConfigModalProps)
   // descendants — the header's backdrop-filter, and the swimlane board — which
   // would otherwise pin the overlay to that box and clip it off-screen.
   return createPortal(
-    <Modal title="Auto Verdict Criteria" onClose={onClose} size="md">
+    <Modal
+      title={perPR ? `Auto Verdict Criteria — PR #${perPR.prNumber}` : 'Auto Verdict Criteria'}
+      onClose={onClose}
+      size="md"
+    >
       <div className="mx-auto-verdict-config">
-        {storeError && <Alert variant="error">{storeError}</Alert>}
+        {error && <Alert variant="error">{error}</Alert>}
 
         <p className="mx-auto-verdict-config__intro">
-          When a review finishes on a PR armed with 🤖 Auto, these thresholds decide the
-          verdict. Exceeding any limit posts <strong>changes requested</strong>; staying
-          within all of them counts as a pass.
+          {perPR ? (
+            <>
+              These values override the global criteria for this PR only. The global
+              master switch still gates all posting — while it is off, nothing posts.
+            </>
+          ) : (
+            <>
+              When a review finishes on a PR armed with 🤖 Auto, these thresholds decide the
+              verdict. Exceeding any limit posts <strong>changes requested</strong>; staying
+              within all of them counts as a pass.
+            </>
+          )}
         </p>
 
-        <div className="mx-auto-verdict-config__switches">
-          <Toggle
-            checked={draft.enabled}
-            onChange={(enabled) => setDraft({ ...draft, enabled })}
-            label="Auto verdicts enabled"
-            disabled={saving}
-          />
-          <small className="mx-auto-verdict-config__hint">
-            Master switch. While off, armed cards are evaluated for nothing and no verdict
-            is ever posted.
-          </small>
-        </div>
+        {!perPR && (
+          <div className="mx-auto-verdict-config__switches">
+            <Toggle
+              checked={draft.enabled}
+              onChange={(enabled) => setDraft({ ...draft, enabled })}
+              label="Auto verdicts enabled"
+              disabled={saving}
+            />
+            <small className="mx-auto-verdict-config__hint">
+              Master switch. While off, armed cards are evaluated for nothing and no verdict
+              is ever posted.
+            </small>
+          </div>
+        )}
 
         <div className="mx-auto-verdict-config__thresholds">
           {THRESHOLDS.map(({ key, label, hint }) => (
@@ -125,6 +181,11 @@ export function AutoVerdictConfigModal({ onClose }: AutoVerdictConfigModalProps)
         </div>
 
         <div className="mx-auto-verdict-config__actions">
+          {perPR && perPR.override && (
+            <Button variant="ghost" onClick={() => persistOverride(null)} disabled={saving}>
+              Use defaults
+            </Button>
+          )}
           <Button variant="ghost" onClick={onClose} disabled={saving}>
             Cancel
           </Button>

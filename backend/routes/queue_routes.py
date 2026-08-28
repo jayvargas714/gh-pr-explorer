@@ -4,10 +4,13 @@ from flask import Blueprint, jsonify, request
 
 from backend.extensions import logger
 from backend.database import get_queue_db
+from backend.services.auto_verdict_config import validate_override
 from backend.services.github_service import fetch_pr_state_and_sha
 from backend.services.queue_enrichment import enrich_queue_items
 from backend.services.review_service import VALID_REVIEWER_TYPES
 from backend.routes import error_response
+
+VALID_AUTO_VERDICT_MODES = ("verdict", "comment")
 
 queue_bp = Blueprint("queue", __name__)
 
@@ -108,21 +111,60 @@ def set_queue_auto_verdict(pr_number):
         if reviewer_type not in VALID_REVIEWER_TYPES:
             return jsonify({"error": f"Invalid reviewerType: {reviewer_type}"}), 400
 
+        mode = data.get("mode") or "verdict"
+        if mode not in VALID_AUTO_VERDICT_MODES:
+            return jsonify({"error": f"Invalid mode: {mode}"}), 400
+
         enabled = bool(data["enabled"])
-        row = get_queue_db().set_auto_verdict(pr_number, repo, enabled, reviewer_type)
+        row = get_queue_db().set_auto_verdict(pr_number, repo, enabled, reviewer_type, mode=mode)
         if row is None:
             return jsonify({"error": "PR not found in queue"}), 404
 
         logger.info(f"Auto verdict {'armed' if enabled else 'disarmed'} for {repo}#{pr_number} "
-                    f"(reviewer={reviewer_type})")
+                    f"(reviewer={reviewer_type}, mode={mode})")
         return jsonify({
-            "autoVerdict": {"enabled": enabled, "reviewerType": reviewer_type},
+            "autoVerdict": {"enabled": enabled, "reviewerType": reviewer_type, "mode": mode},
             "message": "Auto verdict updated",
         })
 
     except Exception as e:
         return error_response("Internal server error", 500,
                               f"Error updating auto verdict for PR #{pr_number}: {e}")
+
+
+@queue_bp.route("/api/merge-queue/<int:pr_number>/auto-verdict/criteria", methods=["PUT"])
+def set_queue_auto_verdict_criteria(pr_number):
+    """Set or clear a queued PR's auto-verdict criteria override."""
+    try:
+        repo = request.args.get("repo")
+        if not repo:
+            return jsonify({"error": "Missing 'repo' query parameter"}), 400
+
+        data = request.get_json()
+        if data is None or "criteria" not in data:
+            return jsonify({"error": "Missing 'criteria' in request body"}), 400
+
+        criteria = data["criteria"]
+        if criteria is not None:
+            try:
+                criteria = validate_override(criteria)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+
+        row = get_queue_db().set_auto_verdict_criteria(pr_number, repo, criteria)
+        if row is None:
+            return jsonify({"error": "PR not found in queue"}), 404
+
+        logger.info(f"Auto verdict criteria override {'set' if criteria else 'cleared'} "
+                    f"for {repo}#{pr_number}")
+        return jsonify({
+            "criteriaOverride": criteria,
+            "message": "Auto verdict criteria updated",
+        })
+
+    except Exception as e:
+        return error_response("Internal server error", 500,
+                              f"Error updating auto verdict criteria for PR #{pr_number}: {e}")
 
 
 @queue_bp.route("/api/merge-queue/reorder", methods=["POST"])

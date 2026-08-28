@@ -73,11 +73,11 @@ Keep `docs/DESIGN.md` updated whenever any design aspect changes, and update the
 | — Code Review System (Claude CLI) | 1412 | Reviewer agents, subprocess flow, foreground-dispatch requirement, review-underway PR comment, split Review/Audit triggers |
 | — Inline Comments Posting | 1531 | Post critical issues to GitHub |
 | — Review Verdict | 1579 | Approve/Request-Changes/Comment composer, verdict source toggle |
-| — Auto Verdicts | 1652 | Armed cards, criteria thresholds, auto approve/changes-requested, watcher threads, auto follow-up reviews, optimistic arming |
-| — Review Event Log | 1772 | Per-attempt event log, run_id grouping, closed event/reason vocabularies, verdict posted/not-posted events, day-paginated Review Logs tab (day navigator, calendar jump, load-older), run hover panel w/ issue counts |
-| **API Endpoints** | 2019 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2658, Review Logs at 3398 |
-| **Configuration** | 3516 | `config.json` options, incl. review retry + log retention |
-| **Technical Details** | 3567 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (3830), follow-up parent selection (3876), Review JSON Schema (3909) |
-| **Future Considerations** | 4080 | Improvements, known limitations |
-| **Appendix** | 4142 | Dependencies, file structure, run instructions |
+| — Auto Verdicts | 1652 | Armed cards, verdict vs comment mode, criteria thresholds, per-PR criteria overrides, auto approve/changes-requested, watcher threads, auto follow-up reviews, optimistic arming |
+| — Review Event Log | 1803 | Per-attempt event log, run_id grouping, closed event/reason vocabularies, verdict posted/not-posted events, day-paginated Review Logs tab (day navigator, calendar jump, load-older), run hover panel w/ issue counts |
+| **API Endpoints** | 2050 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2689, Review Logs at 3464 |
+| **Configuration** | 3582 | `config.json` options, incl. review retry + log retention |
+| **Technical Details** | 3633 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (3896), follow-up parent selection (3942), Review JSON Schema (3975) |
+| **Future Considerations** | 4146 | Improvements, known limitations |
+| **Appendix** | 4208 | Dependencies, file structure, run instructions |
 

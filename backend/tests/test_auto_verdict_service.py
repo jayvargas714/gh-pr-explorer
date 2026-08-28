@@ -4,7 +4,9 @@ import pytest
 
 from backend.services.auto_verdict_config import (
     DEFAULT_CRITERIA,
+    apply_override,
     validate_criteria,
+    validate_override,
 )
 from backend.services.auto_verdict_service import (
     compose_report_body,
@@ -173,3 +175,62 @@ def test_validate_criteria_rejects_negative_thresholds():
 def test_validate_criteria_rejects_non_integer_thresholds():
     with pytest.raises(ValueError):
         validate_criteria({"maxCritical": "many"})
+
+
+# --- per-PR overrides ---------------------------------------------------------
+
+def test_validate_override_excludes_the_master_switch():
+    override = validate_override({"maxCritical": 2, "enabled": True})
+    assert "enabled" not in override
+    assert override["maxCritical"] == 2
+
+
+def test_validate_override_fills_defaults_for_missing_fields():
+    override = validate_override({"maxMajor": 3})
+    assert override["maxMajor"] == 3
+    assert override["maxMinor"] == DEFAULT_CRITERIA["maxMinor"]
+    assert override["allowAutoApprove"] is False
+
+
+def test_validate_override_rejects_negative_thresholds():
+    with pytest.raises(ValueError):
+        validate_override({"maxMajor": -1})
+
+
+def test_apply_override_without_stored_override_returns_base_unchanged():
+    base = _criteria(enabled=True, maxCritical=1)
+    assert apply_override(base, {"auto_verdict_criteria": None}) == base
+    assert apply_override(base, {}) == base
+
+
+def test_apply_override_replaces_thresholds_and_flags():
+    import json
+    base = _criteria(enabled=True, maxCritical=0, allowAutoApprove=False)
+    item = {"auto_verdict_criteria": json.dumps(
+        {"maxCritical": 5, "maxMajor": 2, "maxMinor": 10,
+         "allowAutoApprove": True, "autoFollowupReview": True}
+    )}
+    effective = apply_override(base, item)
+    assert effective["maxCritical"] == 5
+    assert effective["allowAutoApprove"] is True
+    assert effective["autoFollowupReview"] is True
+
+
+def test_apply_override_never_overrides_enabled():
+    import json
+    base = _criteria(enabled=False)
+    item = {"auto_verdict_criteria": json.dumps({"enabled": True, "maxCritical": 5})}
+    assert apply_override(base, item)["enabled"] is False
+
+
+def test_apply_override_ignores_malformed_json():
+    base = _criteria(enabled=True)
+    assert apply_override(base, {"auto_verdict_criteria": "not json"}) == base
+    assert apply_override(base, {"auto_verdict_criteria": '["a-list"]'}) == base
+
+
+def test_apply_override_does_not_mutate_the_base():
+    import json
+    base = _criteria(maxCritical=0)
+    apply_override(base, {"auto_verdict_criteria": json.dumps({"maxCritical": 9})})
+    assert base["maxCritical"] == 0

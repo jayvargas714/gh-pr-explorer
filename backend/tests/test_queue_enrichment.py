@@ -100,3 +100,35 @@ def test_merged_sorted_newest_first():
     audits = [{"id": 2, "audit_timestamp": "2026-06-09 12:00:00", "status": "completed", "finding_count": 1, "blocking_count": 0}]
     log = build_rev_log(reviews, audits)
     assert [e["kind"] for e in log] == ["audit", "review"]  # 12:00 audit before 10:00 review
+
+
+def test_auto_verdict_state_defaults_to_verdict_mode_and_no_override():
+    from backend.services.queue_enrichment import format_auto_verdict_state
+    state = format_auto_verdict_state({"auto_verdict_enabled": 1}, last=None)
+    assert state == {
+        "enabled": True, "reviewerType": "default", "mode": "verdict",
+        "criteriaOverride": None, "last": None,
+    }
+
+
+def test_auto_verdict_state_carries_mode_and_override():
+    import json
+    from backend.services.queue_enrichment import format_auto_verdict_state
+    item = {
+        "auto_verdict_enabled": 1,
+        "auto_verdict_reviewer": "ed",
+        "auto_verdict_mode": "comment",
+        "auto_verdict_criteria": json.dumps({"maxCritical": 3}),
+    }
+    state = format_auto_verdict_state(item, last=None)
+    assert state["mode"] == "comment"
+    assert state["reviewerType"] == "ed"
+    assert state["criteriaOverride"] == {"maxCritical": 3}
+
+
+def test_auto_verdict_state_swallows_malformed_override_json():
+    from backend.services.queue_enrichment import format_auto_verdict_state
+    state = format_auto_verdict_state(
+        {"auto_verdict_enabled": 0, "auto_verdict_criteria": "not json"}, last=None
+    )
+    assert state["criteriaOverride"] is None

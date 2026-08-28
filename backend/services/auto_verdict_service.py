@@ -1,16 +1,23 @@
 """Auto verdicts: evaluate a completed review against thresholds and post the verdict.
 
-A PR is "armed" via merge_queue.auto_verdict_enabled. When a review for an armed PR
-completes, the issue counts in its content_json are compared against the global
-criteria; exceeding any threshold posts REQUEST_CHANGES, staying within all of them
-posts APPROVE (or nothing, when auto-approve is disabled).
+A PR is "armed" via merge_queue.auto_verdict_enabled, in one of two modes
+(merge_queue.auto_verdict_mode). In verdict mode, the issue counts in a completed
+review's content_json are compared against the criteria; exceeding any threshold
+posts REQUEST_CHANGES, staying within all of them posts APPROVE (or nothing, when
+auto-approve is disabled). In comment mode, thresholds are ignored and the review
+findings are always posted as a COMMENT — the self-review path, since GitHub
+rejects both APPROVE and REQUEST_CHANGES on your own PR.
+
+Criteria are the global config, optionally replaced per PR by the card's stored
+override (merge_queue.auto_verdict_criteria); the master 'enabled' switch is
+always global.
 """
 
 import json
 import logging
 from typing import Any, Dict, Optional, Tuple
 
-from backend.services.auto_verdict_config import get_criteria
+from backend.services.auto_verdict_config import apply_override, get_criteria
 from backend.services.github_service import (
     fetch_pr_state_and_sha,
     get_authenticated_login,
@@ -129,6 +136,7 @@ def maybe_post_auto_verdict(repo: str, pr_number: int, review_id: int) -> Option
     """
     from backend.database import get_auto_verdicts_db, get_queue_db, get_reviews_db
 
+    # The master switch is global and not overridable per PR.
     criteria = get_criteria()
     if not criteria.get("enabled"):
         return None
@@ -137,6 +145,9 @@ def maybe_post_auto_verdict(repo: str, pr_number: int, review_id: int) -> Option
     queue_item = queue_db.get_queue_item(pr_number, repo)
     if not queue_item or not queue_item.get("auto_verdict_enabled"):
         return None
+
+    criteria = apply_override(criteria, queue_item)
+    mode = queue_item.get("auto_verdict_mode") or "verdict"
 
     owner, _, repo_name = repo.partition("/")
     if not owner or not repo_name:
@@ -189,20 +200,28 @@ def maybe_post_auto_verdict(repo: str, pr_number: int, review_id: int) -> Option
     if pr_state and pr_state != "OPEN":
         return record("skipped", reason=f"PR is {pr_state}")
 
-    decision, tallies, reason = evaluate_criteria(content_json, criteria)
-
-    if decision == "request_changes":
-        event = "REQUEST_CHANGES"
-    elif not criteria.get("allowAutoApprove"):
-        return record(
-            "suppressed", reason=f"{reason} — auto-approve disabled", tallies=tallies
-        )
-    elif review.get("pr_author") and review["pr_author"] == get_authenticated_login():
-        # GitHub rejects APPROVE on your own PR (422), so deliver the report as a comment.
+    if mode == "comment":
+        # Comment mode ignores the thresholds entirely: every completed review's
+        # findings are delivered as a COMMENT, clean reviews included.
+        tallies = count_issues(content_json)
+        counts = ", ".join(f"{tallies[sev]} {sev}" for sev in SEVERITIES)
         event = "COMMENT"
-        reason = f"{reason} — self-authored, posted as comment instead of approval"
+        reason = f"comment mode — review findings posted as comment ({counts})"
     else:
-        event = "APPROVE"
+        decision, tallies, reason = evaluate_criteria(content_json, criteria)
+
+        if decision == "request_changes":
+            event = "REQUEST_CHANGES"
+        elif not criteria.get("allowAutoApprove"):
+            return record(
+                "suppressed", reason=f"{reason} — auto-approve disabled", tallies=tallies
+            )
+        elif review.get("pr_author") and review["pr_author"] == get_authenticated_login():
+            # GitHub rejects APPROVE on your own PR (422), so deliver the report as a comment.
+            event = "COMMENT"
+            reason = f"{reason} — self-authored, posted as comment instead of approval"
+        else:
+            event = "APPROVE"
 
     body = compose_report_body(content_json)
     try:

@@ -3,8 +3,9 @@
 Single source of truth for the thresholds so the evaluator and the API cannot drift.
 """
 
+import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,10 @@ DEFAULT_CRITERIA: Dict[str, Any] = {
 
 _INT_KEYS = ("maxCritical", "maxMajor", "maxMinor")
 _BOOL_KEYS = ("enabled", "allowAutoApprove", "autoFollowupReview")
+
+# Fields a per-PR override may replace. 'enabled' is deliberately absent: the
+# master switch is the one global kill-switch and can never be overridden.
+OVERRIDE_KEYS = ("maxCritical", "maxMajor", "maxMinor", "allowAutoApprove", "autoFollowupReview")
 
 
 def get_criteria() -> Dict[str, Any]:
@@ -61,6 +66,35 @@ def validate_criteria(payload: Dict[str, Any]) -> Dict[str, Any]:
         if key in payload:
             criteria[key] = bool(payload[key])
     return criteria
+
+
+def validate_override(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Coerce and validate a per-PR criteria override: a full snapshot of the
+    overridable fields, without the master switch."""
+    criteria = validate_criteria(payload)
+    return {k: criteria[k] for k in OVERRIDE_KEYS}
+
+
+def apply_override(criteria: Dict[str, Any], queue_item: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Merge a queued PR's stored criteria override over the given criteria.
+
+    Returns a new dict; the base is untouched. A missing or malformed override
+    leaves the criteria unchanged, and 'enabled' is never overridden.
+    """
+    raw = (queue_item or {}).get("auto_verdict_criteria")
+    if not raw:
+        return dict(criteria)
+    try:
+        override = raw if isinstance(raw, dict) else json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Ignoring malformed auto-verdict override: %r", raw)
+        return dict(criteria)
+    if not isinstance(override, dict):
+        logger.warning("Ignoring non-object auto-verdict override: %r", raw)
+        return dict(criteria)
+    effective = dict(criteria)
+    effective.update({k: override[k] for k in OVERRIDE_KEYS if k in override})
+    return effective
 
 
 def save_criteria(payload: Dict[str, Any]) -> Dict[str, Any]:
