@@ -101,6 +101,27 @@ class AutoVerdictsDB:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def get_latest_for_review_ids(self, review_ids) -> Dict[int, Dict[str, Any]]:
+        """Batch lookup: newest auto-verdict row per review_id. Ids with no
+        verdict row are absent from the result."""
+        result: Dict[int, Dict[str, Any]] = {}
+        ids = sorted({i for i in review_ids if i is not None})
+        if not ids:
+            return result
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            for i in range(0, len(ids), 800):
+                chunk = ids[i:i + 800]
+                # Ascending order so the newest row overwrites older ones.
+                cursor.execute(
+                    f"SELECT * FROM auto_verdicts WHERE review_id IN ({','.join('?' * len(chunk))}) "
+                    "ORDER BY created_at ASC, id ASC",
+                    chunk,
+                )
+                for row in cursor.fetchall():
+                    result[row["review_id"]] = dict(row)
+        return result
+
     def get_for_pr(self, repo: str, pr_number: int) -> List[Dict[str, Any]]:
         """All auto verdicts for a PR, newest first."""
         with self.db.connection() as conn:

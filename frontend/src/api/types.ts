@@ -73,6 +73,13 @@ export interface PullRequest {
   // Automation pipeline state (null/absent when the PR was never enrolled).
   // Drives the pipeline badge + add/remove control on PR list cards.
   automation?: AutomationDispatchState | null
+  // Merge-queue auto-verdict arming (null/absent when not armed). Drives the
+  // armed checkmark badge on PR list cards.
+  autoVerdict?: {
+    enabled: boolean
+    reviewerType: string
+    mode: AutoVerdictMode
+  } | null
 }
 
 export interface Label {
@@ -484,6 +491,23 @@ export interface AutomationDispatchRow {
   attempts: number
   createdAt: string
   updatedAt: string
+  // Live review picture: running now / newest recorded review + verdict /
+  // arming. Null when the PR has never been reviewed, isn't armed, and no
+  // review is running; absent on enroll/optout responses.
+  reviewState?: DispatchReviewState | null
+}
+
+export interface DispatchReviewState {
+  running: boolean
+  lastReviewId: number | null
+  lastReviewStatus: 'completed' | 'failed' | null
+  lastReviewAt: string | null
+  isFollowup: boolean
+  score: number | null
+  verdictEvent: string | null
+  verdictOutcome: string | null
+  armed: boolean
+  autoVerdictMode: string | null
 }
 
 /** How the automation pipeline handled a PR (from automation_dispatches). */

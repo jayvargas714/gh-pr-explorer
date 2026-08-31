@@ -169,3 +169,27 @@ def test_refresh_transient_503(client, store):
     with patch("backend.routes.pr_routes.fetch_full_pr", side_effect=TransientGitHubError("504")):
         resp = client.post("/api/repos/acme/widgets/prs/7/refresh")
     assert resp.status_code == 503
+
+
+def test_pr_list_carries_auto_verdict_arming(client, store, monkeypatch, tmp_path):
+    """PR list rows carry the merge-queue arming state so the PR list can show
+    the armed checkmark, not just the pipeline badge."""
+    import backend.routes.pr_routes as pr_routes
+    from backend.database.merge_queue import MergeQueueDB
+    queue_db = MergeQueueDB(Database(tmp_path / "queue.db"))
+    monkeypatch.setattr(pr_routes, "get_queue_db", lambda: queue_db)
+
+    store.register_repo("acme/widgets")
+    store.mark_backfill_done("acme/widgets")
+    store.update_last_synced("acme/widgets")
+    store.upsert_pr("acme/widgets", _pr(1))
+    store.upsert_pr("acme/widgets", _pr(2))
+    queue_db.add_to_queue(1, "acme/widgets")
+    queue_db.set_auto_verdict(1, "acme/widgets", True, "ed", mode="comment")
+
+    with patch("backend.routes.pr_routes.run_gh_command"):
+        resp = client.get("/api/repos/acme/widgets/prs?state=open")
+
+    prs = {p["number"]: p for p in resp.get_json()["prs"]}
+    assert prs[1]["autoVerdict"] == {"enabled": True, "reviewerType": "ed", "mode": "comment"}
+    assert prs[2]["autoVerdict"] is None

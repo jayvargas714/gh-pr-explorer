@@ -3,7 +3,7 @@
 import json
 import logging
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +226,31 @@ class ReviewsDB:
                 ORDER BY review_timestamp DESC
             """, (repo, pr_number))
             return [dict(row) for row in cursor.fetchall()]
+
+    def get_latest_for_prs(
+        self, repo_pr_pairs: List[Tuple[str, int]]
+    ) -> Dict[Tuple[str, int], Dict[str, Any]]:
+        """Batch lookup: newest review per (repo, pr_number). Never-reviewed
+        pairs are absent from the result."""
+        result: Dict[Tuple[str, int], Dict[str, Any]] = {}
+        if not repo_pr_pairs:
+            return result
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            # Chunked: each pair costs two SQL variables and SQLite caps them.
+            for i in range(0, len(repo_pr_pairs), 400):
+                chunk = repo_pr_pairs[i:i + 400]
+                placeholders = " OR ".join(["(repo = ? AND pr_number = ?)"] * len(chunk))
+                params = [v for pair in chunk for v in pair]
+                # Ascending order so the newest row overwrites older ones.
+                cursor.execute(
+                    f"SELECT * FROM reviews WHERE {placeholders} "
+                    "ORDER BY review_timestamp ASC, id ASC",
+                    params,
+                )
+                for row in cursor.fetchall():
+                    result[(row["repo"], row["pr_number"])] = dict(row)
+        return result
 
     def get_latest_review_for_pr(self, repo: str, pr_number: int) -> Optional[Dict[str, Any]]:
         """Get the most recent review for a PR."""

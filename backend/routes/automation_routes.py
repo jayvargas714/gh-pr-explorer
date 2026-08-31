@@ -2,8 +2,16 @@
 
 from flask import Blueprint, jsonify, request
 
-from backend.database import get_automation_dispatches_db, get_reviewers_db
+from backend.database import (
+    get_automation_dispatches_db,
+    get_auto_verdicts_db,
+    get_queue_db,
+    get_reviewers_db,
+    get_reviews_db,
+    get_synced_prs_db,
+)
 from backend.database.automation_dispatches import VALID_STATUSES
+from backend.extensions import logger
 from backend.routes import error_response
 from backend.services import automation_config
 
@@ -30,7 +38,95 @@ def list_automation_dispatches():
     except Exception as e:
         return error_response("Internal server error", 500, f"Error listing automation dispatches: {e}")
 
-    return jsonify({"dispatches": [_dispatch_payload(row) for row in rows]})
+    rows = _hide_closed_prs(rows)
+    payloads = [_dispatch_payload(row) for row in rows]
+    _attach_review_states(payloads)
+    return jsonify({"dispatches": payloads})
+
+
+def _hide_closed_prs(rows):
+    """Drop rows whose PR is merged/closed (per the synced-PR store): the
+    ledger keeps them — dispatch-at-most-once — but the pipeline view only
+    shows PRs that still exist to act on. PRs the store doesn't know stay
+    visible; on any failure the unfiltered rows are shown."""
+    try:
+        store = get_synced_prs_db()
+        by_repo = {}
+        for r in rows:
+            by_repo.setdefault(r["repo"], []).append(r["pr_number"])
+        gone = set()
+        for repo, numbers in by_repo.items():
+            for num, state in store.get_states_by_numbers(repo, numbers).items():
+                if (state or "").upper() in ("MERGED", "CLOSED"):
+                    gone.add((repo, num))
+        return [r for r in rows if (r["repo"], r["pr_number"]) not in gone]
+    except Exception as e:
+        logger.warning(f"Could not filter closed PRs from the pipeline view: {e}")
+        return rows
+
+
+def _attach_review_states(payloads):
+    """Stamp each pipeline row with its live review picture — a review running
+    right now (in-memory registry, same source as the Running-now strip), the
+    newest recorded review with its posted verdict, and whether the card is
+    armed for auto verdicts. A row with none of those carries None. Never
+    fails the listing."""
+    try:
+        from backend.extensions import active_reviews, reviews_lock
+        from backend.services.review_service import check_review_status
+
+        reviews_db = get_reviews_db()
+
+        # Reap finished subprocesses the same way GET /api/reviews does, so a
+        # review that just exited doesn't linger as "running" here.
+        running = set()
+        with reviews_lock:
+            keys = list(active_reviews.keys())
+        for key in keys:
+            check_review_status(key, active_reviews, reviews_lock, reviews_db)
+            with reviews_lock:
+                review = active_reviews.get(key)
+            if review and review.get("status") == "running":
+                parts = key.split("/")
+                if len(parts) >= 3:
+                    running.add((f"{parts[0]}/{parts[1]}", int(parts[2])))
+
+        pairs = [(p["repo"], p["prNumber"]) for p in payloads]
+        latest = reviews_db.get_latest_for_prs(pairs)
+        verdicts = get_auto_verdicts_db().get_latest_for_review_ids(
+            [rev["id"] for rev in latest.values()]
+        )
+        queue_rows = {
+            (q["repo"], q["pr_number"]): q for q in get_queue_db().get_queue()
+        }
+
+        for p in payloads:
+            pair = (p["repo"], p["prNumber"])
+            rev = latest.get(pair)
+            q = queue_rows.get(pair)
+            armed = bool(q and q.get("auto_verdict_enabled"))
+            is_running = pair in running
+            if rev is None and not armed and not is_running:
+                p["reviewState"] = None
+                continue
+            verdict = verdicts.get(rev["id"]) if rev else None
+            p["reviewState"] = {
+                "running": is_running,
+                "lastReviewId": rev["id"] if rev else None,
+                "lastReviewStatus": rev["status"] if rev else None,
+                "lastReviewAt": rev["review_timestamp"] if rev else None,
+                "isFollowup": bool(rev["is_followup"]) if rev else False,
+                "score": rev["score"] if rev else None,
+                "verdictEvent": verdict["event"] if verdict else None,
+                "verdictOutcome": verdict["outcome"] if verdict else None,
+                "armed": armed,
+                "autoVerdictMode": (q or {}).get("auto_verdict_mode"),
+            }
+    except Exception as e:
+        logger.warning(f"Could not attach review states to the pipeline view: {e}")
+        for p in payloads:
+            p.setdefault("reviewState", None)
+    return payloads
 
 
 def _dispatch_payload(row):

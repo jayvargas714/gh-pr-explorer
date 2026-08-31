@@ -8,7 +8,9 @@ from backend.config import get_config, get_pr_sync_config
 from backend.extensions import logger
 from backend.filters.pr_filter_builder import PRFilterParams, PRFilterBuilder
 from backend.routes import error_response
-from backend.database import get_automation_dispatches_db, get_timeline_cache_db, get_synced_prs_db
+from backend.database import (
+    get_automation_dispatches_db, get_queue_db, get_timeline_cache_db, get_synced_prs_db,
+)
 from backend.services.github_service import (
     run_gh_command, parse_json_output, TransientGitHubError,
     PR_LIST_JSON_FIELDS as PR_JSON_FIELDS, fetch_full_pr,
@@ -60,7 +62,8 @@ def _get_pr_by_number(owner, repo, pr_number):
 def _attach_automation(prs, repo_full):
     """Stamp each PR with its automation pipeline row (or None), the same
     `automation` shape queue cards carry, so the pipeline badge renders on the
-    main PR list too. Never fails the list."""
+    main PR list too — plus `autoVerdict` (merge-queue arming, or None) so the
+    armed checkmark renders there as well. Never fails the list."""
     try:
         from backend.services.queue_enrichment import format_automation_state
 
@@ -76,6 +79,23 @@ def _attach_automation(prs, repo_full):
         logger.warning(f"Could not attach automation state for {repo_full}: {e}")
         for pr in prs:
             pr.setdefault("automation", None)
+    try:
+        armed_rows = {
+            q["pr_number"]: q
+            for q in get_queue_db().get_queue()
+            if q["repo"] == repo_full and q.get("auto_verdict_enabled")
+        }
+        for pr in prs:
+            q = armed_rows.get(pr.get("number"))
+            pr["autoVerdict"] = ({
+                "enabled": True,
+                "reviewerType": q.get("auto_verdict_reviewer") or "default",
+                "mode": q.get("auto_verdict_mode") or "verdict",
+            } if q else None)
+    except Exception as e:
+        logger.warning(f"Could not attach auto-verdict arming for {repo_full}: {e}")
+        for pr in prs:
+            pr.setdefault("autoVerdict", None)
     return prs
 
 

@@ -4,9 +4,39 @@ import {
   listAutomationDispatches,
   optOutAutomationDispatch,
 } from '../../api/automation'
-import { AutomationDispatchRow } from '../../api/types'
+import { AutomationDispatchRow, DispatchReviewState } from '../../api/types'
 import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
+
+const PAGE_SIZES = [10, 25, 50, 100] as const
+
+/** One compact cell answering "did a review run, is one running, and are we
+ * waiting on new commits?" — the questions a bare dispatch row leaves open. */
+function ReviewStateCell({ state }: { state: DispatchReviewState | null | undefined }) {
+  if (!state) return <span>—</span>
+  if (state.running) return <Badge size="sm" variant="info">▶ running now</Badge>
+
+  const parts: string[] = []
+  if (state.lastReviewStatus === 'completed') {
+    parts.push(`✓ reviewed${state.isFollowup ? ' (follow-up)' : ''}`)
+    if (state.score !== null) parts.push(`${state.score}/10`)
+    if (state.verdictEvent && state.verdictOutcome === 'posted') {
+      parts.push(state.verdictEvent === 'REQUEST_CHANGES' ? 'changes requested' : state.verdictEvent.toLowerCase())
+    }
+  } else if (state.lastReviewStatus === 'failed') {
+    parts.push('✗ review failed')
+  }
+  if (state.armed) parts.push('armed — re-reviews on new commits')
+  else if (state.lastReviewStatus) parts.push('not armed — no follow-ups')
+  const tooltip = state.lastReviewAt
+    ? `Last review: ${state.lastReviewAt.split('.')[0]} UTC`
+    : undefined
+  return (
+    <span className="mx-automation__pipeline-review" data-tooltip={tooltip}>
+      {parts.join(' · ')}
+    </span>
+  )
+}
 
 const STATUS_VARIANTS: Record<AutomationDispatchRow['status'], 'success' | 'error' | 'warning' | 'info' | 'neutral'> = {
   pending: 'warning',
@@ -26,6 +56,8 @@ export function PipelineSection() {
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]>('all')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState<number>(PAGE_SIZES[0])
 
   const refresh = useCallback(async (filter: typeof statusFilter) => {
     setLoading(true)
@@ -41,10 +73,17 @@ export function PipelineSection() {
   }, [])
 
   useEffect(() => {
+    setPage(1)
     refresh(statusFilter)
   }, [refresh, statusFilter])
 
   const pendingCount = rows.filter((r) => r.status === 'pending').length
+
+  // Clamp rather than store: a refresh that shrinks the list can strand the
+  // saved page past the end.
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize))
+  const currentPage = Math.min(page, totalPages)
+  const pageRows = rows.slice((currentPage - 1) * pageSize, currentPage * pageSize)
 
   const [actingOn, setActingOn] = useState<string | null>(null)
 
@@ -116,38 +155,79 @@ export function PipelineSection() {
       {rows.length === 0 && !loading && !error ? (
         <p className="mx-automation__hint">The pipeline is empty.</p>
       ) : (
-        <table className="mx-automation__table">
-          <thead>
-            <tr>
-              <th>PR</th>
-              <th>Status</th>
-              <th>Detail</th>
-              <th>Reviewer</th>
-              <th>Updated (UTC)</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={`${row.repo}#${row.prNumber}`}>
-                <td>
-                  <a
-                    href={`https://github.com/${row.repo}/pull/${row.prNumber}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {row.repo}#{row.prNumber}
-                  </a>
-                </td>
-                <td><Badge size="sm" variant={STATUS_VARIANTS[row.status]}>{row.status}</Badge></td>
-                <td className="mx-automation__pipeline-detail">{row.detail || '—'}</td>
-                <td>{row.reviewerKey || '—'}</td>
-                <td>{row.updatedAt}</td>
-                <td>{rowAction(row)}</td>
+        <>
+          <table className="mx-automation__table">
+            <thead>
+              <tr>
+                <th>PR</th>
+                <th>Status</th>
+                <th>Detail</th>
+                <th>Review</th>
+                <th>Reviewer</th>
+                <th>Updated (UTC)</th>
+                <th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {pageRows.map((row) => (
+                <tr key={`${row.repo}#${row.prNumber}`}>
+                  <td>
+                    <a
+                      href={`https://github.com/${row.repo}/pull/${row.prNumber}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {row.repo}#{row.prNumber}
+                    </a>
+                  </td>
+                  <td><Badge size="sm" variant={STATUS_VARIANTS[row.status]}>{row.status}</Badge></td>
+                  <td className="mx-automation__pipeline-detail">{row.detail || '—'}</td>
+                  <td className="mx-automation__pipeline-detail"><ReviewStateCell state={row.reviewState} /></td>
+                  <td>{row.reviewerKey || '—'}</td>
+                  <td>{row.updatedAt}</td>
+                  <td>{rowAction(row)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div className="mx-automation__pipeline-pager">
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={currentPage <= 1}
+              onClick={() => setPage(currentPage - 1)}
+              aria-label="Previous page"
+            >
+              ‹
+            </Button>
+            <span className="mx-automation__hint">
+              Page {currentPage} of {totalPages} · {rows.length} PRs
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={currentPage >= totalPages}
+              onClick={() => setPage(currentPage + 1)}
+              aria-label="Next page"
+            >
+              ›
+            </Button>
+            <select
+              className="mx-select"
+              value={pageSize}
+              onChange={(e) => {
+                setPageSize(Number(e.target.value))
+                setPage(1)
+              }}
+              aria-label="Rows per page"
+            >
+              {PAGE_SIZES.map((n) => (
+                <option key={n} value={n}>{n} / page</option>
+              ))}
+            </select>
+          </div>
+        </>
       )}
     </section>
   )

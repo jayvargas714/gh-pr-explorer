@@ -415,6 +415,18 @@
   font-size: 0.85rem;
 }
 
+.mx-automation__pipeline-review {
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.mx-automation__pipeline-pager {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+}
+
 /* Pipeline badge + add/remove control, shared by PR list and queue cards */
 .mx-auto-pipeline {
   display: inline-flex;

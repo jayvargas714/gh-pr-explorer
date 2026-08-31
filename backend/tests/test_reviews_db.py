@@ -96,3 +96,24 @@ def test_get_issue_counts_tallies_zero_for_a_clean_review(reviews_db):
 
 def test_get_issue_counts_empty_input(reviews_db):
     assert reviews_db.get_issue_counts([]) == {}
+
+
+def test_get_latest_for_prs_returns_newest_per_pr(reviews_db):
+    from datetime import datetime
+    reviews_db.save_review(pr_number=1, repo="owner/repo", status="completed",
+                           review_timestamp=datetime(2026, 8, 1, 10, 0))
+    newest = reviews_db.save_review(pr_number=1, repo="owner/repo", status="failed",
+                                    review_timestamp=datetime(2026, 8, 2, 10, 0))
+    other = reviews_db.save_review(pr_number=2, repo="owner/repo", status="completed",
+                                   review_timestamp=datetime(2026, 8, 1, 12, 0))
+
+    latest = reviews_db.get_latest_for_prs([("owner/repo", 1), ("owner/repo", 2),
+                                            ("owner/repo", 3)])
+    assert latest[("owner/repo", 1)]["id"] == newest
+    assert latest[("owner/repo", 1)]["status"] == "failed"
+    assert latest[("owner/repo", 2)]["id"] == other
+    assert ("owner/repo", 3) not in latest
+
+
+def test_get_latest_for_prs_empty_input(reviews_db):
+    assert reviews_db.get_latest_for_prs([]) == {}

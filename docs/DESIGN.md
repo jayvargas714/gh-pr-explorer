@@ -491,6 +491,7 @@ CREATE INDEX idx_automation_dispatches_status ON automation_dispatches(status);
 | `get_review()` | Retrieves a single review by ID |
 | `get_reviews_for_pr()` | Gets all reviews for a specific PR |
 | `get_latest_review_for_pr()` | Gets the most recent review for a specific PR |
+| `get_latest_for_prs()` | Batch: newest review per (repo, pr_number), chunked pairs; used by the pipeline view's `reviewState` |
 | `search_reviews()` | Searches reviews with filters (repo, author, date range); searches within `content_json` |
 | `get_stats()` | Returns aggregate review statistics |
 | `check_pr_reviewed()` | Checks if a PR has existing reviews |
@@ -1010,6 +1011,7 @@ When the badge shows **CI failed**, hovering it opens a portal-rendered popover 
 | New Commits | Indicates commits added since last review |
 | Posted | Shows inline comments have been posted to GitHub |
 | Branch Divergence | Shows how many commits behind the base branch (open PRs only) |
+| 🤖 ✓ Armed | Auto verdict is armed for the PR (💬 in comment mode); driven by the PR row's `autoVerdict` field (merge-queue arming), tooltip names the reviewer — see Automation "Card surface" |
 
 #### Rev Log Badge (queue + swimlane cards)
 
@@ -2356,7 +2358,13 @@ auto cards land in Auto instead of the default lane).
 (`format_automation_state` in `queue_enrichment.py`), and the main PR list
 carries the same field per row (`_attach_automation` in `pr_routes.py`, one
 batched `get_for_prs` lookup, failure-safe) — so pipeline membership is visible
-on all three surfaces: PR list, merge queue, swimlanes. Both card kinds render
+on all three surfaces: PR list, merge queue, swimlanes. `_attach_automation`
+also stamps each PR-list row with `autoVerdict: {enabled, reviewerType, mode}
+| null` (merge-queue arming, one `get_queue()` read, independently
+failure-safe; null when not armed), which `PRBadges` renders as a `🤖 ✓ Armed`
+info badge (💬 in comment mode, tooltip names reviewer + follow-up behavior) —
+the PR-list counterpart of the queue/swimlane cards' `AutoVerdictToggle`
+(cards waiting in the pipeline are unarmed by design until dispatch). Both card kinds render
 the shared `AutomationPipelineControl` (badge + `🤖+`/`🤖−` add/remove toggle
 hitting the enroll/optout endpoints with optimistic local state; the toggle
 shows add for un-enrolled open PRs and skipped/failed rows, remove for pending
@@ -2379,8 +2387,15 @@ config (scope + authors, allowlisted repos, rule→reviewer routing map, dispatc
 conditions, concurrency), distinct from the unsaved draft below — followed by
 the sections: `PipelineSection` (read-only pipeline table via
 `GET /api/automation/dispatches`: every row the pipeline is holding or has
-handled — repo#PR link, status badge, waiting/skip detail, reviewer, last
-update — with a status filter and refresh; this is where parked drafts are
+handled — repo#PR link, status badge, waiting/skip detail, a Review column
+(`ReviewStateCell` rendering the row's `reviewState`: `▶ running now`, or
+`✓ reviewed [(follow-up)] · score/10 · verdict · armed — re-reviews on new
+commits` / `not armed — no follow-ups`, `✗ review failed`, or `—`; tooltip
+carries the last-review timestamp), reviewer, last update — with a status
+filter, refresh, and client-side pagination (default 10 rows/page with a
+10/25/50/100 selector, ‹/› arrows + "Page X of Y · N PRs", page resets on
+filter change and clamps when a refresh shrinks the list); merged/closed PRs
+are hidden server-side (see the endpoint), and this is where parked drafts are
 visible, since they stay off the board), `ScopeSection` (off/authors/all cards,
 author + repo chip lists, concurrency, max pipeline size), `RoutingRulesSection`
 (ordered rules with ↑/↓, pattern chips,
@@ -3209,19 +3224,33 @@ Validates and persists; 400 with a message on bad scope/mode/rule/reviewer key.
 **GET** `/api/automation/dispatches`
 
 The pipeline view: `automation_dispatches` rows, most recently updated first.
+Rows whose PR is merged/closed per the synced-PR store are hidden (the ledger
+keeps them — dispatch-at-most-once — but the view only shows PRs that still
+exist to act on; PRs the store doesn't know stay visible, and a filter failure
+shows the unfiltered rows). Each row also carries `reviewState` — the live
+review picture (running-now from the in-memory registry after the same
+`check_review_status` reap `GET /api/reviews` does, newest recorded review +
+its posted verdict from `auto_verdicts`, and merge-queue arming), batched SQL
+only, `null` when the PR was never reviewed, isn't armed, and nothing is
+running; the enroll/optout responses below don't carry it. Failure-safe: an
+enrichment error stamps `reviewState: null` rather than failing the listing.
 
 **Query Parameters**:
 - `status` — comma-separated subset of `pending,dispatched,unidentified,skipped,failed`
   (default all; unknown values → 400)
-- `limit` — max rows (default 200)
+- `limit` — max rows (default 200; applied before the closed-PR filter)
 
 **Response**:
 ```json
 {
   "dispatches": [
-    {"repo": "owner/repo", "prNumber": 42, "status": "pending",
-     "detail": "waiting: PR is a draft", "reviewerKey": null, "attempts": 0,
-     "createdAt": "2026-08-30 09:00:00", "updatedAt": "2026-08-31 10:30:00"}
+    {"repo": "owner/repo", "prNumber": 42, "status": "dispatched",
+     "detail": null, "reviewerKey": "default", "attempts": 0,
+     "createdAt": "2026-08-30 09:00:00", "updatedAt": "2026-08-31 10:30:00",
+     "reviewState": {"running": false, "lastReviewId": 1499,
+       "lastReviewStatus": "completed", "lastReviewAt": "2026-08-31 23:00:49",
+       "isFollowup": false, "score": 6.5, "verdictEvent": "REQUEST_CHANGES",
+       "verdictOutcome": "posted", "armed": true, "autoVerdictMode": "verdict"}}
   ]
 }
 ```

@@ -103,12 +103,26 @@ export function PRBadges({ pr, divergence, repoFull }: PRBadgesProps) {
     return null
   }
 
+  const getAutoVerdictBadge = () => {
+    if (!pr.autoVerdict?.enabled) return null
+    const { mode, reviewerType } = pr.autoVerdict
+    return (
+      <span
+        key="auto-verdict"
+        data-tooltip={`Auto ${mode} armed (${reviewerType}) — follow-up reviews run when new commits land`}
+      >
+        <Badge variant="info">{mode === 'comment' ? '💬' : '🤖'} ✓ Armed</Badge>
+      </span>
+    )
+  }
+
   const badges = [
     getStateBadge(),
     getReviewStatusBadge(),
     reviewers.length > 0 ? <ReviewersBadge key="reviewers" reviewers={reviewers} /> : null,
     getCIStatusBadge(),
     getDivergenceBadge(),
+    getAutoVerdictBadge(),
     repoFull ? (
       <AutomationPipelineControl
         key="auto-pipeline"

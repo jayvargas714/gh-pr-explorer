@@ -126,6 +126,20 @@ class SyncedPRsDB:
             ).fetchall()
             return {row["pr_number"]: self._pr_row(row) for row in rows}
 
+    def get_states_by_numbers(self, repo: str, numbers: List[int]) -> Dict[int, str]:
+        """Batch lookup of the scalar state column (no JSON parse). PRs the
+        store doesn't know are absent from the result."""
+        if not numbers:
+            return {}
+        placeholders = ",".join("?" for _ in numbers)
+        with self.db.connection() as conn:
+            rows = conn.execute(
+                f"SELECT pr_number, state FROM synced_prs "
+                f"WHERE repo = ? AND pr_number IN ({placeholders})",
+                [repo] + list(numbers),
+            ).fetchall()
+            return {row["pr_number"]: row["state"] for row in rows}
+
     def delete_pr(self, repo: str, pr_number: int) -> None:
         with self.db.connection() as conn:
             conn.execute(
