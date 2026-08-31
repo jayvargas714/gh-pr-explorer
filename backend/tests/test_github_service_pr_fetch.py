@@ -76,3 +76,21 @@ def test_fetch_pr_files_propagates_errors():
     with patch("backend.services.github_service.run_gh_command", side_effect=RuntimeError("boom")):
         with pytest.raises(RuntimeError):
             fetch_pr_files("acme", "widgets", 7)
+
+
+def test_fetch_pr_behind_by_parses_compare():
+    from backend.services.github_service import fetch_pr_behind_by
+    with patch("backend.services.github_service.run_gh_command") as mock_run:
+        mock_run.return_value = "7"
+        behind = fetch_pr_behind_by("acme", "widgets", "main", "feature-x")
+    assert behind == 7
+    args = mock_run.call_args[0][0]
+    assert args[0] == "api"
+    assert "repos/acme/widgets/compare/main...feature-x" in args
+
+
+def test_fetch_pr_behind_by_propagates_errors():
+    from backend.services.github_service import fetch_pr_behind_by
+    with patch("backend.services.github_service.run_gh_command", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError):
+            fetch_pr_behind_by("acme", "widgets", "main", "feature-x")

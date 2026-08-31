@@ -461,6 +461,10 @@ export interface AutomationConfig {
   authors: string[]
   repoAllowlist: string[]
   maxConcurrentAutoReviews: number
+  // Dispatch conditions: a detected PR waits until these hold (or times out).
+  requireCiPass: boolean
+  maxBehindBase: number
+  dispatchTimeoutHours: number
   ignorePatterns: string[]
   defaultRule: AutomationDefaultRule
   rules: AutomationRule[]

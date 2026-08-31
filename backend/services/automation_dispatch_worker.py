@@ -14,11 +14,15 @@ loop never raises.
 import json
 import logging
 import time
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
 WATCH_INTERVAL_SECONDS = 30
 MAX_ATTEMPTS = 3
+# Rows gate-evaluated per cycle. Larger than the concurrency budget so a PR
+# stuck waiting on its conditions never starves ready PRs queued behind it.
+EVAL_LIMIT = 20
 
 
 def _count_running_auto_reviews():
@@ -72,10 +76,53 @@ def _get_pr_metadata(repo_full, pr_number):
     return pr
 
 
+def _dispatch_blocker(config, queue_data, pr, owner, repo, pr_number):
+    """The reason this PR cannot be reviewed yet, or None when all conditions hold.
+
+    Conditions: live PR data readable, not a draft, CI completed and passing
+    (when required; a PR with no checks at all passes), and the branch at most
+    maxBehindBase commits behind its base head.
+    """
+    from backend.services.github_service import fetch_pr_behind_by
+    from backend.services.pr_service import get_ci_status
+
+    if queue_data.get("state") is None:
+        # fetch_pr_queue_data returns all-None on error; don't let a transient
+        # failure look like "no draft flag, no CI" and dispatch blind.
+        return "PR status check failed"
+    if queue_data.get("isDraft"):
+        return "PR is a draft"
+    if config.get("requireCiPass", True):
+        ci = get_ci_status(queue_data.get("statusCheckRollup"))
+        if ci in ("pending", "failure"):
+            return f"CI {ci}"
+    base_ref, head_ref = pr.get("baseRefName"), pr.get("headRefName")
+    if base_ref and head_ref:
+        try:
+            behind = fetch_pr_behind_by(owner, repo, base_ref, head_ref)
+        except Exception as e:
+            logger.warning(f"Automation: divergence check failed for {owner}/{repo}#{pr_number}: {e}")
+            return "divergence check failed"
+        max_behind = config.get("maxBehindBase", 10)
+        if behind > max_behind:
+            return f"{behind} commits behind base (max {max_behind})"
+    return None
+
+
+def _row_age_hours(row):
+    """Hours since the candidate was first detected (SQLite UTC timestamp)."""
+    try:
+        created = datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+    return (datetime.now(timezone.utc) - created).total_seconds() / 3600.0
+
+
 def _process_one(row, config):
+    """Handle one pending dispatch row. Returns True when a review was started."""
     from backend.database import get_automation_dispatches_db, get_queue_db, get_reviews_db
     from backend.services.automation_service import classify_files
-    from backend.services.github_service import fetch_pr_files
+    from backend.services.github_service import fetch_pr_files, fetch_pr_queue_data
     from backend.services.review_service import begin_review
 
     dispatches = get_automation_dispatches_db()
@@ -85,7 +132,7 @@ def _process_one(row, config):
     # Config may have changed since detection.
     if repo_full not in config["repoAllowlist"]:
         dispatches.set_status(row["id"], "skipped", detail="repo no longer allowlisted")
-        return
+        return False
 
     def _retry_or_fail(detail):
         attempts = dispatches.increment_attempts(row["id"])
@@ -100,14 +147,46 @@ def _process_one(row, config):
     owner_repo = repo_full.split("/", 1)
     if len(owner_repo) != 2:
         dispatches.set_status(row["id"], "failed", detail=f"malformed repo: {repo_full}")
-        return
+        return False
     owner, repo = owner_repo
+
+    try:
+        pr = _get_pr_metadata(repo_full, pr_number)
+    except Exception as e:
+        _retry_or_fail(f"metadata fetch failed: {e}")
+        return False
+
+    queue_data = fetch_pr_queue_data(owner, repo, pr_number)
+    state = queue_data.get("state")
+    if state and state.upper() != "OPEN":
+        dispatches.set_status(row["id"], "skipped", detail=f"PR is {state}")
+        return False
+
+    # Queue + lane placement happens before the condition gates so a waiting PR
+    # is visible on the board (Auto lane, ⏳ badge) while its conditions settle.
+    try:
+        item = _ensure_queued_in_auto_lane(pr, repo_full, pr_number)
+    except Exception as e:
+        _retry_or_fail(f"queue/lane placement failed: {e}")
+        return False
+
+    blocker = _dispatch_blocker(config, queue_data, pr, owner, repo, pr_number)
+    if blocker:
+        timeout_hours = config.get("dispatchTimeoutHours", 24)
+        if _row_age_hours(row) > timeout_hours:
+            dispatches.set_status(
+                row["id"], "skipped",
+                detail=f"conditions not met within {timeout_hours}h — last: {blocker}")
+            logger.info(f"Automation: gave up waiting on {repo_full}#{pr_number}: {blocker}")
+        else:
+            dispatches.set_status(row["id"], "pending", detail=f"waiting: {blocker}")
+        return False
 
     try:
         files = fetch_pr_files(owner, repo, pr_number)
     except Exception as e:
         _retry_or_fail(f"file fetch failed: {e}")
-        return
+        return False
 
     result = classify_files(files, config)
     outcome_json = json.dumps({
@@ -118,19 +197,12 @@ def _process_one(row, config):
         "ignored_count": result["ignored_count"],
     })
 
-    try:
-        pr = _get_pr_metadata(repo_full, pr_number)
-        item = _ensure_queued_in_auto_lane(pr, repo_full, pr_number)
-    except Exception as e:
-        _retry_or_fail(f"queue/lane placement failed: {e}")
-        return
-
     if result["outcome"] == "unidentified":
         dispatches.set_status(row["id"], "unidentified", outcome_json=outcome_json,
                               detail="files span multiple rules or mix rule and unmatched files")
         logger.info(f"Automation: {repo_full}#{pr_number} unidentified "
                     f"(rules={result['matched_rules']}, unmatched={result['unmatched_count']})")
-        return
+        return False
 
     rule = result["rule"]
     reviewer_key = rule["reviewerKey"]
@@ -151,6 +223,7 @@ def _process_one(row, config):
         dispatches.set_status(row["id"], "dispatched", outcome_json=outcome_json,
                               reviewer_key=reviewer_key)
         logger.info(f"Automation: dispatched {reviewer_key} review for {repo_full}#{pr_number}")
+        return True
     elif status == 409:
         # A review is already running (e.g. operator started one manually).
         dispatches.set_status(row["id"], "skipped", outcome_json=outcome_json,
@@ -158,6 +231,7 @@ def _process_one(row, config):
                               detail="review already in progress")
     else:
         _retry_or_fail(f"begin_review failed ({status}): {payload.get('error')}")
+    return False
 
 
 def process_pending_dispatches():
@@ -173,9 +247,15 @@ def process_pending_dispatches():
     if budget <= 0:
         return
 
-    for row in get_automation_dispatches_db().get_pending(budget):
+    # Evaluate more rows than the budget: waiting rows return without starting
+    # a review, so a ready row behind them still dispatches this cycle.
+    started = 0
+    for row in get_automation_dispatches_db().get_pending(max(budget, EVAL_LIMIT)):
+        if started >= budget:
+            break
         try:
-            _process_one(row, config)
+            if _process_one(row, config):
+                started += 1
         except Exception:
             logger.exception(f"Automation dispatch failed for {row['repo']}#{row['pr_number']}")
 

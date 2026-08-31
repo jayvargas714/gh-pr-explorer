@@ -180,6 +180,18 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
             <Badge variant="error">🤖 Auto failed</Badge>
           </span>
         )
+      case 'pending':
+        return (
+          <span data-tooltip={automation.detail ?? 'Waiting for dispatch conditions (CI, freshness, non-draft)'}>
+            <Badge variant="neutral">⏳ Auto waiting</Badge>
+          </span>
+        )
+      case 'skipped':
+        return (
+          <span data-tooltip={`Auto review skipped: ${automation.detail ?? 'no reason recorded'}`}>
+            <Badge variant="neutral">🤖 Auto skipped</Badge>
+          </span>
+        )
       default:
         return null
     }

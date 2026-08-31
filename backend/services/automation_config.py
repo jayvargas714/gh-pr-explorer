@@ -19,6 +19,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "authors": [],                     # GitHub logins (used when scope == 'authors')
     "repoAllowlist": [],               # 'owner/repo'; empty = nothing processed
     "maxConcurrentAutoReviews": 2,
+    "requireCiPass": True,             # CI must be completed and passing before dispatch
+    "maxBehindBase": 10,               # max commits the PR branch may be behind its base head
+    "dispatchTimeoutHours": 24,        # give up (skip) after waiting this long for conditions
     "ignorePatterns": [],              # globs stripped before classification
     "defaultRule": {"reviewerKey": "default", "autoVerdict": False, "autoVerdictMode": "verdict"},
     "rules": [],                       # ordered: [{name, patterns, reviewerKey, autoVerdict, autoVerdictMode}]
@@ -106,6 +109,24 @@ def validate_config(payload: Dict[str, Any], valid_reviewer_keys: Iterable[str])
     if concurrency < 1:
         raise ValueError("maxConcurrentAutoReviews must be at least 1")
     config["maxConcurrentAutoReviews"] = concurrency
+
+    config["requireCiPass"] = bool(payload.get("requireCiPass", DEFAULT_CONFIG["requireCiPass"]))
+
+    try:
+        max_behind = int(payload.get("maxBehindBase", DEFAULT_CONFIG["maxBehindBase"]))
+    except (TypeError, ValueError):
+        raise ValueError("maxBehindBase must be an integer")
+    if max_behind < 0:
+        raise ValueError("maxBehindBase must be zero or greater")
+    config["maxBehindBase"] = max_behind
+
+    try:
+        timeout_hours = int(payload.get("dispatchTimeoutHours", DEFAULT_CONFIG["dispatchTimeoutHours"]))
+    except (TypeError, ValueError):
+        raise ValueError("dispatchTimeoutHours must be an integer")
+    if timeout_hours < 1:
+        raise ValueError("dispatchTimeoutHours must be at least 1")
+    config["dispatchTimeoutHours"] = timeout_hours
 
     config["defaultRule"] = _validate_rule(
         payload.get("defaultRule", DEFAULT_CONFIG["defaultRule"]),

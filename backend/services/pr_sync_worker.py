@@ -106,7 +106,9 @@ def _record_automation_candidates(store, repo_full, new_numbers):
             pr = rows.get(number)
             if not pr:
                 continue  # hydration failed for this PR; next cycle re-detects it
-            if (pr.get("state") or "").upper() != "OPEN" or pr.get("isDraft"):
+            # Drafts are recorded on purpose: the dispatch worker's readiness
+            # gate holds them until they're marked ready (within the timeout).
+            if (pr.get("state") or "").upper() != "OPEN":
                 continue
             author = (pr.get("author") or {}).get("login")
             if config["scope"] == "authors" and author not in config["authors"]:

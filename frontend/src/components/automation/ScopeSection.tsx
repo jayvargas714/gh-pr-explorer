@@ -1,4 +1,5 @@
 import { AutomationConfig, AutomationScope } from '../../api/types'
+import { Toggle } from '../common/Toggle'
 import { ChipListEditor } from './ChipListEditor'
 
 const SCOPES: { value: AutomationScope; label: string; hint: string }[] = [
@@ -94,6 +95,64 @@ export function ScopeSection({ draft, setDraft, saving }: ScopeSectionProps) {
         <small className="mx-automation__hint">
           Caps how many auto-started reviews run at once; extra PRs wait their turn.
         </small>
+      </div>
+
+      <div className="mx-automation__field">
+        <label>Dispatch conditions</label>
+        <small className="mx-automation__hint">
+          A detected PR waits in the Auto lane (⏳ badge) until every condition holds,
+          then its review starts. Draft PRs always wait until marked ready.
+        </small>
+
+        <div className="mx-automation__field mx-automation__field--inline">
+          <Toggle
+            checked={draft.requireCiPass}
+            onChange={(requireCiPass) => setDraft({ ...draft, requireCiPass })}
+            label="Require CI to complete and pass"
+            disabled={saving}
+          />
+          <small className="mx-automation__hint">
+            PRs with no CI checks at all are not held up.
+          </small>
+        </div>
+
+        <div className="mx-automation__field mx-automation__field--inline">
+          <label htmlFor="automation-max-behind">Max commits behind base</label>
+          <input
+            id="automation-max-behind"
+            type="number"
+            min={0}
+            className="mx-automation__number"
+            value={draft.maxBehindBase}
+            onChange={(e) => {
+              const parsed = parseInt(e.target.value, 10)
+              setDraft({ ...draft, maxBehindBase: Number.isNaN(parsed) || parsed < 0 ? 0 : parsed })
+            }}
+            disabled={saving}
+          />
+          <small className="mx-automation__hint">
+            The PR branch must be within this many commits of its base branch head.
+          </small>
+        </div>
+
+        <div className="mx-automation__field mx-automation__field--inline">
+          <label htmlFor="automation-timeout">Give up after (hours)</label>
+          <input
+            id="automation-timeout"
+            type="number"
+            min={1}
+            className="mx-automation__number"
+            value={draft.dispatchTimeoutHours}
+            onChange={(e) => {
+              const parsed = parseInt(e.target.value, 10)
+              setDraft({ ...draft, dispatchTimeoutHours: Number.isNaN(parsed) || parsed < 1 ? 1 : parsed })
+            }}
+            disabled={saving}
+          />
+          <small className="mx-automation__hint">
+            A PR still failing the conditions after this long is skipped for manual handling.
+          </small>
+        </div>
       </div>
     </section>
   )

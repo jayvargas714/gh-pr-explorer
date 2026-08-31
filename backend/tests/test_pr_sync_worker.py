@@ -188,14 +188,17 @@ def test_incremental_author_scope_filters_authors(store, dispatches, monkeypatch
     assert dispatches.get_by_pr("acme/widgets", 3) is None
 
 
-def test_incremental_skips_closed_and_draft_prs(store, dispatches, monkeypatch):
+def test_incremental_skips_closed_but_records_draft_prs(store, dispatches, monkeypatch):
+    """Drafts are recorded — the dispatch worker's readiness gate holds them
+    until they're marked ready (so ready-later drafts still get auto-reviewed)."""
     from backend.services import automation_config
     monkeypatch.setattr(automation_config, "get_config", lambda: _automation_cfg())
     _synced_repo(store)
     draft = _pr(4)
     draft["isDraft"] = True
     _run_incremental(store, [4, 5], {4: draft, 5: _pr(5, state="MERGED")})
-    assert dispatches.get_pending(10) == []
+    assert dispatches.get_by_pr("acme/widgets", 4) is not None
+    assert dispatches.get_by_pr("acme/widgets", 5) is None
 
 
 def test_candidate_hook_failure_does_not_break_sync(store, monkeypatch):

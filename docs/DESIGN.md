@@ -2192,6 +2192,9 @@ maps over `useAutomationStore.reviewers` instead of local constants.
 | `authors` | `[]` | GitHub logins, used when scope is `authors` |
 | `repoAllowlist` | `[]` | `owner/repo` list; empty = nothing processed |
 | `maxConcurrentAutoReviews` | `2` | cap on running auto-started reviews |
+| `requireCiPass` | `true` | CI must be completed and passing before dispatch |
+| `maxBehindBase` | `10` | max commits the PR branch may be behind its base head |
+| `dispatchTimeoutHours` | `24` | give up (skip) after waiting this long for conditions |
 | `ignorePatterns` | `[]` | globs stripped before classification (index files) |
 | `defaultRule` | default reviewer, verdict off | applies when no rule matches |
 | `rules` | `[]` | ordered `{name, patterns[], reviewerKey, autoVerdict, autoVerdictMode}` |
@@ -2203,12 +2206,13 @@ reviewer keys, bad scopes/modes, empty rule names/patterns, concurrency < 1.
 **Detection** (`pr_sync_worker.incremental_sync_repo`): before hydration the
 worker computes `new_numbers = fetched − known rows`; after hydration
 `_record_automation_candidates` filters them (scope on, repo allowlisted, state
-OPEN, not draft, author in scope) and inserts `pending` rows into
+OPEN, author in scope) and inserts `pending` rows into
 `automation_dispatches`. `UNIQUE(repo, pr_number)` makes the row a restart-proof
 idempotence guard: a PR is auto-dispatched at most once, ever. Backfill never
 calls the hook, so enabling automation cannot sweep existing PRs — only PRs first
-seen after enabling are picked up. A draft that later marks ready is already
-"known" and is not re-triggered (accepted v1 limitation). The hook is fully
+seen after enabling are picked up. Drafts ARE recorded at detection: the dispatch
+worker's readiness gate holds them until they're marked ready (within the
+timeout), so a ready-later draft still gets auto-reviewed. The hook is fully
 wrapped: a failure can never break the sync cycle.
 
 **Classification** (`backend/services/automation_service.py`, pure):
@@ -2222,18 +2226,37 @@ order) with a matching pattern:
 
 **Dispatch worker** (`backend/services/automation_dispatch_worker.py`, daemon
 started unconditionally from `app.py`, 30s interval; the loop's own
-`scope == 'off'` check is the live kill switch). Each cycle, within a budget of
-`maxConcurrentAutoReviews − running auto-started reviews`, drains `pending` rows:
-re-check repo allowlisted (else `skipped`) → `fetch_pr_files` (REST files endpoint
-with `--paginate`; `gh pr view --json files` truncates at 100) → classify → PR
-metadata from `synced_prs` (fallback `fetch_full_pr`) → add to merge queue if
-absent → `assign_card_to_lane` into the Auto lane → for unidentified, persist and
-stop (no review); otherwise `begin_review(reviewer_type=rule.reviewerKey,
-auto_started=True)` and, only after a 201, arm per-PR auto-verdict with the rule's
-`autoVerdict`/`autoVerdictMode` via `set_auto_verdict`. `begin_review` 409 (a
-review already running) → `skipped`; other failures increment `attempts` and
-retry next cycle, `failed` after 3. Follow-up reviews stay owned by the existing
-auto-review watcher once the card is armed.
+`scope == 'off'` check is the live kill switch). Each cycle it evaluates up to
+`EVAL_LIMIT` (20) pending rows but starts reviews only within a budget of
+`maxConcurrentAutoReviews − running auto-started reviews` — evaluating more rows
+than the budget means a PR stuck waiting on its conditions never starves ready
+PRs queued behind it. Per row: re-check repo allowlisted (else `skipped`) → PR
+metadata from `synced_prs` (fallback `fetch_full_pr`) → one `fetch_pr_queue_data`
+call for live state/draft/CI (closed or merged → `skipped`) → add to merge queue
+if absent and `assign_card_to_lane` into the Auto lane (before the gates, so a
+waiting PR is visible on the board) → **dispatch condition gates** → `fetch_pr_files`
+(REST files endpoint with `--paginate`; `gh pr view --json files` truncates at
+100) → classify → for unidentified, persist and stop (no review); otherwise
+`begin_review(reviewer_type=rule.reviewerKey, auto_started=True)` and, only after
+a 201, arm per-PR auto-verdict with the rule's `autoVerdict`/`autoVerdictMode`
+via `set_auto_verdict`. `begin_review` 409 (a review already running) →
+`skipped`; other failures increment `attempts` and retry next cycle, `failed`
+after 3. Follow-up reviews stay owned by the existing auto-review watcher once
+the card is armed.
+
+**Dispatch condition gates** (`_dispatch_blocker`): a review starts only when the
+live PR data is readable (a `fetch_pr_queue_data` failure blocks rather than
+dispatching blind), the PR is not a draft, CI is completed and passing
+(`get_ci_status` == pending/failure blocks; a PR with **no checks at all**
+passes, so CI-less repos are never held up; gate disabled via
+`requireCiPass: false`), and the branch is at most `maxBehindBase` commits behind
+its base head (via `fetch_pr_behind_by`, the `gh api …/compare/{base}...{head}`
+`behind_by` count; a compare failure blocks without consuming attempts). A
+blocked row stays `pending` with `detail = "waiting: <reason>"` and is
+re-evaluated every cycle — CI turning green, a rebase, or marking ready triggers
+the review naturally. A row still blocked `dispatchTimeoutHours` after detection
+(`created_at`) is marked `skipped` with the last blocking reason for manual
+handling.
 
 **Dispatch statuses** (`automation_dispatches.status`): `pending` → `dispatched`
 | `unidentified` | `skipped` | `failed`. The row also stores `outcome_json`
@@ -2250,8 +2273,11 @@ auto cards land in Auto instead of the default lane).
 {status, reviewerKey, ruleName, matchedRules, detail, updatedAt} | null`
 (`format_automation_state` in `queue_enrichment.py`). `QueueItem` renders — in
 the title row, outside the `hasReview` gate — `❓ Unidentified` (warning, tooltip
-lists the spanned rules), `🤖 Auto` (info, tooltip names rule + reviewer), or
-`🤖 Auto failed` (error, tooltip carries the detail). The swimlane badge filter
+lists the spanned rules), `🤖 Auto` (info, tooltip names rule + reviewer),
+`🤖 Auto failed` (error, tooltip carries the detail), `⏳ Auto waiting` (neutral,
+tooltip carries the blocking reason while a pending row waits on the dispatch
+conditions), or `🤖 Auto skipped` (neutral, tooltip carries the skip reason —
+e.g. a conditions timeout). The swimlane badge filter
 gains an `auto:unidentified` chip in the Auto Verdict group. Routing an
 unidentified PR is manual by design: the operator uses the normal review
 button/picker and AutoVerdictToggle on the card.

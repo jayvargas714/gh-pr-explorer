@@ -151,6 +151,18 @@ def fetch_pr_files(owner, repo, pr_number):
     return [line for line in output.splitlines() if line.strip()]
 
 
+def fetch_pr_behind_by(owner, repo, base_ref, head_ref):
+    """How many commits head_ref is behind base_ref. Raises RuntimeError on failure."""
+    output = run_gh_command([
+        "api", f"repos/{owner}/{repo}/compare/{base_ref}...{head_ref}",
+        "--jq", ".behind_by",
+    ])
+    try:
+        return int(output)
+    except (TypeError, ValueError):
+        raise RuntimeError(f"Unexpected compare output for {owner}/{repo} {base_ref}...{head_ref}: {output!r}")
+
+
 def fetch_pr_numbers(owner, repo, state="open", search=None, limit=1000):
     """Fetch PR numbers only (tiny, 504-resistant query), in GitHub's order."""
     args = ["pr", "list", "-R", f"{owner}/{repo}", "--state", state,
