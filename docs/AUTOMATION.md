@@ -13,6 +13,10 @@ starts on its own, and (if the matching rule says so) an auto verdict or comment
 is posted when the review completes. PRs the rules can't classify are parked in
 the Auto lane with a `❓ Unidentified` badge for you to route by hand.
 
+PRs that were already open before you enabled automation can be enrolled once
+with the backfill script (see below). Enrolled PRs stay in the pipeline for as
+long as they're open; closed and merged PRs drop out on their own.
+
 Nothing is hardcoded — reviewers, file patterns, repos, and authors are all
 configured in the tab, so the pipeline works for any repo and any reviewer set.
 
@@ -68,8 +72,8 @@ filename, case-sensitively. Note `*` also crosses `/`, so `PB-[0-9]*` matches
 
 ## Dispatch conditions (when the review actually starts)
 
-A detected PR doesn't get reviewed immediately — it waits in the Auto lane with
-a `⏳ Auto waiting` badge until **all** conditions hold, re-checked every ~30s:
+A detected PR doesn't get reviewed immediately — it waits until **all**
+conditions hold, re-checked continuously:
 
 | Condition | Configurable? |
 |-----------|---------------|
@@ -77,23 +81,49 @@ a `⏳ Auto waiting` badge until **all** conditions hold, re-checked every ~30s:
 | CI completed and passing | *Require CI to complete and pass* (default on). A PR with **no CI checks at all** is not held up |
 | Branch fresh enough | *Max commits behind base* (default 10) — how far the PR branch may lag its base branch head |
 
-The badge tooltip names the blocking reason (e.g. `waiting: CI pending`).
-Anything that fixes the condition — CI going green, a rebase, marking the PR
-ready — triggers the review automatically on the next cycle.
+While waiting, a **non-draft** PR sits in the Auto lane with a `⏳ Auto waiting`
+badge whose tooltip names the blocking reason (e.g. `waiting: CI pending`).
+**Drafts wait off the board** — they don't appear on the swimlane until marked
+ready; watch them in the Automation tab's **Pipeline** table instead. Anything
+that fixes the condition — CI going green, a rebase, marking the PR ready —
+triggers the review automatically on the next cycle.
 
-If a PR is still blocked after *Give up after* hours (default 24), it's marked
-`🤖 Auto skipped` with the last blocking reason, and it's yours to handle
-manually.
+There is no waiting deadline: an open PR stays in the pipeline until its
+conditions hold or it's closed/merged. The **Pipeline** table at the top of the
+Automation tab shows every PR the pipeline is holding (status, reason, last
+check), so you can always see PRs progressing toward dispatch.
+
+To keep the pipeline from growing without bound, *Max pipeline size* (default
+1000) caps how many PRs may wait at once — at the cap, newly arriving PRs are
+not enrolled (a warning is logged; re-run the backfill script after raising the
+cap to enroll anything that was refused).
+
+## Backfilling existing PRs
+
+Detection only catches PRs that appear after automation is enabled. To give the
+PRs that are **already open** a chance at automation, run once:
+
+```bash
+python scripts/backfill_automation_pipeline.py
+```
+
+It enrolls every open PR in your allowlisted repos (drafts included; author
+scope respected), revives PRs a previous run skipped or failed, never touches
+PRs already dispatched or waiting, and reports what it did. Safe to re-run —
+each PR is still auto-dispatched at most once.
 
 ## What you'll see
 
 - **Auto lane** on the swimlane board — permanent (no delete/rename), tagged
   `🤖 auto`. Every auto-processed PR lands there; you can still drag cards out.
+- **Pipeline table** (top of the Automation tab) — every PR the pipeline is
+  holding or has handled, filterable by status. This is where parked drafts are
+  visible.
 - **Card badges**: `⏳ Auto waiting` (conditions not met yet; tooltip says why),
   `🤖 Auto` (auto-reviewed; tooltip names the rule and reviewer),
   `❓ Unidentified` (tooltip lists the rules the files spanned),
-  `🤖 Auto skipped` (conditions timed out, or a review was already running),
-  `🤖 Auto failed` (pipeline gave up; tooltip has the error).
+  `🤖 Auto skipped` (the PR closed before conditions held, or a review was
+  already running), `🤖 Auto failed` (pipeline gave up; tooltip has the error).
 - The board's badge filter has a matching `❓ Unidentified` chip.
 
 **Handling an unidentified PR**: open the card, start the review with the normal
@@ -112,12 +142,13 @@ and never post.
 
 ## Rules of engagement (what it will never do)
 
-- **Only PRs first seen after enabling.** Existing open PRs are never swept, and
-  a repo's initial backfill never triggers reviews.
+- **Only PRs first seen after enabling** are swept in automatically; a repo's
+  initial sync backfill never triggers reviews. Pre-existing PRs enter the
+  pipeline only when you run the backfill script yourself.
 - **One auto-dispatch per PR, ever** — survives restarts. Follow-up reviews come
   from the (separate) auto follow-up watcher on armed cards.
-- **Draft PRs wait** at the conditions gate and are reviewed automatically when
-  marked ready — unless the give-up window passes first.
+- **Draft PRs wait** off the board, indefinitely, and are reviewed automatically
+  when marked ready.
 - **Concurrency is capped** by *Max concurrent auto reviews* (default 2); extra
   PRs wait in line.
 - Failures (file fetch, review spawn) retry up to 3 times, then mark the PR
@@ -127,13 +158,15 @@ and never post.
 
 *"My PR wasn't picked up"* — check, in order: scope isn't Off; the repo is in
 the allowlist (exact `owner/repo`); for author scope, the PR author's login is
-listed; the PR is open; and the PR was created **after** you enabled automation.
-Also note only repos covered by the background PR sync are watched (a repo
-starts syncing once it's been viewed in the app).
+listed; the PR is open; the PR was created **after** you enabled automation (or
+run the backfill script for older PRs); and the pipeline isn't at *Max pipeline
+size* (check the Pipeline table). Also note only repos covered by the background
+PR sync are watched (a repo starts syncing once it's been viewed in the app).
 
-*"It's stuck on ⏳ Auto waiting"* — hover the badge: the tooltip names the
-blocking condition (draft, CI pending/failing, too far behind base). Fix that
-and the review starts on its own; or start it manually with the Review button.
+*"It's stuck on ⏳ Auto waiting"* — hover the badge (or find the row in the
+Pipeline table): the reason names the blocking condition (draft, CI
+pending/failing, too far behind base). Fix that and the review starts on its
+own; or start it manually with the Review button.
 
 *"It routed to the wrong reviewer"* — rules are ordered; the first matching rule
 claims each file. Reorder with ↑/↓, and remember patterns are case-sensitive.

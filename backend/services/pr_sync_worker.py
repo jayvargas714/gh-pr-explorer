@@ -102,7 +102,20 @@ def _record_automation_candidates(store, repo_full, new_numbers):
 
         rows = store.get_prs_by_numbers(repo_full, new_numbers)
         dispatches = get_automation_dispatches_db()
+
+        # Pipeline cap: at maxPipelineSize pending rows, refuse new candidates
+        # rather than grow without bound. Protection over completeness — a PR
+        # refused here is not retroactively enrolled when space frees up, but
+        # the backfill script can enroll stragglers on demand.
+        cap = config.get("maxPipelineSize", 1000)
+        headroom = cap - dispatches.count_pending()
         for number in new_numbers:
+            if headroom <= 0:
+                logger.warning(
+                    f"Automation: pipeline at maxPipelineSize ({cap}); "
+                    f"not enrolling {repo_full}#{number}"
+                )
+                continue
             pr = rows.get(number)
             if not pr:
                 continue  # hydration failed for this PR; next cycle re-detects it
@@ -114,6 +127,7 @@ def _record_automation_candidates(store, repo_full, new_numbers):
             if config["scope"] == "authors" and author not in config["authors"]:
                 continue
             if dispatches.record_candidate(repo_full, number):
+                headroom -= 1
                 logger.info(f"Automation: recorded candidate {repo_full}#{number} (author={author})")
     except Exception:
         logger.exception(f"Automation candidate detection failed for {repo_full}")

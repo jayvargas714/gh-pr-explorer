@@ -3,6 +3,7 @@ import { Alert } from '../common/Alert'
 import { Button } from '../common/Button'
 import { useAutomationStore } from '../../stores/useAutomationStore'
 import { ActiveConfigSummary } from './ActiveConfigSummary'
+import { PipelineSection } from './PipelineSection'
 import { ScopeSection } from './ScopeSection'
 import { ReviewerRegistrySection } from './ReviewerRegistrySection'
 import { RoutingRulesSection } from './RoutingRulesSection'
@@ -60,6 +61,8 @@ export function AutomationPanel() {
       {error && <Alert variant="error">{error}</Alert>}
 
       <ActiveConfigSummary />
+
+      <PipelineSection />
 
       <ScopeSection draft={draft} setDraft={updateDraft} saving={saving} />
       <RoutingRulesSection draft={draft} setDraft={updateDraft} saving={saving} />

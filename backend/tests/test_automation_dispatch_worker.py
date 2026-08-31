@@ -63,7 +63,7 @@ def _cfg(**overrides):
     cfg = {
         "scope": "all", "authors": [], "repoAllowlist": [REPO],
         "maxConcurrentAutoReviews": 2,
-        "requireCiPass": True, "maxBehindBase": 10, "dispatchTimeoutHours": 24,
+        "requireCiPass": True, "maxBehindBase": 10, "maxPipelineSize": 1000,
         "ignorePatterns": ["*PB-000-index*", "*ED-000-index*"],
         "defaultRule": {"reviewerKey": "default", "autoVerdict": False, "autoVerdictMode": "verdict"},
         "rules": [
@@ -283,7 +283,7 @@ def test_pr_already_in_queue_is_reused(env, monkeypatch):
     assert env["dispatches"].get_by_pr(REPO, 7)["status"] == "dispatched"
 
 
-# ----- Dispatch conditions (CI / behind-base / draft / timeout) -----
+# ----- Dispatch conditions (CI / behind-base / draft) -----
 
 
 def _run_gated(env, monkeypatch, gate_kwargs, cfg_overrides=None):
@@ -297,7 +297,9 @@ def _run_gated(env, monkeypatch, gate_kwargs, cfg_overrides=None):
     return mock_files, mock_begin
 
 
-def test_draft_pr_waits_in_auto_lane(env, monkeypatch):
+def test_draft_pr_waits_off_the_board(env, monkeypatch):
+    """Drafts stay pending but are NOT queued or placed in the Auto lane —
+    the board only shows non-draft pipeline PRs."""
     mock_files, mock_begin = _run_gated(env, monkeypatch, {"is_draft": True})
 
     assert mock_begin.call_count == 0
@@ -305,9 +307,7 @@ def test_draft_pr_waits_in_auto_lane(env, monkeypatch):
     row = env["dispatches"].get_by_pr(REPO, 7)
     assert row["status"] == "pending"
     assert "draft" in row["detail"]
-    # Waiting PRs are visible: queued and placed in the Auto lane.
-    item = env["queue"].get_queue_item(7, REPO)
-    assert item["id"] in _auto_lane_ids(env)
+    assert env["queue"].get_queue_item(7, REPO) is None
 
 
 def test_ci_pending_and_failure_wait(env, monkeypatch):
@@ -317,6 +317,9 @@ def test_ci_pending_and_failure_wait(env, monkeypatch):
         row = env["dispatches"].get_by_pr(REPO, 7)
         assert row["status"] == "pending"
         assert expected in row["detail"]
+    # Non-draft waiting PRs ARE visible: queued and placed in the Auto lane.
+    item = env["queue"].get_queue_item(7, REPO)
+    assert item["id"] in _auto_lane_ids(env)
 
 
 def test_no_ci_checks_counts_as_satisfied(env, monkeypatch):
@@ -379,28 +382,30 @@ def test_closed_pr_is_skipped(env, monkeypatch):
     assert "MERGED" in row["detail"]
 
 
-def test_blocked_row_times_out_to_skipped(env, monkeypatch):
-    _patch_config(monkeypatch, dispatchTimeoutHours=24)
+def test_blocked_row_waits_indefinitely(env, monkeypatch):
+    """No dispatch timeout: an open PR stays in the pipeline no matter how
+    long its conditions take to come good."""
     env["dispatches"].record_candidate(REPO, 7)
-    _age_row(env, 7, hours=30)
-
-    _, mock_begin = _run_gated(env, monkeypatch, {"rollup": CI_PENDING})
-
-    assert mock_begin.call_count == 0
-    row = env["dispatches"].get_by_pr(REPO, 7)
-    assert row["status"] == "skipped"
-    assert "24h" in row["detail"]
-    assert "CI pending" in row["detail"]
-
-
-def test_blocked_row_within_window_keeps_waiting(env, monkeypatch):
-    _patch_config(monkeypatch, dispatchTimeoutHours=24)
-    env["dispatches"].record_candidate(REPO, 7)
-    _age_row(env, 7, hours=10)
+    _age_row(env, 7, hours=24 * 45)
 
     _run_gated(env, monkeypatch, {"rollup": CI_PENDING})
 
     assert env["dispatches"].get_by_pr(REPO, 7)["status"] == "pending"
+
+
+def test_waiting_evaluation_resets_attempts(env, monkeypatch):
+    """Transient errors spread over a long wait must not add up to a permanent
+    failure: a clean waiting evaluation clears the attempt counter."""
+    env["dispatches"].record_candidate(REPO, 7)
+    row = env["dispatches"].get_by_pr(REPO, 7)
+    env["dispatches"].increment_attempts(row["id"])
+    env["dispatches"].increment_attempts(row["id"])
+
+    _run_gated(env, monkeypatch, {"rollup": CI_PENDING})
+
+    row = env["dispatches"].get_by_pr(REPO, 7)
+    assert row["status"] == "pending"
+    assert row["attempts"] == 0
 
 
 def test_waiting_row_does_not_starve_ready_row(env, monkeypatch):

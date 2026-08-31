@@ -136,21 +136,22 @@ export function ScopeSection({ draft, setDraft, saving }: ScopeSectionProps) {
         </div>
 
         <div className="mx-automation__field mx-automation__field--inline">
-          <label htmlFor="automation-timeout">Give up after (hours)</label>
+          <label htmlFor="automation-pipeline-size">Max pipeline size</label>
           <input
-            id="automation-timeout"
+            id="automation-pipeline-size"
             type="number"
             min={1}
             className="mx-automation__number"
-            value={draft.dispatchTimeoutHours}
+            value={draft.maxPipelineSize}
             onChange={(e) => {
               const parsed = parseInt(e.target.value, 10)
-              setDraft({ ...draft, dispatchTimeoutHours: Number.isNaN(parsed) || parsed < 1 ? 1 : parsed })
+              setDraft({ ...draft, maxPipelineSize: Number.isNaN(parsed) || parsed < 1 ? 1 : parsed })
             }}
             disabled={saving}
           />
           <small className="mx-automation__hint">
-            A PR still failing the conditions after this long is skipped for manual handling.
+            Open PRs wait in the pipeline until their conditions hold; at this many
+            waiting PRs, new ones are not enrolled.
           </small>
         </div>
       </div>

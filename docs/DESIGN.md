@@ -2208,7 +2208,7 @@ maps over `useAutomationStore.reviewers` instead of local constants.
 | `maxConcurrentAutoReviews` | `2` | cap on running auto-started reviews |
 | `requireCiPass` | `true` | CI must be completed and passing before dispatch |
 | `maxBehindBase` | `10` | max commits the PR branch may be behind its base head |
-| `dispatchTimeoutHours` | `24` | give up (skip) after waiting this long for conditions |
+| `maxPipelineSize` | `1000` | max pending pipeline rows; new candidates are refused at the cap |
 | `ignorePatterns` | `[]` | globs stripped before classification (index files) |
 | `defaultRule` | default reviewer, verdict off | applies when no rule matches |
 | `rules` | `[]` | ordered `{name, patterns[], reviewerKey, autoVerdict, autoVerdictMode}` |
@@ -2231,10 +2231,26 @@ OPEN, author in scope) and inserts `pending` rows into
 `automation_dispatches`. `UNIQUE(repo, pr_number)` makes the row a restart-proof
 idempotence guard: a PR is auto-dispatched at most once, ever. Backfill never
 calls the hook, so enabling automation cannot sweep existing PRs — only PRs first
-seen after enabling are picked up. Drafts ARE recorded at detection: the dispatch
-worker's readiness gate holds them until they're marked ready (within the
-timeout), so a ready-later draft still gets auto-reviewed. The hook is fully
-wrapped: a failure can never break the sync cycle.
+seen after enabling are picked up (the one-time backfill script below enrolls
+pre-existing PRs on demand). Drafts ARE recorded at detection: the dispatch
+worker's readiness gate holds them until they're marked ready, so a ready-later
+draft still gets auto-reviewed. **Pipeline cap**: when `pending` rows have
+reached `maxPipelineSize`, new candidates are refused with a logged warning
+(protection over completeness — a refused PR is not retroactively enrolled when
+space frees up, but the backfill script can enroll stragglers). The hook is
+fully wrapped: a failure can never break the sync cycle.
+
+**Backfill script** (`scripts/backfill_automation_pipeline.py`, run once by the
+operator): enrolls PRs that were already open before automation was enabled.
+Aborts when scope is `off` or the allowlist is empty; per allowlisted repo it
+lists open PRs via `gh pr list --json number,author` (drafts included — an
+un-enrolled draft would never be caught at its ready transition), filters by
+author when scope is `authors`, then inserts missing rows as `pending` and
+revives `skipped`/`failed` rows of still-open PRs back to `pending` (via
+`AutomationDispatchesDB.requeue`, which clears attempts and replaces the detail
+with "revived by backfill"). `pending`/`dispatched`/`unidentified` rows are left
+untouched, preserving dispatch-at-most-once. Respects `maxPipelineSize` and
+prints inserted/revived/unchanged/filtered/capped counts.
 
 **Classification** (`backend/services/automation_service.py`, pure):
 `matches(path, pattern)` = `fnmatch.fnmatchcase` against the full repo-relative
@@ -2251,11 +2267,16 @@ started unconditionally from `app.py`, 30s interval; the loop's own
 `EVAL_LIMIT` (20) pending rows but starts reviews only within a budget of
 `maxConcurrentAutoReviews − running auto-started reviews` — evaluating more rows
 than the budget means a PR stuck waiting on its conditions never starves ready
-PRs queued behind it. Per row: re-check repo allowlisted (else `skipped`) → PR
-metadata from `synced_prs` (fallback `fetch_full_pr`) → one `fetch_pr_queue_data`
-call for live state/draft/CI (closed or merged → `skipped`) → add to merge queue
-if absent and `assign_card_to_lane` into the Auto lane (before the gates, so a
-waiting PR is visible on the board) → **dispatch condition gates** → `fetch_pr_files`
+PRs queued behind it within one cycle, and `get_pending` orders by `updated_at`
+(least recently evaluated first, bumped on every evaluation), so across cycles
+the pipeline round-robins: any number of perpetual waiters cannot starve rows
+behind the `EVAL_LIMIT` window. Per row: re-check repo allowlisted (else
+`skipped`) → PR metadata from `synced_prs` (fallback `fetch_full_pr`) → one
+`fetch_pr_queue_data` call for live state/draft/CI (closed or merged →
+`skipped`; unreadable data or **draft** → wait *without* board placement, so
+drafts never appear on the swimlane while parked) → add to merge queue if absent
+and `assign_card_to_lane` into the Auto lane (before the remaining gates, so a
+non-draft waiting PR is visible on the board) → **dispatch condition gates** → `fetch_pr_files`
 (REST files endpoint with `--paginate`; `gh pr view --json files` truncates at
 100) → classify → for unidentified, persist and stop (no review); otherwise
 `begin_review(reviewer_type=rule.reviewerKey, auto_started=True)` and, only after
@@ -2265,19 +2286,21 @@ via `set_auto_verdict`. `begin_review` 409 (a review already running) →
 after 3. Follow-up reviews stay owned by the existing auto-review watcher once
 the card is armed.
 
-**Dispatch condition gates** (`_dispatch_blocker`): a review starts only when the
-live PR data is readable (a `fetch_pr_queue_data` failure blocks rather than
-dispatching blind), the PR is not a draft, CI is completed and passing
+**Dispatch condition gates**: a review starts only when the live PR data is
+readable (a `fetch_pr_queue_data` failure blocks rather than dispatching blind)
+and the PR is not a draft — both checked in `_process_one` before board
+placement — then, in `_dispatch_blocker`, CI is completed and passing
 (`get_ci_status` == pending/failure blocks; a PR with **no checks at all**
 passes, so CI-less repos are never held up; gate disabled via
 `requireCiPass: false`), and the branch is at most `maxBehindBase` commits behind
 its base head (via `fetch_pr_behind_by`, the `gh api …/compare/{base}...{head}`
 `behind_by` count; a compare failure blocks without consuming attempts). A
-blocked row stays `pending` with `detail = "waiting: <reason>"` and is
-re-evaluated every cycle — CI turning green, a rebase, or marking ready triggers
-the review naturally. A row still blocked `dispatchTimeoutHours` after detection
-(`created_at`) is marked `skipped` with the last blocking reason for manual
-handling.
+blocked row stays `pending` with `detail = "waiting: <reason>"` **for as long as
+the PR stays open** — there is no dispatch timeout; CI turning green, a rebase,
+or marking ready triggers the review naturally, and a closed/merged PR is
+`skipped` on its next evaluation. Each clean waiting evaluation resets the
+row's `attempts` (via `reset_attempts`), so transient errors spread over a long
+wait can never accumulate into a permanent `failed`.
 
 **Dispatch statuses** (`automation_dispatches.status`): `pending` → `dispatched`
 | `unidentified` | `skipped` | `failed`. The row also stores `outcome_json`
@@ -2298,7 +2321,7 @@ lists the spanned rules), `🤖 Auto` (info, tooltip names rule + reviewer),
 `🤖 Auto failed` (error, tooltip carries the detail), `⏳ Auto waiting` (neutral,
 tooltip carries the blocking reason while a pending row waits on the dispatch
 conditions), or `🤖 Auto skipped` (neutral, tooltip carries the skip reason —
-e.g. a conditions timeout). The swimlane badge filter
+e.g. the PR closed before conditions held). The swimlane badge filter
 gains an `auto:unidentified` chip in the Auto Verdict group. Routing an
 unidentified PR is manual by design: the operator uses the normal review
 button/picker and AutoVerdictToggle on the card.
@@ -2308,8 +2331,13 @@ button/picker and AutoVerdictToggle on the card.
 `ActiveConfigSummary` — a read-only ●&nbsp;ACTIVE/○&nbsp;OFF strip of the SAVED
 config (scope + authors, allowlisted repos, rule→reviewer routing map, dispatch
 conditions, concurrency), distinct from the unsaved draft below — followed by
-the sections: `ScopeSection` (off/authors/all cards, author + repo chip lists,
-concurrency), `RoutingRulesSection` (ordered rules with ↑/↓, pattern chips,
+the sections: `PipelineSection` (read-only pipeline table via
+`GET /api/automation/dispatches`: every row the pipeline is holding or has
+handled — repo#PR link, status badge, waiting/skip detail, reviewer, last
+update — with a status filter and refresh; this is where parked drafts are
+visible, since they stay off the board), `ScopeSection` (off/authors/all cards,
+author + repo chip lists, concurrency, max pipeline size), `RoutingRulesSection`
+(ordered rules with ↑/↓, pattern chips,
 reviewer select, per-rule verdict toggle + mode, ignore patterns, pinned default
 rule), `ReviewerRegistrySection` (table + inline add/edit/delete, builtins
 locked), and `AutoVerdictCriteriaSection` — the global auto-verdict criteria form
@@ -3131,6 +3159,26 @@ Returns `{"config": {...}}` — stored `automation_config` merged over the defau
 
 **PUT** `/api/automation/config` — body `{"config": {...}}` (or the bare object).
 Validates and persists; 400 with a message on bad scope/mode/rule/reviewer key.
+
+**GET** `/api/automation/dispatches`
+
+The pipeline view: `automation_dispatches` rows, most recently updated first.
+
+**Query Parameters**:
+- `status` — comma-separated subset of `pending,dispatched,unidentified,skipped,failed`
+  (default all; unknown values → 400)
+- `limit` — max rows (default 200)
+
+**Response**:
+```json
+{
+  "dispatches": [
+    {"repo": "owner/repo", "prNumber": 42, "status": "pending",
+     "detail": "waiting: PR is a draft", "reviewerKey": null, "attempts": 0,
+     "createdAt": "2026-08-30 09:00:00", "updatedAt": "2026-08-31 10:30:00"}
+  ]
+}
+```
 
 ---
 

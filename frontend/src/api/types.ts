@@ -461,13 +461,26 @@ export interface AutomationConfig {
   authors: string[]
   repoAllowlist: string[]
   maxConcurrentAutoReviews: number
-  // Dispatch conditions: a detected PR waits until these hold (or times out).
+  // Dispatch conditions: a detected PR waits until these hold, for as long as
+  // it stays open. maxPipelineSize caps how many PRs may wait at once.
   requireCiPass: boolean
   maxBehindBase: number
-  dispatchTimeoutHours: number
+  maxPipelineSize: number
   ignorePatterns: string[]
   defaultRule: AutomationDefaultRule
   rules: AutomationRule[]
+}
+
+/** One automation pipeline row (from GET /api/automation/dispatches). */
+export interface AutomationDispatchRow {
+  repo: string
+  prNumber: number
+  status: 'pending' | 'dispatched' | 'unidentified' | 'skipped' | 'failed'
+  detail: string | null
+  reviewerKey: string | null
+  attempts: number
+  createdAt: string
+  updatedAt: string
 }
 
 /** How the automation pipeline handled a PR (from automation_dispatches). */

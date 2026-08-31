@@ -5,7 +5,7 @@
   "maxConcurrentAutoReviews": 2,
   "requireCiPass": true,
   "maxBehindBase": 10,
-  "dispatchTimeoutHours": 24,
+  "maxPipelineSize": 1000,
   "ignorePatterns": ["*PB-000-index*", "*ED-000-index*"],
   "defaultRule": {
     "reviewerKey": "default",

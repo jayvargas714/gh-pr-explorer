@@ -14,7 +14,6 @@ loop never raises.
 import json
 import logging
 import time
-from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -79,19 +78,14 @@ def _get_pr_metadata(repo_full, pr_number):
 def _dispatch_blocker(config, queue_data, pr, owner, repo, pr_number):
     """The reason this PR cannot be reviewed yet, or None when all conditions hold.
 
-    Conditions: live PR data readable, not a draft, CI completed and passing
-    (when required; a PR with no checks at all passes), and the branch at most
-    maxBehindBase commits behind its base head.
+    Conditions: CI completed and passing (when required; a PR with no checks at
+    all passes) and the branch at most maxBehindBase commits behind its base
+    head. State/draft gating happens earlier in _process_one, before the PR is
+    placed on the board.
     """
     from backend.services.github_service import fetch_pr_behind_by
     from backend.services.pr_service import get_ci_status
 
-    if queue_data.get("state") is None:
-        # fetch_pr_queue_data returns all-None on error; don't let a transient
-        # failure look like "no draft flag, no CI" and dispatch blind.
-        return "PR status check failed"
-    if queue_data.get("isDraft"):
-        return "PR is a draft"
     if config.get("requireCiPass", True):
         ci = get_ci_status(queue_data.get("statusCheckRollup"))
         if ci in ("pending", "failure"):
@@ -107,15 +101,6 @@ def _dispatch_blocker(config, queue_data, pr, owner, repo, pr_number):
         if behind > max_behind:
             return f"{behind} commits behind base (max {max_behind})"
     return None
-
-
-def _row_age_hours(row):
-    """Hours since the candidate was first detected (SQLite UTC timestamp)."""
-    try:
-        created = datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    except (KeyError, TypeError, ValueError):
-        return 0.0
-    return (datetime.now(timezone.utc) - created).total_seconds() / 3600.0
 
 
 def _process_one(row, config):
@@ -156,14 +141,34 @@ def _process_one(row, config):
         _retry_or_fail(f"metadata fetch failed: {e}")
         return False
 
+    def _wait(reason):
+        """Keep the row pending (rows wait as long as the PR stays open), and
+        clear the attempt counter: a clean waiting evaluation proves the row is
+        healthy, so transient errors over a long wait can't add up to failed."""
+        dispatches.set_status(row["id"], "pending", detail=f"waiting: {reason}")
+        if row.get("attempts"):
+            dispatches.reset_attempts(row["id"])
+
     queue_data = fetch_pr_queue_data(owner, repo, pr_number)
     state = queue_data.get("state")
     if state and state.upper() != "OPEN":
         dispatches.set_status(row["id"], "skipped", detail=f"PR is {state}")
         return False
+    if state is None:
+        # fetch_pr_queue_data returns all-None on error; don't let a transient
+        # failure look like "no draft flag, no CI" and dispatch blind.
+        _wait("PR status check failed")
+        return False
 
-    # Queue + lane placement happens before the condition gates so a waiting PR
-    # is visible on the board (Auto lane, ⏳ badge) while its conditions settle.
+    # Drafts wait off the board: they stay pending (so the ready transition is
+    # caught) but are not queued or placed in the Auto lane until non-draft.
+    if queue_data.get("isDraft"):
+        _wait("PR is a draft")
+        return False
+
+    # Queue + lane placement happens before the remaining gates so a non-draft
+    # waiting PR is visible on the board (Auto lane, ⏳ badge) while its
+    # conditions settle.
     try:
         item = _ensure_queued_in_auto_lane(pr, repo_full, pr_number)
     except Exception as e:
@@ -172,14 +177,7 @@ def _process_one(row, config):
 
     blocker = _dispatch_blocker(config, queue_data, pr, owner, repo, pr_number)
     if blocker:
-        timeout_hours = config.get("dispatchTimeoutHours", 24)
-        if _row_age_hours(row) > timeout_hours:
-            dispatches.set_status(
-                row["id"], "skipped",
-                detail=f"conditions not met within {timeout_hours}h — last: {blocker}")
-            logger.info(f"Automation: gave up waiting on {repo_full}#{pr_number}: {blocker}")
-        else:
-            dispatches.set_status(row["id"], "pending", detail=f"waiting: {blocker}")
+        _wait(blocker)
         return False
 
     try:

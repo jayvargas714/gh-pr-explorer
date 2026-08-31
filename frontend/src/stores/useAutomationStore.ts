@@ -17,7 +17,7 @@ export const DEFAULT_AUTOMATION_CONFIG: AutomationConfig = {
   maxConcurrentAutoReviews: 2,
   requireCiPass: true,
   maxBehindBase: 10,
-  dispatchTimeoutHours: 24,
+  maxPipelineSize: 1000,
   ignorePatterns: [],
   defaultRule: { reviewerKey: 'default', autoVerdict: false, autoVerdictMode: 'verdict' },
   rules: [],

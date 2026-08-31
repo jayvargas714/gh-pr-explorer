@@ -38,7 +38,7 @@ def _valid_config(**overrides):
     return config
 
 
-def test_defaults_are_all_off():
+def test_defaults_are_all_off(settings_db):
     config = automation_config.get_config()
     assert config["scope"] == "off"
     assert config["authors"] == []
@@ -47,15 +47,16 @@ def test_defaults_are_all_off():
     assert config["defaultRule"]["reviewerKey"] == "default"
     assert config["requireCiPass"] is True
     assert config["maxBehindBase"] == 10
-    assert config["dispatchTimeoutHours"] == 24
+    assert config["maxPipelineSize"] == 1000
+    assert "dispatchTimeoutHours" not in config
 
 
 def test_validate_dispatch_condition_fields():
     validated = automation_config.validate_config(
-        _valid_config(requireCiPass=False, maxBehindBase=0, dispatchTimeoutHours=48), KEYS)
+        _valid_config(requireCiPass=False, maxBehindBase=0, maxPipelineSize=500), KEYS)
     assert validated["requireCiPass"] is False
     assert validated["maxBehindBase"] == 0
-    assert validated["dispatchTimeoutHours"] == 48
+    assert validated["maxPipelineSize"] == 500
 
 
 def test_validate_rejects_bad_dispatch_condition_values():
@@ -64,9 +65,9 @@ def test_validate_rejects_bad_dispatch_condition_values():
     with pytest.raises(ValueError):
         automation_config.validate_config(_valid_config(maxBehindBase="ten"), KEYS)
     with pytest.raises(ValueError):
-        automation_config.validate_config(_valid_config(dispatchTimeoutHours=0), KEYS)
+        automation_config.validate_config(_valid_config(maxPipelineSize=0), KEYS)
     with pytest.raises(ValueError):
-        automation_config.validate_config(_valid_config(dispatchTimeoutHours="soon"), KEYS)
+        automation_config.validate_config(_valid_config(maxPipelineSize="many"), KEYS)
 
 
 def test_validate_accepts_a_full_config():

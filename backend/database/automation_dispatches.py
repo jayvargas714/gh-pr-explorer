@@ -30,13 +30,43 @@ class AutomationDispatchesDB:
             return cursor.rowcount > 0
 
     def get_pending(self, limit: int) -> List[Dict[str, Any]]:
+        """Pending rows, least recently evaluated first.
+
+        Evaluation bumps updated_at (set_status / increment_attempts), so this
+        round-robins the pipeline: rows waiting on conditions indefinitely
+        cannot starve rows behind them out of the per-cycle window.
+        """
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT * FROM automation_dispatches WHERE status = 'pending' "
-                "ORDER BY id ASC LIMIT ?",
+                "ORDER BY updated_at ASC, id ASC LIMIT ?",
                 (limit,),
             )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def count_pending(self) -> int:
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) AS n FROM automation_dispatches WHERE status = 'pending'")
+            return cursor.fetchone()["n"]
+
+    def list_dispatches(self, statuses: Optional[List[str]] = None,
+                        limit: int = 200) -> List[Dict[str, Any]]:
+        """Rows for the pipeline view, most recently updated first."""
+        query = "SELECT * FROM automation_dispatches"
+        params: List[Any] = []
+        if statuses:
+            for status in statuses:
+                if status not in VALID_STATUSES:
+                    raise ValueError(f"Invalid dispatch status: {status}")
+            query += f" WHERE status IN ({','.join('?' * len(statuses))})"
+            params.extend(statuses)
+        query += " ORDER BY updated_at DESC, id DESC LIMIT ?"
+        params.append(limit)
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
 
     def get_by_pr(self, repo: str, pr_number: int) -> Optional[Dict[str, Any]]:
@@ -84,6 +114,28 @@ class AutomationDispatchesDB:
                 WHERE id = ?
                 """,
                 (status, outcome_json, reviewer_key, detail, dispatch_id),
+            )
+
+    def requeue(self, dispatch_id: int, detail: Optional[str] = None) -> None:
+        """Put a terminal row back into the pipeline: pending, attempts cleared,
+        detail replaced (not COALESCEd — the old failure text must not linger)."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE automation_dispatches "
+                "SET status = 'pending', attempts = 0, detail = ?, "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (detail, dispatch_id),
+            )
+
+    def reset_attempts(self, dispatch_id: int) -> None:
+        """Clear the attempt counter after a clean evaluation, so transient
+        errors spread over a long wait never add up to a permanent failure."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE automation_dispatches SET attempts = 0 WHERE id = ?",
+                (dispatch_id,),
             )
 
     def increment_attempts(self, dispatch_id: int) -> int:

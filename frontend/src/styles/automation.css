@@ -395,3 +395,22 @@
   align-items: center;
   gap: 0.6rem;
 }
+
+.mx-automation__pipeline-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+.mx-automation__pipeline-detail {
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mx-automation__pipeline-error {
+  color: var(--mx-color-error, #ff5555);
+  font-size: 0.85rem;
+}

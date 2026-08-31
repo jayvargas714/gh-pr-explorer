@@ -21,7 +21,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "maxConcurrentAutoReviews": 2,
     "requireCiPass": True,             # CI must be completed and passing before dispatch
     "maxBehindBase": 10,               # max commits the PR branch may be behind its base head
-    "dispatchTimeoutHours": 24,        # give up (skip) after waiting this long for conditions
+    "maxPipelineSize": 1000,           # max pending pipeline rows; new candidates are refused at the cap
     "ignorePatterns": [],              # globs stripped before classification
     "defaultRule": {"reviewerKey": "default", "autoVerdict": False, "autoVerdictMode": "verdict"},
     "rules": [],                       # ordered: [{name, patterns, reviewerKey, autoVerdict, autoVerdictMode}]
@@ -121,12 +121,12 @@ def validate_config(payload: Dict[str, Any], valid_reviewer_keys: Iterable[str])
     config["maxBehindBase"] = max_behind
 
     try:
-        timeout_hours = int(payload.get("dispatchTimeoutHours", DEFAULT_CONFIG["dispatchTimeoutHours"]))
+        pipeline_size = int(payload.get("maxPipelineSize", DEFAULT_CONFIG["maxPipelineSize"]))
     except (TypeError, ValueError):
-        raise ValueError("dispatchTimeoutHours must be an integer")
-    if timeout_hours < 1:
-        raise ValueError("dispatchTimeoutHours must be at least 1")
-    config["dispatchTimeoutHours"] = timeout_hours
+        raise ValueError("maxPipelineSize must be an integer")
+    if pipeline_size < 1:
+        raise ValueError("maxPipelineSize must be at least 1")
+    config["maxPipelineSize"] = pipeline_size
 
     config["defaultRule"] = _validate_rule(
         payload.get("defaultRule", DEFAULT_CONFIG["defaultRule"]),

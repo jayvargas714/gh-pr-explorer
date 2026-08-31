@@ -1,12 +1,48 @@
-"""Automation routes: reviewer registry CRUD + automation config."""
+"""Automation routes: reviewer registry CRUD + automation config + pipeline view."""
 
 from flask import Blueprint, jsonify, request
 
-from backend.database import get_reviewers_db
+from backend.database import get_automation_dispatches_db, get_reviewers_db
+from backend.database.automation_dispatches import VALID_STATUSES
 from backend.routes import error_response
 from backend.services import automation_config
 
 automation_bp = Blueprint("automation", __name__)
+
+
+@automation_bp.route("/api/automation/dispatches", methods=["GET"])
+def list_automation_dispatches():
+    """The pipeline view: dispatch rows, most recently updated first.
+
+    Query params: status (comma-separated subset of the dispatch statuses,
+    default all) and limit (default 200).
+    """
+    status_param = (request.args.get("status") or "").strip()
+    statuses = [s.strip() for s in status_param.split(",") if s.strip()] or None
+    if statuses:
+        unknown = [s for s in statuses if s not in VALID_STATUSES]
+        if unknown:
+            return jsonify({"error": f"Unknown status: {', '.join(unknown)}"}), 400
+    limit = request.args.get("limit", default=200, type=int)
+
+    try:
+        rows = get_automation_dispatches_db().list_dispatches(statuses=statuses, limit=limit)
+    except Exception as e:
+        return error_response("Internal server error", 500, f"Error listing automation dispatches: {e}")
+
+    return jsonify({"dispatches": [
+        {
+            "repo": row["repo"],
+            "prNumber": row["pr_number"],
+            "status": row["status"],
+            "detail": row["detail"],
+            "reviewerKey": row["reviewer_key"],
+            "attempts": row["attempts"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
+        for row in rows
+    ]})
 
 
 @automation_bp.route("/api/automation/config", methods=["GET"])

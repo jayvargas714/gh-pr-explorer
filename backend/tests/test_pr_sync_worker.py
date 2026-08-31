@@ -201,6 +201,21 @@ def test_incremental_skips_closed_but_records_draft_prs(store, dispatches, monke
     assert dispatches.get_by_pr("acme/widgets", 5) is None
 
 
+def test_incremental_respects_pipeline_cap(store, dispatches, monkeypatch):
+    """At maxPipelineSize pending rows, new candidates are refused (protection
+    over completeness — the backfill script can enroll stragglers later)."""
+    from backend.services import automation_config
+    monkeypatch.setattr(automation_config, "get_config",
+                        lambda: _automation_cfg(maxPipelineSize=2))
+    _synced_repo(store)
+    dispatches.record_candidate("acme/widgets", 90)
+    dispatches.record_candidate("acme/widgets", 91)
+
+    _run_incremental(store, [2], {2: _pr(2)})
+
+    assert dispatches.get_by_pr("acme/widgets", 2) is None
+
+
 def test_candidate_hook_failure_does_not_break_sync(store, monkeypatch):
     from backend.services import automation_config
     def boom():

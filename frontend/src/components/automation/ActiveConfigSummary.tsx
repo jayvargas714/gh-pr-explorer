@@ -30,7 +30,7 @@ export function ActiveConfigSummary() {
     config.requireCiPass ? 'CI must pass' : 'CI not required',
     `≤ ${config.maxBehindBase} behind base`,
     'no drafts',
-    `give up after ${config.dispatchTimeoutHours}h`,
+    `pipeline cap ${config.maxPipelineSize}`,
   ].join(' · ')
 
   return (
