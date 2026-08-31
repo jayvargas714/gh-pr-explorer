@@ -16,7 +16,7 @@ VALID_EVENTS = (
 )
 VALID_REASONS = (
     "no_output", "nonzero_exit", "spawn_failed", "attempts_exhausted", "cancelled",
-    "auto_suppressed", "auto_skipped", "post_failed",
+    "stale_commits", "auto_suppressed", "auto_skipped", "post_failed",
 )
 
 # Columns callers may set through log_event(**fields), in insert order.

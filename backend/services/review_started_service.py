@@ -1,9 +1,11 @@
-"""Post a "review underway" comment to a PR when a code review starts.
+"""Post review lifecycle comments to a PR.
 
-This is a plain PR conversation comment (the issues comments API), distinct
-from the formal review verdict posted by verdict_service once the review has
-produced findings. It exists so anyone watching the PR knows a review is
-running before any results land.
+Plain PR conversation comments (the issues comments API), distinct from the
+formal review verdict posted by verdict_service once the review has produced
+findings: a "review underway" comment when a review starts, and a "review
+stopped" comment when a running review is cancelled because new commits made
+it stale. They exist so anyone watching the PR knows what the reviewer is
+doing before any results land.
 """
 
 import logging
@@ -33,9 +35,8 @@ def _build_body(is_followup, reviewer_type, auto_started):
     )
 
 
-def post_review_started_comment(owner, repo, pr_number, is_followup=False,
-                                reviewer_type="default", auto_started=False):
-    """Comment on a PR that a review is underway.
+def _post_comment(owner, repo, pr_number, body, kind):
+    """POST one issue comment, absorbing any failure.
 
     Controlled by config.json's "post_review_started_comment" (default true).
     Never raises: a failed comment must not fail the review it announces.
@@ -46,7 +47,6 @@ def post_review_started_comment(owner, repo, pr_number, is_followup=False,
     if not get_config().get("post_review_started_comment", True):
         return False
 
-    body = _build_body(is_followup, reviewer_type, auto_started)
     try:
         run_gh_command(
             [
@@ -58,8 +58,35 @@ def post_review_started_comment(owner, repo, pr_number, is_followup=False,
             max_retries=1,
         )
     except Exception as e:
-        logger.warning(f"Could not post review-started comment on {owner}/{repo}#{pr_number}: {e}")
+        logger.warning(f"Could not post {kind} comment on {owner}/{repo}#{pr_number}: {e}")
         return False
 
-    logger.info(f"Posted review-started comment on {owner}/{repo}#{pr_number}")
+    logger.info(f"Posted {kind} comment on {owner}/{repo}#{pr_number}")
     return True
+
+
+def post_review_started_comment(owner, repo, pr_number, is_followup=False,
+                                reviewer_type="default", auto_started=False):
+    """Comment on a PR that a review is underway."""
+    body = _build_body(is_followup, reviewer_type, auto_started)
+    return _post_comment(owner, repo, pr_number, body, "review-started")
+
+
+def post_review_stopped_stale_comment(owner, repo, pr_number, *, old_sha, new_sha,
+                                      reviewer_type="default"):
+    """Comment on a PR that its running review was stopped because it went stale.
+
+    Posted just before the replacement review starts, so the follow-on
+    "review started" comment explains the restart half of the story.
+    """
+    stopped = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    body = (
+        "🤖 **Code review stopped — new commits**\n\n"
+        "The review running on this PR was stopped by GitHub PR Explorer because "
+        "new commits were pushed while it was underway, making its findings stale "
+        f"(`{old_sha[:8]}` → `{new_sha[:8]}`). "
+        "A new review covering the latest commits is being started.\n\n"
+        f"- Reviewer: `{reviewer_type}`\n"
+        f"- Stopped: {stopped}\n"
+    )
+    return _post_comment(owner, repo, pr_number, body, "review-stopped")

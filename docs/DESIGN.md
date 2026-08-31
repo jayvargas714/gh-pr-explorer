@@ -1472,9 +1472,21 @@ When a review starts, GitHub PR Explorer posts a plain conversation comment to t
 - **What**: an issue comment (`POST repos/{owner}/{repo}/issues/{pr_number}/comments`) — deliberately *not* a formal PR review, which is reserved for the verdict posted by `verdict_service` once findings exist. The body names the reviewer agent and the start time, and its lead line varies for normal, follow-up, and auto-started reviews.
 - **Failure handling**: the post is wrapped so that no exception escapes — a comment failure is logged and the review continues. Announcing a review must never be able to stop one.
 - **Lifecycle**: the comment is posted once and left in place; it is not edited or deleted when the review completes. A PR that goes through several follow-up rounds therefore accumulates one such comment per round.
-- **Config**: set `post_review_started_comment` to `false` in `config.json` to suppress the comment (default `true`).
+- **Config**: set `post_review_started_comment` to `false` in `config.json` to suppress the comment (default `true`). The same flag gates the "review stopped" comment described under Stale-Review Cancellation & Restart below.
 
 No comment is posted when the review is rejected as a duplicate (409) or when the subprocess fails to spawn (500).
+
+#### Stale-Review Cancellation & Restart
+
+A running review examines the PR as it stood when the review spawned; commits pushed mid-run make its findings describe code that no longer exists. A dedicated background watcher (`backend/services/stale_review_watcher.py`, 60s interval, started in `app.py` alongside the other watcher threads) stops such a review and restarts it against the new head:
+
+1. **Baseline**: `begin_review()` snapshots the PR head SHA into `head_sha_at_start` on the `active_reviews` entry just before spawning the subprocess. Fetching before the spawn keeps the baseline conservative — a commit racing the spawn triggers a restart rather than slipping through. If the fetch fails, the run simply isn't stale-watched (same "unknown baseline, leave it to the human" convention as the auto follow-up watcher). Retry attempts of the same run keep the original baseline.
+2. **Detection**: each cycle snapshots the running entries under `reviews_lock`, then compares each baseline against the live head via `fetch_pr_state_and_sha` (no gh calls while holding the lock). Unchanged heads, failed fetches, and non-open PRs are skipped. A per-key `_handled_shas` guard keeps a failed restart from being retried every cycle; a newer SHA retries.
+3. **Stop**: the review is terminated through `cancel_active_review()` in `review_service.py` — the same terminate-and-remove path the `DELETE /api/reviews/...` route uses — with `require_running=True`: if the review finished between the snapshot and the cancel, its saved result stands and the follow-up decision is left to the auto follow-up watcher. The event log records `cancelled` with reason `stale_commits` and a `new commits <old> -> <new>` detail on the run.
+4. **Notify**: `post_review_stopped_stale_comment()` (in `review_started_service.py`) posts a "Code review stopped — new commits" PR conversation comment naming both short SHAs and the reviewer agent. It shares the `post_review_started_comment` config flag and, like all lifecycle comments, never raises.
+5. **Restart**: the replacement goes through `begin_review()` with the original spawn parameters (reviewer agent, follow-up flag, PR title/author, `auto_started`), minting a new `run_id`, re-snapshotting the baseline to the new head, and posting the usual "review started" comment — completing the stop/restart pair of comments on the PR.
+
+Division of labor with the auto follow-up watcher: `auto_review_watcher` reacts to commits that arrive *after* a review finished (armed PRs only) and explicitly skips running reviews; the stale watcher reacts to commits that arrive *while* a review runs (any review, manual or auto-started). Neither can double-start the other's review — `begin_review()` rejects duplicate runs with 409.
 
 #### Split Review / Audit Triggers
 
@@ -1874,7 +1886,7 @@ Both vocabularies are closed sets. Recorders never invent a value.
 | `failed` | Attempt failed | `reason`, `exit_code`, `detail` |
 | `retry_scheduled` | Backoff armed before the next attempt | `detail` (delay) |
 | `gave_up` | Attempt limit reached; review recorded as failed | `attempt`, `max_attempts` |
-| `cancelled` | User cancelled the review | — |
+| `cancelled` | The review was cancelled — by the user, or automatically because new commits made it stale | `reason`, `detail` |
 | `verdict_posted` | A verdict for this run's review reached GitHub | `review_id`, `auto_started`, `detail` |
 | `verdict_not_posted` | An auto verdict was evaluated but nothing was posted | `review_id`, `reason`, `detail` |
 
@@ -1885,6 +1897,7 @@ Both vocabularies are closed sets. Recorders never invent a value.
 | `spawn_failed` | The subprocess could not be started at all |
 | `attempts_exhausted` | Set on the `gave_up` event |
 | `cancelled` | User-initiated termination |
+| `stale_commits` | The stale-review watcher stopped a running review because new commits landed; `detail` carries the old and new short SHAs |
 | `auto_suppressed` | Criteria were met but auto-approve is off, so nothing was posted |
 | `auto_skipped` | The review was not eligible (PR closed, no usable content, non-completed status) |
 | `post_failed` | A verdict was chosen but GitHub rejected the post |
@@ -1928,7 +1941,8 @@ Call sites:
 | `check_review_status()` | `completed`, `failed`, `gave_up` |
 | `_schedule_review_retry()` | `retry_scheduled` |
 | `_respawn_review()` | `started` (attempt N) |
-| `DELETE /api/reviews/<owner>/<repo>/<pr>` | `cancelled` |
+| `DELETE /api/reviews/<owner>/<repo>/<pr>` (via `cancel_active_review()`) | `cancelled` |
+| `scan_for_stale_reviews()` (via `cancel_active_review()`) | `cancelled` (reason `stale_commits`) |
 | `maybe_post_auto_verdict()` (its inner `record()`) | `verdict_posted`, `verdict_not_posted` |
 | `POST /api/repos/<owner>/<repo>/prs/<pr>/verdict` | `verdict_posted` (manual, only when the request carries a `review_id`) |
 
@@ -3923,7 +3937,7 @@ and validated server-side; see those feature sections for their shapes.
 | `review_sample_limit` | integer | 250 | Maximum PRs to sample for review statistics and lifecycle metrics |
 | `review_section_names` | object | `{"critical": "Critical Issues", "major": "Major Concerns", "minor": "Minor Issues"}` | Custom display names for review sections |
 | `reviews_dir` | string | `~/code-reviews` | Directory where Claude code reviews (`.md`/`.json`) are written. Supports `~` and `$VAR` expansion so it stays machine-agnostic. Falls back to `~/code-reviews` if omitted. |
-| `post_review_started_comment` | boolean | true | Post a "review underway" comment to the PR when a code review starts. Set to `false` to suppress the comment entirely. |
+| `post_review_started_comment` | boolean | true | Post review lifecycle comments to the PR: the "review underway" comment when a code review starts, and the "review stopped — new commits" comment when the stale-review watcher cancels a running review. Set to `false` to suppress both. |
 | `review_max_attempts` | integer | 3 | Total review attempts (including the first) before a review is recorded as failed. Clamped to 1–5; `1` disables retries. |
 | `review_retry_delay_seconds` | number | 30 | Backoff before each retry attempt. Gives a transient API or GitHub outage time to clear. |
 | `review_log_retention_days` | integer | 90 | How long review lifecycle events are kept. Purged once on startup; `0` disables purging. |

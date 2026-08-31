@@ -20,6 +20,7 @@ REASON_NONZERO_EXIT = "nonzero_exit"
 REASON_SPAWN_FAILED = "spawn_failed"
 REASON_ATTEMPTS_EXHAUSTED = "attempts_exhausted"
 REASON_CANCELLED = "cancelled"
+REASON_STALE_COMMITS = "stale_commits"
 REASON_AUTO_SUPPRESSED = "auto_suppressed"
 REASON_AUTO_SKIPPED = "auto_skipped"
 REASON_POST_FAILED = "post_failed"
@@ -100,12 +101,15 @@ def record_gave_up(run_id, repo, pr_number, *, attempt, max_attempts):
     )
 
 
-def record_cancelled(run_id, repo, pr_number, *, attempt=None):
-    """The user cancelled the review."""
+def record_cancelled(run_id, repo, pr_number, *, attempt=None,
+                     reason=REASON_CANCELLED, detail=None):
+    """The review was cancelled — by the user, or automatically because new
+    commits made the running attempt stale (REASON_STALE_COMMITS)."""
     _record(
         "cancelled", run_id, repo, pr_number,
         attempt=attempt,
-        reason=REASON_CANCELLED,
+        reason=reason,
+        detail=detail,
     )
 
 

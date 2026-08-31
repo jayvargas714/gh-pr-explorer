@@ -19,6 +19,7 @@ from backend.services.auto_review_watcher import auto_review_watcher_loop
 from backend.services.auto_verdict_watcher import auto_verdict_watcher_loop
 from backend.services.automation_dispatch_worker import automation_dispatch_worker_loop
 from backend.services.pr_sync_worker import pr_sync_worker_loop
+from backend.services.stale_review_watcher import stale_review_watcher_loop
 
 app = create_app()
 
@@ -37,6 +38,8 @@ if __name__ == "__main__":
         threading.Thread(target=auto_verdict_watcher_loop, daemon=True).start()
         # Watch armed PRs for new commits so follow-up reviews start themselves.
         threading.Thread(target=auto_review_watcher_loop, daemon=True).start()
+        # Stop and restart running reviews that new commits made stale.
+        threading.Thread(target=stale_review_watcher_loop, daemon=True).start()
         # Keep the DB-backed PR list fresh (see docs/specs/2026-08-28-pr-sync-db-design.md).
         if get_pr_sync_config()["enabled"]:
             threading.Thread(target=pr_sync_worker_loop, daemon=True).start()

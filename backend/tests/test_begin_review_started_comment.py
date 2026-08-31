@@ -17,6 +17,13 @@ PR_URL = f"https://github.com/{OWNER}/{REPO}/pull/{PR}"
 
 
 @pytest.fixture(autouse=True)
+def no_gh_sha_fetch(monkeypatch):
+    """begin_review snapshots the head SHA at start; never let tests hit gh."""
+    monkeypatch.setattr(review_service, "fetch_pr_head_sha",
+                        lambda owner, repo, pr_number: "feed0000baseline")
+
+
+@pytest.fixture(autouse=True)
 def clean_active_reviews():
     """Keep the process-wide active_reviews registry isolated per test."""
     with reviews_lock:
@@ -90,3 +97,31 @@ def test_duplicate_review_announces_nothing(monkeypatch, posted):
 
     assert status == 409
     assert posted == []
+
+
+def test_successful_start_records_head_sha_baseline(monkeypatch, posted):
+    stub_spawn(monkeypatch, object(), "/tmp/review.md")
+    monkeypatch.setattr(review_service, "fetch_pr_head_sha",
+                        lambda owner, repo, pr_number: "abc123def456")
+
+    payload, status = review_service.begin_review(
+        OWNER, REPO, PR, PR_URL, reviews_db=None
+    )
+
+    assert status == 201
+    with reviews_lock:
+        assert active_reviews[KEY]["head_sha_at_start"] == "abc123def456"
+
+
+def test_failed_sha_fetch_records_no_baseline(monkeypatch, posted):
+    stub_spawn(monkeypatch, object(), "/tmp/review.md")
+    monkeypatch.setattr(review_service, "fetch_pr_head_sha",
+                        lambda owner, repo, pr_number: "")
+
+    payload, status = review_service.begin_review(
+        OWNER, REPO, PR, PR_URL, reviews_db=None
+    )
+
+    assert status == 201
+    with reviews_lock:
+        assert active_reviews[KEY]["head_sha_at_start"] is None

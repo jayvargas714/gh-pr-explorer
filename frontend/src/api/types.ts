@@ -1189,6 +1189,7 @@ export type ReviewLogReason =
   | 'spawn_failed'
   | 'attempts_exhausted'
   | 'cancelled'
+  | 'stale_commits'
   | 'auto_suppressed'
   | 'auto_skipped'
   | 'post_failed'

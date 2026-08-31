@@ -1,6 +1,5 @@
 """Code review routes: start, cancel, status, list active, post inline comments, check new commits."""
 
-import subprocess
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
@@ -8,8 +7,8 @@ from flask import Blueprint, jsonify, request
 from backend.extensions import logger, active_reviews, reviews_lock
 from backend.database import get_reviews_db
 from backend.services.github_service import fetch_pr_head_sha
-from backend.services.review_service import save_review_to_db, check_review_status, begin_review, valid_reviewer_types
-from backend.services.review_event_log import record_cancelled, record_verdict_posted
+from backend.services.review_service import save_review_to_db, check_review_status, begin_review, cancel_active_review, valid_reviewer_types
+from backend.services.review_event_log import record_verdict_posted
 from backend.services.inline_comments_service import post_inline_comments, preview_section_issues
 from backend.services.verdict_service import post_verdict
 from backend.routes import error_response
@@ -106,36 +105,12 @@ def cancel_review(owner, repo, pr_number):
     key = f"{owner}/{repo}/{pr_number}"
     logger.info(f"Received cancel request for review: {key}")
 
-    with reviews_lock:
-        if key not in active_reviews:
-            logger.warning(f"Cancel request for non-existent review: {key}")
-            return jsonify({"error": "Review not found"}), 404
-
-        review = active_reviews[key]
-        process = review.get("process")
-
-        if process and review["status"] == "running":
-            try:
-                logger.info(f"Terminating review process (PID {process.pid}) for {key}")
-                process.terminate()
-                try:
-                    process.wait(timeout=2)
-                    logger.info(f"Review process terminated gracefully for {key}")
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    logger.warning(f"Review process killed (did not terminate gracefully) for {key}")
-                review["status"] = "cancelled"
-            except Exception as e:
-                return error_response("Failed to terminate review process", 500, f"Failed to terminate review process for {key}: {e}")
-
-        if review.get("run_id"):
-            record_cancelled(
-                review["run_id"], f"{owner}/{repo}", pr_number,
-                attempt=review.get("attempt", 1),
-            )
-
-        del active_reviews[key]
-        logger.info(f"Review cancelled and removed: {key}")
+    result = cancel_active_review(key)
+    if result == "not_found":
+        logger.warning(f"Cancel request for non-existent review: {key}")
+        return jsonify({"error": "Review not found"}), 404
+    if result == "error":
+        return error_response("Failed to terminate review process", 500)
 
     return jsonify({"message": "Review cancelled", "key": key})
 

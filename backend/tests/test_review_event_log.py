@@ -98,11 +98,21 @@ def test_record_cancelled(events_db):
     assert row["reason"] == "cancelled"
 
 
+def test_record_cancelled_with_stale_commits_reason_and_detail(events_db):
+    rel.record_cancelled(RUN, REPO, PR, attempt=1,
+                         reason=rel.REASON_STALE_COMMITS,
+                         detail="new commits aaaa11111 -> bbbb22222")
+    row = only_event(events_db)
+    assert row["event"] == "cancelled"
+    assert row["reason"] == "stale_commits"
+    assert "bbbb22222" in row["detail"]
+
+
 def test_every_reason_constant_is_in_the_db_vocabulary():
     from backend.database.review_events import VALID_REASONS
     for constant in (rel.REASON_NO_OUTPUT, rel.REASON_NONZERO_EXIT,
                      rel.REASON_SPAWN_FAILED, rel.REASON_ATTEMPTS_EXHAUSTED,
-                     rel.REASON_CANCELLED):
+                     rel.REASON_CANCELLED, rel.REASON_STALE_COMMITS):
         assert constant in VALID_REASONS
 
 

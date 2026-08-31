@@ -117,3 +117,42 @@ def test_gh_failure_is_swallowed(monkeypatch):
 
     assert svc.post_review_started_comment(OWNER, REPO, PR) is False
     assert len(recorder.calls) == 1
+
+
+def test_stopped_stale_comment_reports_shas_and_reviewer(monkeypatch, gh):
+    set_flag(monkeypatch, True)
+
+    assert svc.post_review_stopped_stale_comment(
+        OWNER, REPO, PR,
+        old_sha="aaaa1111222233334444", new_sha="bbbb5555666677778888",
+        reviewer_type="security",
+    ) is True
+
+    args = gh.calls[0]["args"]
+    assert args[1] == f"repos/{OWNER}/{REPO}/issues/{PR}/comments"
+    body = gh.body
+    assert "Code review stopped" in body
+    assert "`aaaa1111`" in body
+    assert "`bbbb5555`" in body
+    assert "`security`" in body
+    assert "new review" in body.lower()
+
+
+def test_stopped_stale_comment_respects_disabled_flag(monkeypatch, gh):
+    set_flag(monkeypatch, False)
+
+    assert svc.post_review_stopped_stale_comment(
+        OWNER, REPO, PR, old_sha="aaaa1111", new_sha="bbbb5555",
+    ) is False
+    assert gh.calls == []
+
+
+def test_stopped_stale_comment_swallows_gh_failure(monkeypatch):
+    set_flag(monkeypatch, True)
+    recorder = GhRecorder(error=RuntimeError("gh command failed: 403"))
+    monkeypatch.setattr(svc, "run_gh_command", recorder)
+
+    assert svc.post_review_stopped_stale_comment(
+        OWNER, REPO, PR, old_sha="aaaa1111", new_sha="bbbb5555",
+    ) is False
+    assert len(recorder.calls) == 1

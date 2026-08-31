@@ -13,11 +13,13 @@ from backend.services.github_service import fetch_pr_head_sha, fetch_pr_state
 from backend.services.review_started_service import post_review_started_comment
 from backend.services.review_event_log import (
     new_run_id,
+    record_cancelled,
     record_completed,
     record_failed,
     record_gave_up,
     record_retry_scheduled,
     record_started,
+    REASON_CANCELLED,
     REASON_NO_OUTPUT,
     REASON_NONZERO_EXIT,
     REASON_SPAWN_FAILED,
@@ -500,6 +502,61 @@ def _spawn_auto_verdict(key, review_id):
 VALID_REVIEWER_TYPES = ("default", "pb", "ed")
 
 
+def cancel_active_review(key, *, reason=REASON_CANCELLED, detail=None,
+                         require_running=False):
+    """Terminate a review's subprocess and remove it from active_reviews.
+
+    Shared by the DELETE route (user cancel) and the stale-review watcher
+    (automatic cancel when new commits invalidate a running attempt).
+
+    Args:
+        require_running: only cancel entries whose status is "running" — the
+            watcher must not delete a finished entry it raced.
+
+    Returns:
+        str: "cancelled" on success, "not_found" if no entry exists,
+        "not_running" if require_running and the entry already finished,
+        "error" if the process would not terminate (entry kept).
+    """
+    from backend.extensions import active_reviews, reviews_lock
+
+    with reviews_lock:
+        if key not in active_reviews:
+            return "not_found"
+        review = active_reviews[key]
+        if require_running and review.get("status") != "running":
+            return "not_running"
+
+        process = review.get("process")
+        if process and review.get("status") == "running":
+            try:
+                logger.info(f"Terminating review process (PID {process.pid}) for {key}")
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                    logger.info(f"Review process terminated gracefully for {key}")
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    logger.warning(f"Review process killed (did not terminate gracefully) for {key}")
+                review["status"] = "cancelled"
+            except Exception as e:
+                logger.error(f"Failed to terminate review process for {key}: {e}")
+                return "error"
+
+        if review.get("run_id"):
+            owner, repo, pr_number = key.split("/")
+            record_cancelled(
+                review["run_id"], f"{owner}/{repo}", int(pr_number),
+                attempt=review.get("attempt", 1),
+                reason=reason,
+                detail=detail,
+            )
+
+        del active_reviews[key]
+        logger.info(f"Review cancelled and removed: {key}")
+        return "cancelled"
+
+
 def valid_reviewer_types():
     """Reviewer keys from the registry (falls back to the builtin tuple)."""
     try:
@@ -578,6 +635,13 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
             logger.warning(f"No previous review found for follow-up, proceeding as normal review")
             is_followup = False
 
+    # Snapshot the head SHA before spawning: the stale-review watcher compares
+    # this baseline against the live head to stop and restart a review that new
+    # commits invalidated. Fetching before the spawn keeps the baseline
+    # conservative — a commit racing the spawn triggers a restart rather than
+    # slipping through. No SHA means no baseline: that run isn't stale-watched.
+    head_sha_at_start = fetch_pr_head_sha(owner, repo, pr_number) or None
+
     process, result, is_followup = start_review_process(
         pr_url, owner, repo, pr_number,
         is_followup=is_followup,
@@ -618,6 +682,7 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
             "pr_author": pr_author,
             "reviewer_type": reviewer_type,
             "auto_started": auto_started,
+            "head_sha_at_start": head_sha_at_start,
             "spawn": spawn_args,
             "attempt": 1,
             "retry_at": None,

@@ -30,6 +30,7 @@ const REASON_LABELS: Record<string, string> = {
   spawn_failed: 'could not start the CLI',
   attempts_exhausted: 'all attempts used',
   cancelled: 'cancelled by user',
+  stale_commits: 'stopped: new commits made the review stale',
   auto_suppressed: 'suppressed by criteria',
   auto_skipped: 'not eligible',
   post_failed: 'GitHub rejected the post',
