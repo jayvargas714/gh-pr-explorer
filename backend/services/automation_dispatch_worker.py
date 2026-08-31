@@ -17,7 +17,7 @@ import time
 
 logger = logging.getLogger(__name__)
 
-WATCH_INTERVAL_SECONDS = 30
+WATCH_INTERVAL_SECONDS = 60
 MAX_ATTEMPTS = 3
 # Rows gate-evaluated per cycle. Larger than the concurrency budget so a PR
 # stuck waiting on its conditions never starves ready PRs queued behind it.
@@ -103,11 +103,26 @@ def _dispatch_blocker(config, queue_data, pr, owner, repo, pr_number):
     return None
 
 
-def _process_one(row, config):
+def _repo_open_prs(cache, repo_full):
+    """Per-cycle cache of one batched open-PR fetch per repo.
+
+    The gate data for every pending row in a repo comes from a single
+    `gh pr list` call — per-row `gh pr view` polling burned ~half the shared
+    GraphQL rate limit on its own. None means the fetch failed (unknown, not
+    "no open PRs").
+    """
+    if repo_full not in cache:
+        from backend.services.github_service import fetch_open_prs_queue_data
+        owner, repo = repo_full.split("/", 1)
+        cache[repo_full] = fetch_open_prs_queue_data(owner, repo)
+    return cache[repo_full]
+
+
+def _process_one(row, config, batch_cache):
     """Handle one pending dispatch row. Returns True when a review was started."""
     from backend.database import get_automation_dispatches_db, get_queue_db, get_reviews_db
     from backend.services.automation_service import classify_files
-    from backend.services.github_service import fetch_pr_files, fetch_pr_queue_data
+    from backend.services.github_service import fetch_pr_files
     from backend.services.review_service import begin_review
 
     dispatches = get_automation_dispatches_db()
@@ -149,15 +164,17 @@ def _process_one(row, config):
         if row.get("attempts"):
             dispatches.reset_attempts(row["id"])
 
-    queue_data = fetch_pr_queue_data(owner, repo, pr_number)
-    state = queue_data.get("state")
-    if state and state.upper() != "OPEN":
-        dispatches.set_status(row["id"], "skipped", detail=f"PR is {state}")
-        return False
-    if state is None:
-        # fetch_pr_queue_data returns all-None on error; don't let a transient
-        # failure look like "no draft flag, no CI" and dispatch blind.
+    open_prs = _repo_open_prs(batch_cache, repo_full)
+    if open_prs is None:
+        # Batch fetch failed; don't let a transient failure look like
+        # "no draft flag, no CI" and dispatch blind — or worse, like an empty
+        # repo and mass-skip the pipeline.
         _wait("PR status check failed")
+        return False
+    queue_data = open_prs.get(pr_number)
+    if queue_data is None:
+        # Absent from a successful open-PR listing: closed or merged.
+        dispatches.set_status(row["id"], "skipped", detail="PR is not open (closed or merged)")
         return False
 
     # Drafts wait off the board: they stay pending (so the ready transition is
@@ -247,12 +264,14 @@ def process_pending_dispatches():
 
     # Evaluate more rows than the budget: waiting rows return without starting
     # a review, so a ready row behind them still dispatches this cycle.
+    # batch_cache scopes the one-fetch-per-repo gate data to this cycle.
     started = 0
+    batch_cache = {}
     for row in get_automation_dispatches_db().get_pending(max(budget, EVAL_LIMIT)):
         if started >= budget:
             break
         try:
-            if _process_one(row, config):
+            if _process_one(row, config, batch_cache):
                 started += 1
         except Exception:
             logger.exception(f"Automation dispatch failed for {row['repo']}#{row['pr_number']}")

@@ -285,3 +285,39 @@ def fetch_pr_queue_data(owner, repo, pr_number):
     except RuntimeError as e:
         logger.warning(f"Failed to fetch PR queue data for {owner}/{repo}#{pr_number}: {e}")
         return empty
+
+
+def fetch_open_prs_queue_data(owner, repo, limit=1000):
+    """Dispatch-gate data (state/draft/CI) for every open PR, in ONE gh call.
+
+    The automation dispatch worker used to run fetch_pr_queue_data per pending
+    row — at 20 rows per 30s cycle that alone burned ~half the shared GraphQL
+    rate limit. One `gh pr list` covers the whole repo per cycle instead.
+
+    Returns:
+        dict mapping PR number -> {state, isDraft, statusCheckRollup}, or None
+        when the fetch failed. Callers MUST treat None as "unknown", never as
+        "no open PRs" — mistaking an outage for an empty repo would mass-skip
+        the pipeline. A PR absent from a successful result is not open.
+    """
+    try:
+        output = run_gh_command([
+            "pr", "list", "-R", f"{owner}/{repo}",
+            "--state", "open", "--limit", str(limit),
+            "--json", "number,state,isDraft,statusCheckRollup",
+        ])
+        rows = parse_json_output(output)
+    except RuntimeError as e:
+        logger.warning(f"Failed to batch-fetch open PR queue data for {owner}/{repo}: {e}")
+        return None
+    if not isinstance(rows, list):
+        return None
+    return {
+        row["number"]: {
+            "state": (row.get("state") or "").upper() or "OPEN",
+            "isDraft": bool(row.get("isDraft")),
+            "statusCheckRollup": row.get("statusCheckRollup") or None,
+        }
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("number"), int)
+    }

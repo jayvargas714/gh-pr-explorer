@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from backend.services.github_service import (
-    PR_LIST_JSON_FIELDS, fetch_full_pr, fetch_pr_numbers,
+    PR_LIST_JSON_FIELDS, fetch_full_pr, fetch_open_prs_queue_data, fetch_pr_numbers,
 )
 from backend.filters.pr_filter_builder import PRFilterParams, PRFilterBuilder
 
@@ -40,6 +40,32 @@ def test_fetch_pr_numbers_parses_and_orders():
     assert "--json" in args and "number" in args
     assert "--search" in args and "updated:>=2026-01-01" in args
     assert "--limit" in args and "1000" in args
+
+
+def test_fetch_open_prs_queue_data_maps_by_number():
+    with patch("backend.services.github_service.run_gh_command") as mock_run:
+        mock_run.return_value = (
+            '[{"number": 7, "state": "OPEN", "isDraft": true, "statusCheckRollup": []},'
+            ' {"number": 8, "state": "OPEN", "isDraft": false,'
+            '  "statusCheckRollup": [{"name": "ci", "conclusion": "SUCCESS"}]}]'
+        )
+        data = fetch_open_prs_queue_data("acme", "widgets")
+
+    args = mock_run.call_args[0][0]
+    assert args[:2] == ["pr", "list"]
+    assert "--state" in args and "open" in args
+    assert set(data) == {7, 8}
+    assert data[7]["isDraft"] is True
+    assert data[7]["state"] == "OPEN"
+    assert data[8]["statusCheckRollup"][0]["conclusion"] == "SUCCESS"
+
+
+def test_fetch_open_prs_queue_data_returns_none_on_error():
+    """A failed batch fetch must be distinguishable from a repo with no open
+    PRs — callers would otherwise mass-skip the whole pipeline."""
+    with patch("backend.services.github_service.run_gh_command",
+               side_effect=RuntimeError("gh command failed: rate limited")):
+        assert fetch_open_prs_queue_data("acme", "widgets") is None
 
 
 def test_builder_json_fields_override():

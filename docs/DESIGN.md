@@ -2296,7 +2296,7 @@ order) with a matching pattern:
 - files span ≥2 rules, or mix rule + unmatched → **unidentified**
 
 **Dispatch worker** (`backend/services/automation_dispatch_worker.py`, daemon
-started unconditionally from `app.py`, 30s interval; the loop's own
+started unconditionally from `app.py`, 60s interval; the loop's own
 `scope == 'off'` check is the live kill switch). Each cycle it evaluates up to
 `EVAL_LIMIT` (20) pending rows but starts reviews only within a budget of
 `maxConcurrentAutoReviews − running auto-started reviews` — evaluating more rows
@@ -2305,10 +2305,13 @@ PRs queued behind it within one cycle, and `get_pending` orders by `updated_at`
 (least recently evaluated first, bumped on every evaluation), so across cycles
 the pipeline round-robins: any number of perpetual waiters cannot starve rows
 behind the `EVAL_LIMIT` window. Per row: re-check repo allowlisted (else
-`skipped`) → PR metadata from `synced_prs` (fallback `fetch_full_pr`) → one
-`fetch_pr_queue_data` call for live state/draft/CI (closed or merged →
-`skipped`; unreadable data or **draft** → wait *without* board placement, so
-drafts never appear on the swimlane while parked) → add to merge queue if absent
+`skipped`) → PR metadata from `synced_prs` (fallback `fetch_full_pr`) → live
+state/draft/CI from a **per-cycle batched fetch** (`fetch_open_prs_queue_data`:
+ONE `gh pr list` per repo per cycle covers every evaluated row — per-row
+`gh pr view` polling burned ~half the shared GraphQL rate limit; a PR absent
+from the open listing is closed/merged → `skipped`; a failed batch or **draft**
+→ wait *without* board placement, so drafts never appear on the swimlane while
+parked) → add to merge queue if absent
 and `assign_card_to_lane` into the Auto lane (before the remaining gates, so a
 non-draft waiting PR is visible on the board) → **dispatch condition gates** → `fetch_pr_files`
 (REST files endpoint with `--paginate`; `gh pr view --json files` truncates at
@@ -2321,7 +2324,8 @@ after 3. Follow-up reviews stay owned by the existing auto-review watcher once
 the card is armed.
 
 **Dispatch condition gates**: a review starts only when the live PR data is
-readable (a `fetch_pr_queue_data` failure blocks rather than dispatching blind)
+readable (a failed batch fetch blocks rather than dispatching blind — and is
+never confused with "no open PRs", which would mass-skip the pipeline)
 and the PR is not a draft — both checked in `_process_one` before board
 placement — then, in `_dispatch_blocker`, CI is completed and passing
 (`get_ci_status` == pending/failure blocks; a PR with **no checks at all**

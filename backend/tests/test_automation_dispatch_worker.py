@@ -83,16 +83,24 @@ def _patch_config(monkeypatch, **overrides):
 
 
 @contextmanager
-def _gates(state="OPEN", is_draft=False, rollup=CI_SUCCESS, behind=0):
-    """Patch the live PR condition sources (state/draft/CI + divergence)."""
-    queue_data = {"state": state, "isDraft": is_draft, "statusCheckRollup": rollup,
-                  "headRefOid": "abc", "reviewDecision": None, "reviews": None}
+def _gates(state="OPEN", is_draft=False, rollup=CI_SUCCESS, behind=0, batch=...):
+    """Patch the live PR condition sources (batched state/draft/CI + divergence).
+
+    The worker gates from one fetch_open_prs_queue_data call per repo: a PR
+    absent from the map is not open, and a None map means the fetch failed.
+    """
+    if batch is ...:
+        if state == "OPEN":
+            batch = {7: {"state": "OPEN", "isDraft": is_draft, "statusCheckRollup": rollup}}
+        else:
+            batch = {}  # non-open PRs don't appear in an open-PR listing
     behind_side = behind if not isinstance(behind, Exception) else None
-    with patch("backend.services.github_service.fetch_pr_queue_data",
-               return_value=queue_data), \
+    with patch("backend.services.github_service.fetch_open_prs_queue_data",
+               return_value=batch) as mock_batch, \
          patch("backend.services.github_service.fetch_pr_behind_by",
                side_effect=(behind if isinstance(behind, Exception) else None),
                return_value=behind_side) as mock_behind:
+        mock_behind.batch_mock = mock_batch
         yield mock_behind
 
 
@@ -182,7 +190,7 @@ def test_scope_off_is_a_kill_switch(env, monkeypatch):
     _patch_config(monkeypatch, scope="off")
     env["dispatches"].record_candidate(REPO, 7)
 
-    with patch("backend.services.github_service.fetch_pr_queue_data") as mock_data:
+    with patch("backend.services.github_service.fetch_open_prs_queue_data") as mock_data:
         process_pending_dispatches()
 
     assert mock_data.call_count == 0
@@ -193,7 +201,7 @@ def test_repo_no_longer_allowlisted_is_skipped(env, monkeypatch):
     _patch_config(monkeypatch, repoAllowlist=["other/repo"])
     env["dispatches"].record_candidate(REPO, 7)
 
-    with patch("backend.services.github_service.fetch_pr_queue_data") as mock_data:
+    with patch("backend.services.github_service.fetch_open_prs_queue_data") as mock_data:
         process_pending_dispatches()
 
     assert mock_data.call_count == 0
@@ -207,7 +215,7 @@ def test_concurrency_budget_defers_pending_rows(env, monkeypatch):
     from backend.extensions import active_reviews
     active_reviews["x/y/1"] = {"status": "running", "auto_started": True}
 
-    with patch("backend.services.github_service.fetch_pr_queue_data") as mock_data:
+    with patch("backend.services.github_service.fetch_open_prs_queue_data") as mock_data:
         process_pending_dispatches()
     active_reviews.clear()
 
@@ -375,11 +383,43 @@ def test_divergence_check_failure_waits_without_burning_attempts(env, monkeypatc
 
 
 def test_closed_pr_is_skipped(env, monkeypatch):
+    """A PR absent from the open-PR listing is closed or merged — skip it."""
     _, mock_begin = _run_gated(env, monkeypatch, {"state": "MERGED"})
     assert mock_begin.call_count == 0
     row = env["dispatches"].get_by_pr(REPO, 7)
     assert row["status"] == "skipped"
-    assert "MERGED" in row["detail"]
+    assert "not open" in row["detail"]
+
+
+def test_batch_fetch_failure_keeps_rows_waiting(env, monkeypatch):
+    """A failed batch fetch means UNKNOWN, never 'no open PRs' — rows must
+    wait, not be mass-skipped."""
+    _, mock_begin = _run_gated(env, monkeypatch, {"batch": None})
+    assert mock_begin.call_count == 0
+    row = env["dispatches"].get_by_pr(REPO, 7)
+    assert row["status"] == "pending"
+    assert "status check failed" in row["detail"]
+
+
+def test_one_batch_fetch_per_repo_per_cycle(env, monkeypatch):
+    """Both same-repo rows must gate from a single gh call."""
+    _patch_config(monkeypatch)
+    env["synced"].upsert_pr(REPO, _synced_pr(8))
+    env["dispatches"].record_candidate(REPO, 7)
+    env["dispatches"].record_candidate(REPO, 8)
+
+    batch = {
+        7: {"state": "OPEN", "isDraft": True, "statusCheckRollup": None},
+        8: {"state": "OPEN", "isDraft": True, "statusCheckRollup": None},
+    }
+    with _gates(batch=batch) as gates, \
+         patch("backend.services.github_service.fetch_pr_files"), \
+         patch("backend.services.review_service.begin_review"):
+        process_pending_dispatches()
+
+    assert gates.batch_mock.call_count == 1
+    for n in (7, 8):
+        assert "draft" in env["dispatches"].get_by_pr(REPO, n)["detail"]
 
 
 def test_blocked_row_waits_indefinitely(env, monkeypatch):
@@ -415,14 +455,11 @@ def test_waiting_row_does_not_starve_ready_row(env, monkeypatch):
     env["dispatches"].record_candidate(REPO, 7)
     env["dispatches"].record_candidate(REPO, 8)
 
-    def queue_data_for(owner, repo, number):
-        rollup = CI_PENDING if number == 7 else CI_SUCCESS
-        return {"state": "OPEN", "isDraft": False, "statusCheckRollup": rollup,
-                "headRefOid": "abc", "reviewDecision": None, "reviews": None}
-
-    with patch("backend.services.github_service.fetch_pr_queue_data",
-               side_effect=queue_data_for), \
-         patch("backend.services.github_service.fetch_pr_behind_by", return_value=0), \
+    batch = {
+        7: {"state": "OPEN", "isDraft": False, "statusCheckRollup": CI_PENDING},
+        8: {"state": "OPEN", "isDraft": False, "statusCheckRollup": CI_SUCCESS},
+    }
+    with _gates(batch=batch), \
          patch("backend.services.github_service.fetch_pr_files",
                return_value=["briefs/PB-008-a.md"]), \
          patch("backend.services.review_service.begin_review",
