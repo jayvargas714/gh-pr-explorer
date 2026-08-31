@@ -1,16 +1,15 @@
-import { useState } from 'react'
 import { useUIStore } from '../../stores/useUIStore'
 import { useQueueStore } from '../../stores/useQueueStore'
 import { describeCriteria, useAutoVerdictStore } from '../../stores/useAutoVerdictStore'
-import { AutoVerdictConfigModal } from '../autoVerdict/AutoVerdictConfigModal'
+import { useAutomationStore } from '../../stores/useAutomationStore'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
 
 export function Header() {
-  const { darkMode, toggleTheme, toggleQueuePanel, toggleHistoryPanel, toggleSwimlaneBoard } = useUIStore()
+  const { darkMode, toggleTheme, toggleQueuePanel, toggleHistoryPanel, toggleSwimlaneBoard, setActiveView } = useUIStore()
   const queueCount = useQueueStore((state) => state.getQueueCount())
   const autoVerdictConfig = useAutoVerdictStore((state) => state.config)
-  const [showAutoVerdictConfig, setShowAutoVerdictConfig] = useState(false)
+  const automationScope = useAutomationStore((state) => state.config.scope)
 
   return (
     <header className="mx-header">
@@ -49,16 +48,16 @@ export function Header() {
           <span className="mx-icon">📊</span>
         </Button>
 
-        {/* Auto Verdict Criteria */}
+        {/* Automation Panel */}
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => setShowAutoVerdictConfig(true)}
+          onClick={() => setActiveView('automation')}
           className="mx-header__action"
-          data-tooltip={`Auto Verdict Criteria — ${describeCriteria(autoVerdictConfig)}`}
+          data-tooltip={`Automation — ${describeCriteria(autoVerdictConfig)}`}
         >
           <span className="mx-icon">🤖</span>
-          {autoVerdictConfig.enabled && (
+          {(autoVerdictConfig.enabled || automationScope !== 'off') && (
             <Badge variant="success" size="sm">
               on
             </Badge>
@@ -88,9 +87,6 @@ export function Header() {
         </Button>
       </div>
 
-      {showAutoVerdictConfig && (
-        <AutoVerdictConfigModal onClose={() => setShowAutoVerdictConfig(false)} />
-      )}
     </header>
   )
 }

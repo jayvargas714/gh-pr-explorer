@@ -496,7 +496,34 @@ def _spawn_auto_verdict(key, review_id):
     threading.Thread(target=run, daemon=True).start()
 
 
+# Fallback if the registry is unreadable; the live list comes from valid_reviewer_types().
 VALID_REVIEWER_TYPES = ("default", "pb", "ed")
+
+
+def valid_reviewer_types():
+    """Reviewer keys from the registry (falls back to the builtin tuple)."""
+    try:
+        from backend.database import get_reviewers_db
+        return tuple(r["key"] for r in get_reviewers_db().list_reviewers())
+    except Exception:
+        logger.exception("Failed to read reviewer registry; using builtin reviewer types")
+        return VALID_REVIEWER_TYPES
+
+
+def _resolve_reviewer(reviewer_type):
+    """Resolve a reviewer key to its registry row, falling back to 'default'."""
+    try:
+        from backend.database import get_reviewers_db
+        registry = get_reviewers_db()
+        row = registry.get_by_key(reviewer_type)
+        if row is None:
+            logger.warning(f"Unknown reviewer type '{reviewer_type}', falling back to default")
+            row = registry.get_by_key("default")
+        if row is not None:
+            return row
+    except Exception:
+        logger.exception("Failed to resolve reviewer from registry; using builtin default")
+    return {"key": "default", "agent_name": "elite-code-reviewer", "prompt_context": None}
 
 
 def begin_review(owner, repo, pr_number, pr_url, reviews_db,
@@ -630,16 +657,13 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
 
     Args:
         previous_review_content: For follow-ups, the JSON string of the previous review's content_json.
-        reviewer_type: Which reviewer agent to use. One of:
-            - "default": elite-code-reviewer (general code review)
-            - "pb": product-brief-reviewer (PB-000 product brief review)
-            - "ed": ed-reviewer (ED-000 engineering design review)
+        reviewer_type: Reviewer registry key (see backend/database/reviewers.py).
+            Unknown keys fall back to "default".
 
     Returns:
         tuple: (process, review_file_path_or_error, is_followup)
     """
-    if reviewer_type not in VALID_REVIEWER_TYPES:
-        reviewer_type = "default"
+    reviewer = _resolve_reviewer(reviewer_type)
 
     reviews_dir = get_reviews_dir()
     reviews_dir.mkdir(parents=True, exist_ok=True)
@@ -654,30 +678,8 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
 
     json_file = str(review_file).replace(".md", ".json")
 
-    if reviewer_type == "pb":
-        agent_name = "product-brief-reviewer"
-    elif reviewer_type == "ed":
-        agent_name = "ed-reviewer"
-    else:
-        agent_name = "elite-code-reviewer"
-
-    if reviewer_type == "pb":
-        pb_context = (
-            "This PR adds or modifies a product brief (a PB-NNN-*.md file under briefs/). "
-            "Identify the brief file(s) touched in the PR diff and review them against the PB-000 template "
-            "and the rules embedded in the product-brief-reviewer agent. Quote evidence verbatim and keep "
-            "all fixes in user-observable, product-level language. "
-        )
-    elif reviewer_type == "ed":
-        pb_context = (
-            "This PR adds or modifies an engineering design (an ED-NNN-*.md file under docs/designs/). "
-            "Identify the ED file(s) touched in the PR diff and review them against the ED-000 template "
-            "and the rules embedded in the ed-reviewer agent. Apply both lenses: SDLC conformance "
-            "(SPEC-AUTH-*, SPEC-REVIEW-*, SAFE-*) and the code-review lens for technical soundness. "
-            "Quote evidence verbatim from the ED and cite rule IDs where they apply. "
-        )
-    else:
-        pb_context = ""
+    agent_name = reviewer["agent_name"]
+    pb_context = reviewer["prompt_context"] or ""
 
     if is_followup and previous_review_content:
         # Convert raw JSON to readable markdown for the prompt

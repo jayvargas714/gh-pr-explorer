@@ -137,6 +137,20 @@ def fetch_full_pr(owner, repo, pr_number):
     return data
 
 
+def fetch_pr_files(owner, repo, pr_number):
+    """All changed file paths for a PR. Raises RuntimeError on failure.
+
+    Uses the REST files endpoint with --paginate: `gh pr view --json files`
+    truncates at 100 files, and huge PRs are exactly where a truncated list
+    would mis-route the automation classifier.
+    """
+    output = run_gh_command([
+        "api", f"repos/{owner}/{repo}/pulls/{pr_number}/files",
+        "--paginate", "--jq", ".[].filename",
+    ])
+    return [line for line in output.splitlines() if line.strip()]
+
+
 def fetch_pr_numbers(owner, repo, state="open", search=None, limit=1000):
     """Fetch PR numbers only (tiny, 504-resistant query), in GitHub's order."""
     args = ["pr", "list", "-R", f"{owner}/{repo}", "--state", state,

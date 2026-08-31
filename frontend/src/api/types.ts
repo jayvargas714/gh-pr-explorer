@@ -336,8 +336,9 @@ export interface RevLogEntry {
 // Auto Verdict Types
 // ============================================================================
 
-/** Reviewer agents an armed card can pin its auto review to. */
-export type AutoVerdictReviewer = 'default' | 'pb' | 'ed'
+/** Reviewer registry key an armed card can pin its auto review to.
+ * Keys come from the configurable reviewer registry (/api/reviewers). */
+export type AutoVerdictReviewer = string
 
 /** Global thresholds deciding auto changes-requested vs auto approval. */
 export interface AutoVerdictConfig {
@@ -423,6 +424,56 @@ export interface MergeQueueItem {
   revLog: RevLogEntry[]
   // Auto-verdict arming state and last outcome, bundled the same way as revLog.
   autoVerdict?: AutoVerdictState
+  // Automation pipeline state for this PR (null/absent when the PR was never
+  // touched by full automation). Drives the Unidentified/Auto card badges.
+  automation?: AutomationDispatchState | null
+}
+
+// ============================================================================
+// Automation Types
+// ============================================================================
+
+/** One entry in the configurable reviewer registry. */
+export interface ReviewerInfo {
+  key: string
+  label: string
+  agentName: string
+  promptContext: string | null
+  isBuiltin: boolean
+}
+
+/** One file-pattern routing rule (defaultRule omits name/patterns). */
+export interface AutomationRule {
+  name: string
+  patterns: string[]
+  reviewerKey: string
+  autoVerdict: boolean
+  autoVerdictMode: AutoVerdictMode
+}
+
+export type AutomationDefaultRule = Omit<AutomationRule, 'name' | 'patterns'>
+
+export type AutomationScope = 'off' | 'authors' | 'all'
+
+/** Mirrors DEFAULT_CONFIG in backend/services/automation_config.py. */
+export interface AutomationConfig {
+  scope: AutomationScope
+  authors: string[]
+  repoAllowlist: string[]
+  maxConcurrentAutoReviews: number
+  ignorePatterns: string[]
+  defaultRule: AutomationDefaultRule
+  rules: AutomationRule[]
+}
+
+/** How the automation pipeline handled a PR (from automation_dispatches). */
+export interface AutomationDispatchState {
+  status: 'pending' | 'dispatched' | 'unidentified' | 'skipped' | 'failed'
+  reviewerKey: string | null
+  ruleName: string | null
+  matchedRules: string[]
+  detail: string | null
+  updatedAt: string | null
 }
 
 export interface QueueNote {
@@ -972,6 +1023,8 @@ export interface Swimlane {
   color: SwimlaneColor
   position: number
   isDefault: boolean
+  // Protected lanes (the automation "Auto" lane) cannot be deleted or renamed.
+  isProtected: boolean
   createdAt: string
 }
 

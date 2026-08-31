@@ -155,6 +155,36 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
     )
   }
 
+  // Automation pipeline state. Deliberately outside the hasReview-gated badge
+  // row below: an unidentified PR has no review yet, which is exactly when the
+  // operator needs to see the badge.
+  const getAutomationBadge = () => {
+    const automation = item.automation
+    if (!automation) return null
+    switch (automation.status) {
+      case 'unidentified':
+        return (
+          <span data-tooltip={`Automation couldn't pick a reviewer — files span: ${automation.matchedRules.join(', ') || 'no rules'}. Start the review manually.`}>
+            <Badge variant="warning">❓ Unidentified</Badge>
+          </span>
+        )
+      case 'dispatched':
+        return (
+          <span data-tooltip={`Auto-reviewed via ${automation.ruleName ?? 'default rule'} (${automation.reviewerKey})`}>
+            <Badge variant="info">🤖 Auto</Badge>
+          </span>
+        )
+      case 'failed':
+        return (
+          <span data-tooltip={`Automation gave up: ${automation.detail ?? 'unknown error'}`}>
+            <Badge variant="error">🤖 Auto failed</Badge>
+          </span>
+        )
+      default:
+        return null
+    }
+  }
+
   return (
     <>
       <div
@@ -205,6 +235,7 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
                 <ReviewersBadge reviewers={item.currentReviewers} />
               )}
               {getCIStatusBadge()}
+              {getAutomationBadge()}
               <RevLogBadge
                 entries={item.revLog ?? []}
                 onOpenReview={(id) => openReviewViewer({ id })}

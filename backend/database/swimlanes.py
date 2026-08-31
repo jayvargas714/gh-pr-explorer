@@ -9,6 +9,8 @@ logger = logging.getLogger(__name__)
 VALID_COLORS = {"success", "warning", "error", "info", "primary", "accent", "violet", "slate"}
 DEFAULT_LANE_NAME = "Unassigned"
 DEFAULT_LANE_COLOR = "info"
+AUTO_LANE_NAME = "Auto"
+AUTO_LANE_COLOR = "violet"
 
 
 class SwimlanesDB:
@@ -67,6 +69,32 @@ class SwimlanesDB:
             )
             return dict(cursor.fetchone())
 
+    def ensure_auto_lane(self) -> Dict[str, Any]:
+        """Guarantee the protected automation lane exists. Idempotent.
+
+        The automation pipeline finds this lane by is_protected, so there is
+        exactly one; it can never be deleted or renamed.
+        """
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM swimlanes WHERE is_protected = 1 ORDER BY position ASC LIMIT 1"
+            )
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+
+            cursor.execute("SELECT COALESCE(MAX(position), 0) + 1 AS next_pos FROM swimlanes")
+            next_pos = cursor.fetchone()["next_pos"]
+            cursor.execute(
+                "INSERT INTO swimlanes (name, color, position, is_default, is_protected) "
+                "VALUES (?, ?, ?, 0, 1)",
+                (AUTO_LANE_NAME, AUTO_LANE_COLOR, next_pos),
+            )
+            logger.info("Seeded protected swimlane '%s'", AUTO_LANE_NAME)
+            cursor.execute("SELECT * FROM swimlanes WHERE id = ?", (cursor.lastrowid,))
+            return dict(cursor.fetchone())
+
     def create_lane(self, name: str, color: str) -> Dict[str, Any]:
         if color not in VALID_COLORS:
             raise ValueError(f"Invalid color '{color}'. Must be one of: {sorted(VALID_COLORS)}")
@@ -99,8 +127,11 @@ class SwimlanesDB:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM swimlanes WHERE id = ?", (lane_id,))
-            if not cursor.fetchone():
+            existing = cursor.fetchone()
+            if not existing:
                 raise ValueError("Lane not found")
+            if name is not None and existing["is_protected"] and name != existing["name"]:
+                raise ValueError("Cannot rename a protected lane")
 
             sets, params = [], []
             if name is not None:
@@ -128,6 +159,9 @@ class SwimlanesDB:
             target = cursor.fetchone()
             if not target:
                 raise ValueError("Lane not found")
+
+            if target["is_protected"]:
+                raise ValueError("Cannot delete a protected lane")
 
             cursor.execute("SELECT COUNT(*) AS n FROM swimlanes")
             if cursor.fetchone()["n"] <= 1:
@@ -223,6 +257,50 @@ class SwimlanesDB:
                 "VALUES (?, ?, ?)",
                 (queue_item_id, default_lane["id"], next_pos),
             )
+
+    def assign_card_to_lane(self, queue_item_id: int, lane_id: int) -> None:
+        """Place a queue item at the bottom of the given lane.
+
+        Idempotent: a card already in that lane stays where it is. A card in
+        another lane (or unassigned) is moved to the lane's bottom.
+        """
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM swimlanes WHERE id = ?", (lane_id,))
+            if not cursor.fetchone():
+                raise ValueError("Lane not found")
+            cursor.execute(
+                "SELECT swimlane_id FROM swimlane_assignments WHERE queue_item_id = ?",
+                (queue_item_id,),
+            )
+            current = cursor.fetchone()
+            if current and current["swimlane_id"] == lane_id:
+                return
+        if current is None:
+            # No assignment row yet (queue add hook missed it): create one, then move.
+            self.auto_assign_new_card(queue_item_id)
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COALESCE(MAX(position_in_lane), 0) + 1 AS next_pos "
+                "FROM swimlane_assignments WHERE swimlane_id = ?",
+                (lane_id,),
+            )
+            next_pos = cursor.fetchone()["next_pos"]
+            cursor.execute(
+                "SELECT swimlane_id FROM swimlane_assignments WHERE queue_item_id = ?",
+                (queue_item_id,),
+            )
+            from_row = cursor.fetchone()
+            cursor.execute(
+                "UPDATE swimlane_assignments "
+                "SET swimlane_id = ?, position_in_lane = ?, is_pinned = 0 "
+                "WHERE queue_item_id = ?",
+                (lane_id, next_pos, queue_item_id),
+            )
+            if from_row and from_row["swimlane_id"] is not None and from_row["swimlane_id"] != lane_id:
+                self._compact_lane(cursor, from_row["swimlane_id"])
+            self._compact_lane(cursor, lane_id)
 
     def reconcile_assignments(self) -> None:
         """Ensure every merge_queue row has an assignment row.

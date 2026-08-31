@@ -132,3 +132,51 @@ def test_auto_verdict_state_swallows_malformed_override_json():
         {"auto_verdict_enabled": 0, "auto_verdict_criteria": "not json"}, last=None
     )
     assert state["criteriaOverride"] is None
+
+
+def test_format_automation_state_maps_dispatch_row():
+    from backend.services.queue_enrichment import format_automation_state
+    row = {
+        "status": "unidentified",
+        "reviewer_key": None,
+        "outcome_json": '{"outcome": "unidentified", "rule": null, "matched_rules": ["PB", "ED"], "unmatched_count": 0, "ignored_count": 1}',
+        "detail": "files span multiple rules",
+        "updated_at": "2026-08-30 05:00:00",
+    }
+    state = format_automation_state(row)
+    assert state == {
+        "status": "unidentified",
+        "reviewerKey": None,
+        "ruleName": None,
+        "matchedRules": ["PB", "ED"],
+        "detail": "files span multiple rules",
+        "updatedAt": "2026-08-30 05:00:00",
+    }
+
+
+def test_format_automation_state_none_row():
+    from backend.services.queue_enrichment import format_automation_state
+    assert format_automation_state(None) is None
+
+
+def test_format_automation_state_dispatched_row_with_rule():
+    from backend.services.queue_enrichment import format_automation_state
+    row = {
+        "status": "dispatched", "reviewer_key": "pb",
+        "outcome_json": '{"outcome": "matched", "rule": "PB", "matched_rules": ["PB"], "unmatched_count": 0, "ignored_count": 0}',
+        "detail": None, "updated_at": "2026-08-30 05:00:00",
+    }
+    state = format_automation_state(row)
+    assert state["status"] == "dispatched"
+    assert state["reviewerKey"] == "pb"
+    assert state["ruleName"] == "PB"
+
+
+def test_format_automation_state_tolerates_malformed_outcome_json():
+    from backend.services.queue_enrichment import format_automation_state
+    row = {"status": "failed", "reviewer_key": None, "outcome_json": "{oops",
+           "detail": "x", "updated_at": None}
+    state = format_automation_state(row)
+    assert state["status"] == "failed"
+    assert state["ruleName"] is None
+    assert state["matchedRules"] == []

@@ -11,6 +11,8 @@ from backend.database.auto_verdicts import AutoVerdictsDB
 from backend.database.merge_queue import MergeQueueDB
 from backend.database.swimlanes import SwimlanesDB
 from backend.database.settings import SettingsDB
+from backend.database.reviewers import ReviewersDB
+from backend.database.automation_dispatches import AutomationDispatchesDB
 from backend.database.synced_prs import SyncedPRsDB
 from backend.database.dev_stats import DeveloperStatsDB
 from backend.database.cache_stores import (
@@ -43,6 +45,8 @@ _repo_stats_cache_db: Optional[RepoStatsCacheDB] = None
 _repo_loc_cache_db: Optional[RepoLOCCacheDB] = None
 _timeline_cache_db: Optional[TimelineCacheDB] = None
 _synced_prs_db: Optional[SyncedPRsDB] = None
+_reviewers_db: Optional[ReviewersDB] = None
+_automation_dispatches_db: Optional[AutomationDispatchesDB] = None
 
 
 def get_database() -> Database:
@@ -214,9 +218,31 @@ def get_synced_prs_db() -> SyncedPRsDB:
     return _synced_prs_db
 
 
+def get_reviewers_db() -> ReviewersDB:
+    global _reviewers_db
+    if _reviewers_db is None:
+        db = get_database()
+        with _db_lock:
+            if _reviewers_db is None:
+                _reviewers_db = ReviewersDB(db)
+    return _reviewers_db
+
+
+def get_automation_dispatches_db() -> AutomationDispatchesDB:
+    global _automation_dispatches_db
+    if _automation_dispatches_db is None:
+        db = get_database()
+        with _db_lock:
+            if _automation_dispatches_db is None:
+                _automation_dispatches_db = AutomationDispatchesDB(db)
+    return _automation_dispatches_db
+
+
 __all__ = [
     "Database", "ReviewsDB", "ReviewEventsDB", "AuditsDB", "AutoVerdictsDB", "MergeQueueDB", "SwimlanesDB", "SettingsDB",
     "SyncedPRsDB", "get_synced_prs_db",
+    "ReviewersDB", "get_reviewers_db",
+    "AutomationDispatchesDB", "get_automation_dispatches_db",
     "DeveloperStatsDB", "LifecycleCacheDB", "WorkflowCacheDB",
     "ContributorTimeSeriesCacheDB", "CodeActivityCacheDB",
     "RepoStatsCacheDB", "RepoLOCCacheDB", "TimelineCacheDB",

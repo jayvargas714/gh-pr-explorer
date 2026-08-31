@@ -17,6 +17,7 @@ from backend import (
 from backend.config import get_config, get_pr_sync_config
 from backend.services.auto_review_watcher import auto_review_watcher_loop
 from backend.services.auto_verdict_watcher import auto_verdict_watcher_loop
+from backend.services.automation_dispatch_worker import automation_dispatch_worker_loop
 from backend.services.pr_sync_worker import pr_sync_worker_loop
 
 app = create_app()
@@ -39,6 +40,9 @@ if __name__ == "__main__":
         # Keep the DB-backed PR list fresh (see docs/specs/2026-08-28-pr-sync-db-design.md).
         if get_pr_sync_config()["enabled"]:
             threading.Thread(target=pr_sync_worker_loop, daemon=True).start()
+        # Drain pending automation dispatches into reviews. Started
+        # unconditionally: the loop's own scope=='off' check is the gate.
+        threading.Thread(target=automation_dispatch_worker_loop, daemon=True).start()
 
     app.run(
         host=config.get("host", "127.0.0.1"),

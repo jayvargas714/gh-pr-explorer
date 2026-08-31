@@ -50,3 +50,29 @@ def test_builder_json_fields_override():
     default_args = PRFilterBuilder("acme", "widgets", params).build()
     default_idx = default_args.index("--json")
     assert default_args[default_idx + 1] == PR_LIST_JSON_FIELDS
+
+
+def test_fetch_pr_files_returns_paths():
+    from backend.services.github_service import fetch_pr_files
+    with patch("backend.services.github_service.run_gh_command") as mock_run:
+        mock_run.return_value = "briefs/PB-008-a.md\nbriefs/PB-000-index.md"
+        files = fetch_pr_files("acme", "widgets", 7)
+    assert files == ["briefs/PB-008-a.md", "briefs/PB-000-index.md"]
+    args = mock_run.call_args[0][0]
+    assert args[0] == "api"
+    assert "repos/acme/widgets/pulls/7/files" in args
+    assert "--paginate" in args
+
+
+def test_fetch_pr_files_empty_pr():
+    from backend.services.github_service import fetch_pr_files
+    with patch("backend.services.github_service.run_gh_command") as mock_run:
+        mock_run.return_value = ""
+        assert fetch_pr_files("acme", "widgets", 7) == []
+
+
+def test_fetch_pr_files_propagates_errors():
+    from backend.services.github_service import fetch_pr_files
+    with patch("backend.services.github_service.run_gh_command", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError):
+            fetch_pr_files("acme", "widgets", 7)

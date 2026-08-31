@@ -8,7 +8,7 @@ from flask import Blueprint, jsonify, request
 from backend.extensions import logger, active_reviews, reviews_lock
 from backend.database import get_reviews_db
 from backend.services.github_service import fetch_pr_head_sha
-from backend.services.review_service import save_review_to_db, check_review_status, begin_review
+from backend.services.review_service import save_review_to_db, check_review_status, begin_review, valid_reviewer_types
 from backend.services.review_event_log import record_cancelled, record_verdict_posted
 from backend.services.inline_comments_service import post_inline_comments, preview_section_issues
 from backend.services.verdict_service import post_verdict
@@ -80,7 +80,7 @@ def start_review():
         pr_title = data.get("title")
         pr_author = data.get("author")
         reviewer_type = data.get("reviewer_type", "default")
-        if reviewer_type not in ("default", "pb", "ed"):
+        if reviewer_type not in valid_reviewer_types():
             return jsonify({"error": f"Invalid reviewer_type: {reviewer_type}"}), 400
 
         logger.info(f"Received {'follow-up ' if is_followup else ''}review request for {key} (reviewer={reviewer_type})")

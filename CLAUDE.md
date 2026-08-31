@@ -53,32 +53,33 @@ Keep `docs/DESIGN.md` updated whenever any design aspect changes, and update the
 |---------|------|--------|
 | **Overview** | 15 | Purpose, value props, target users |
 | **Architecture** | 41 | System diagram, data flow |
-| — Backend Components (Flask) | 117 | Package layout, services, filters, visualizers, cache, 13 route blueprints |
+| — Backend Components (Flask) | 117 | Package layout, services, filters, visualizers, cache, 14 route blueprints |
 | — Database Module | 186 | DB classes, full SQL schema, per-class method tables |
-| — Data Migration Module | 544 | One-time legacy JSON/markdown import |
-| — Frontend (React + TS) | 564 | Dir layout, 5-tab + analytics sub-tab architecture |
-| — Styling | 600 | Matrix UI design system, CSS conventions |
-| **Features** | 619 | (one ### per feature below) |
-| — PR List Pagination | 638 | Client-side paging |
-| — PR Filtering System | 664 | 5 filter tabs (Basic/Review/People/Dates/Advanced) |
-| — Analytics (Stats / Lifecycle / Activity / Contributors / Reviews) | 725–849 | Developer + repo analytics sub-tabs |
-| — CI/Workflows Tab | 879 | Workflow runs table, filters, stats |
-| — PR Card Status Badges | 943 | Review/CI/divergence/approved-by-me badges |
-| — Settings Persistence | 1011 | DB-backed filter/selection restore |
-| — Repo Stats Tab | 1029 | Repo-level stats, languages, LOC |
-| — Review History | 1058 | Past-review browser, score badges |
-| — PR Timelines | 1103 | Single-PR event timeline modal |
-| — Merge Queue | 1177 | Prioritized cross-repo PR queue |
-| — Swimlane Board (Kanban) | 1256 | Lane CRUD, DnD, badge + auto-mode filtering, auto/manual header counts |
-| — Code Review System (Claude CLI) | 1412 | Reviewer agents, subprocess flow, foreground-dispatch requirement, review-underway PR comment, split Review/Audit triggers |
-| — Inline Comments Posting | 1531 | Post critical issues to GitHub |
-| — Review Verdict | 1579 | Approve/Request-Changes/Comment composer, verdict source toggle |
-| — Auto Verdicts | 1652 | Armed cards, verdict vs comment mode, criteria thresholds, per-PR criteria overrides, auto approve/changes-requested, watcher threads, auto follow-up reviews, optimistic arming |
-| — Review Event Log | 1803 | Per-attempt event log, run_id grouping, closed event/reason vocabularies, verdict posted/not-posted events, day-paginated Review Logs tab (day navigator, calendar jump, load-older), run hover panel w/ issue counts |
-| — PR List Sync | 2048 | DB-backed PR list: synced_repos/synced_prs tables, background sync worker (backfill + incremental), three-way route dispatch (DB/hybrid/live), per-card refresh, `pr_sync` config |
-| **API Endpoints** | 2133 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2797, Review Logs at 3572 |
-| **Configuration** | 3690 | `config.json` options, incl. review retry + log retention, `pr_sync` block |
-| **Technical Details** | 3742 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (4005), follow-up parent selection (4051), Review JSON Schema (4084) |
-| **Future Considerations** | 4255 | Improvements, known limitations |
-| **Appendix** | 4317 | Dependencies, file structure, run instructions |
+| — Data Migration Module | 575 | One-time legacy JSON/markdown import |
+| — Frontend (React + TS) | 595 | Dir layout, 6-tab + analytics sub-tab architecture |
+| — Styling | 632 | Matrix UI design system, CSS conventions |
+| **Features** | 651 | (one ### per feature below) |
+| — PR List Pagination | 670 | Client-side paging |
+| — PR Filtering System | 696 | 5 filter tabs (Basic/Review/People/Dates/Advanced) |
+| — Analytics (Stats / Lifecycle / Activity / Contributors / Reviews) | 757–881 | Developer + repo analytics sub-tabs |
+| — CI/Workflows Tab | 911 | Workflow runs table, filters, stats |
+| — PR Card Status Badges | 975 | Review/CI/divergence/approved-by-me badges |
+| — Settings Persistence | 1043 | DB-backed filter/selection restore |
+| — Repo Stats Tab | 1061 | Repo-level stats, languages, LOC |
+| — Review History | 1090 | Past-review browser, score badges |
+| — PR Timelines | 1135 | Single-PR event timeline modal |
+| — Merge Queue | 1209 | Prioritized cross-repo PR queue |
+| — Swimlane Board (Kanban) | 1288 | Lane CRUD, DnD, badge + auto-mode filtering, auto/manual header counts, protected Auto lane |
+| — Code Review System (Claude CLI) | 1445 | Reviewer agents, subprocess flow, foreground-dispatch requirement, review-underway PR comment, split Review/Audit triggers |
+| — Inline Comments Posting | 1564 | Post critical issues to GitHub |
+| — Review Verdict | 1612 | Approve/Request-Changes/Comment composer, verdict source toggle |
+| — Auto Verdicts | 1685 | Armed cards, verdict vs comment mode, criteria thresholds, per-PR criteria overrides, auto approve/changes-requested, watcher threads, auto follow-up reviews, optimistic arming |
+| — Review Event Log | 1836 | Per-attempt event log, run_id grouping, closed event/reason vocabularies, verdict posted/not-posted events, day-paginated Review Logs tab (day navigator, calendar jump, load-older), run hover panel w/ issue counts |
+| — PR List Sync | 2081 | DB-backed PR list: synced_repos/synced_prs tables, background sync worker (backfill + incremental), three-way route dispatch (DB/hybrid/live), per-card refresh, `pr_sync` config |
+| — Automation (Full Auto Pipeline) | 2164 | Automation tab, reviewer registry, routing rules + ignore patterns, unidentified badge, automation_dispatches, dispatch worker, protected Auto lane, `automation_config` |
+| **API Endpoints** | 2274 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 2938, Automation/Reviewers at 3050, Review Logs at 3750 |
+| **Configuration** | 3868 | `config.json` options, incl. review retry + log retention, `pr_sync` block; DB-backed settings keys note |
+| **Technical Details** | 3925 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (4188), follow-up parent selection (4234), Review JSON Schema (4267) |
+| **Future Considerations** | 4438 | Improvements, known limitations |
+| **Appendix** | 4500 | Dependencies, file structure, run instructions |
 

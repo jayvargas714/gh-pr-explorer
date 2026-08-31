@@ -1,12 +1,21 @@
 import { useEffect, useRef } from 'react'
 import type { ReviewerType } from '../../api/reviews'
+import { useAutomationStore } from '../../stores/useAutomationStore'
 
 interface ReviewerPickerMenuProps {
   onSelect: (reviewer: ReviewerType) => void
   onClose: () => void
 }
 
+// Icons for the builtin reviewers; custom registry entries get a generic one.
+const REVIEWER_ICONS: Record<string, string> = {
+  default: '📋',
+  pb: '📝',
+  ed: '📐',
+}
+
 export function ReviewerPickerMenu({ onSelect, onClose }: ReviewerPickerMenuProps) {
+  const reviewers = useAutomationStore((s) => s.reviewers)
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -33,42 +42,23 @@ export function ReviewerPickerMenu({ onSelect, onClose }: ReviewerPickerMenuProp
       role="menu"
       aria-label="Choose reviewer"
     >
-      <button
-        type="button"
-        role="menuitem"
-        className="mx-reviewer-picker__option"
-        onClick={() => onSelect('default')}
-      >
-        <span className="mx-reviewer-picker__icon">📋</span>
-        <span className="mx-reviewer-picker__label">
-          <strong>Default Reviewer</strong>
-          <small>elite-code-reviewer</small>
-        </span>
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="mx-reviewer-picker__option"
-        onClick={() => onSelect('pb')}
-      >
-        <span className="mx-reviewer-picker__icon">📝</span>
-        <span className="mx-reviewer-picker__label">
-          <strong>Product Brief Reviewer</strong>
-          <small>product-brief-reviewer</small>
-        </span>
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="mx-reviewer-picker__option"
-        onClick={() => onSelect('ed')}
-      >
-        <span className="mx-reviewer-picker__icon">📐</span>
-        <span className="mx-reviewer-picker__label">
-          <strong>Engineering Design Reviewer</strong>
-          <small>ed-reviewer</small>
-        </span>
-      </button>
+      {reviewers.map((reviewer) => (
+        <button
+          key={reviewer.key}
+          type="button"
+          role="menuitem"
+          className="mx-reviewer-picker__option"
+          onClick={() => onSelect(reviewer.key)}
+        >
+          <span className="mx-reviewer-picker__icon">
+            {REVIEWER_ICONS[reviewer.key] ?? '🧩'}
+          </span>
+          <span className="mx-reviewer-picker__label">
+            <strong>{reviewer.label}</strong>
+            <small>{reviewer.agentName}</small>
+          </span>
+        </button>
+      ))}
     </div>
   )
 }

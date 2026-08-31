@@ -75,9 +75,46 @@ def incremental_sync_repo(store, repo_full, history_days):
     since = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     numbers = fetch_pr_numbers(owner, name, state="all", search=f"updated:>={since}")
+    known = store.get_prs_by_numbers(repo_full, numbers)
+    new_numbers = [n for n in numbers if n not in known]
     _hydrate(store, repo_full, numbers)
+    _record_automation_candidates(store, repo_full, new_numbers)
     store.prune_old(repo_full, _window_cutoff(history_days).strftime("%Y-%m-%dT%H:%M:%SZ"))
     store.update_last_synced(repo_full)
+
+
+def _record_automation_candidates(store, repo_full, new_numbers):
+    """Record newly-arrived PRs as automation dispatch candidates.
+
+    Only called from incremental sync — backfill is structurally excluded, so
+    enabling automation never sweeps a repo's existing PRs. Must never raise
+    into the sync cycle.
+    """
+    if not new_numbers:
+        return
+    try:
+        from backend.services.automation_config import get_config
+        from backend.database import get_automation_dispatches_db
+
+        config = get_config()
+        if config["scope"] == "off" or repo_full not in config["repoAllowlist"]:
+            return
+
+        rows = store.get_prs_by_numbers(repo_full, new_numbers)
+        dispatches = get_automation_dispatches_db()
+        for number in new_numbers:
+            pr = rows.get(number)
+            if not pr:
+                continue  # hydration failed for this PR; next cycle re-detects it
+            if (pr.get("state") or "").upper() != "OPEN" or pr.get("isDraft"):
+                continue
+            author = (pr.get("author") or {}).get("login")
+            if config["scope"] == "authors" and author not in config["authors"]:
+                continue
+            if dispatches.record_candidate(repo_full, number):
+                logger.info(f"Automation: recorded candidate {repo_full}#{number} (author={author})")
+    except Exception:
+        logger.exception(f"Automation candidate detection failed for {repo_full}")
 
 
 def sync_cycle(store=None, cfg=None):

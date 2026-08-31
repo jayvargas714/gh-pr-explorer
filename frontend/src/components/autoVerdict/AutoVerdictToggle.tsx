@@ -7,6 +7,7 @@ import {
   MergeQueueItem,
 } from '../../api/types'
 import { describeCriteria, useAutoVerdictStore } from '../../stores/useAutoVerdictStore'
+import { useAutomationStore } from '../../stores/useAutomationStore'
 import { useSwimlaneStore } from '../../stores/useSwimlaneStore'
 import { AutoVerdictConfigModal } from './AutoVerdictConfigModal'
 
@@ -14,12 +15,6 @@ interface AutoVerdictToggleProps {
   item: MergeQueueItem
   onRefresh: () => void
 }
-
-const REVIEWERS: { key: AutoVerdictReviewer; label: string; agent: string }[] = [
-  { key: 'default', label: 'Default Reviewer', agent: 'elite-code-reviewer' },
-  { key: 'pb', label: 'Product Brief Reviewer', agent: 'product-brief-reviewer' },
-  { key: 'ed', label: 'Engineering Design Reviewer', agent: 'ed-reviewer' },
-]
 
 const MODES: { key: AutoVerdictMode; label: string; hint: string }[] = [
   {
@@ -40,6 +35,7 @@ export function AutoVerdictToggle({ item, onRefresh }: AutoVerdictToggleProps) {
   const serverMode = item.autoVerdict?.mode ?? 'verdict'
   const serverOverride = item.autoVerdict?.criteriaOverride ?? null
   const config = useAutoVerdictStore((s) => s.config)
+  const reviewers = useAutomationStore((s) => s.reviewers)
   const applyAutoVerdictLocal = useSwimlaneStore((s) => s.applyAutoVerdictLocal)
 
   const [menuOpen, setMenuOpen] = useState(false)
@@ -147,7 +143,7 @@ export function AutoVerdictToggle({ item, onRefresh }: AutoVerdictToggleProps) {
 
   const modeIcon = mode === 'comment' ? '💬' : '🤖'
   const tooltip = armed
-    ? `Auto ${mode} armed (${REVIEWERS.find((r) => r.key === reviewerType)?.label}) — ${criteriaText}`
+    ? `Auto ${mode} armed (${reviewers.find((r) => r.key === reviewerType)?.label ?? reviewerType}) — ${criteriaText}`
     : 'Arm auto verdict: the next completed review posts its verdict automatically'
 
   // dnd-kit's PointerSensor would otherwise steal these gestures on swimlane cards.
@@ -215,7 +211,7 @@ export function AutoVerdictToggle({ item, onRefresh }: AutoVerdictToggleProps) {
             <div className="mx-auto-verdict-menu__section">
               <span className="mx-auto-verdict-menu__label">Review agent</span>
               <div role="radiogroup" aria-label="Reviewer agent">
-                {REVIEWERS.map(({ key, label, agent }) => (
+                {reviewers.map(({ key, label, agentName: agent }) => (
                   <button
                     key={key}
                     type="button"

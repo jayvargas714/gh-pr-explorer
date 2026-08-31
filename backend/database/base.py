@@ -260,6 +260,7 @@ class Database:
                     color TEXT NOT NULL,
                     position INTEGER NOT NULL,
                     is_default INTEGER DEFAULT 0,
+                    is_protected INTEGER NOT NULL DEFAULT 0,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -387,6 +388,42 @@ class Database:
                 ON auto_verdicts(repo, pr_number)
             """)
 
+            # Automation dispatches: one row per PR the automation pipeline has seen.
+            # UNIQUE(repo, pr_number) is the restart-proof idempotence guard — a PR
+            # is auto-dispatched at most once, ever.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS automation_dispatches (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo TEXT NOT NULL,
+                    pr_number INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    outcome_json TEXT,
+                    reviewer_key TEXT,
+                    detail TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(repo, pr_number)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_automation_dispatches_status
+                ON automation_dispatches(status)
+            """)
+
+            # Reviewer registry: configurable reviewer agents (seeded by ReviewersDB.ensure_builtins)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS reviewers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    key TEXT NOT NULL UNIQUE,
+                    label TEXT NOT NULL,
+                    agent_name TEXT NOT NULL,
+                    prompt_context TEXT,
+                    is_builtin INTEGER NOT NULL DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # PR list sync: registered repos + full PR JSON rows (see docs/specs/2026-08-28-pr-sync-db-design.md)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS synced_repos (
@@ -453,6 +490,19 @@ class Database:
                         "ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0"
                     )
                     logger.info("Added column is_pinned to swimlane_assignments table")
+                except sqlite3.OperationalError:
+                    pass
+
+            # Migration: Add is_protected column to swimlanes for existing databases
+            cursor.execute("PRAGMA table_info(swimlanes)")
+            swimlane_columns = {row[1] for row in cursor.fetchall()}
+            if "is_protected" not in swimlane_columns:
+                try:
+                    cursor.execute(
+                        "ALTER TABLE swimlanes "
+                        "ADD COLUMN is_protected INTEGER NOT NULL DEFAULT 0"
+                    )
+                    logger.info("Added column is_protected to swimlanes table")
                 except sqlite3.OperationalError:
                     pass
 

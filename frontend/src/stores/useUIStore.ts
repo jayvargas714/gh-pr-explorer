@@ -6,8 +6,8 @@ interface UIState {
   toggleTheme: () => void
 
   // Active views
-  activeView: 'prs' | 'analytics' | 'workflows' | 'repo-stats' | 'review-logs'
-  setActiveView: (view: 'prs' | 'analytics' | 'workflows' | 'repo-stats' | 'review-logs') => void
+  activeView: 'prs' | 'analytics' | 'workflows' | 'repo-stats' | 'review-logs' | 'automation'
+  setActiveView: (view: 'prs' | 'analytics' | 'workflows' | 'repo-stats' | 'review-logs' | 'automation') => void
 
   activeAnalyticsTab: 'stats' | 'lifecycle' | 'activity' | 'responsiveness' | 'contributors'
   setActiveAnalyticsTab: (tab: 'stats' | 'lifecycle' | 'activity' | 'responsiveness' | 'contributors') => void

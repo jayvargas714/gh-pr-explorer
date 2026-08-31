@@ -110,3 +110,109 @@ def test_sync_cycle_respects_cap_exclusions_and_isolation(store):
 
     assert "a/skip" not in synced
     assert len(synced) >= 1  # a/one synced despite a/two failing
+
+
+# ----- Automation candidate detection -----
+
+
+def _automation_cfg(**overrides):
+    cfg = {
+        "scope": "all", "authors": [], "repoAllowlist": ["acme/widgets"],
+        "maxConcurrentAutoReviews": 2, "ignorePatterns": [],
+        "defaultRule": {"reviewerKey": "default", "autoVerdict": False, "autoVerdictMode": "verdict"},
+        "rules": [],
+    }
+    cfg.update(overrides)
+    return cfg
+
+
+@pytest.fixture
+def dispatches(tmp_path, monkeypatch):
+    from backend.database.automation_dispatches import AutomationDispatchesDB
+    ddb = AutomationDispatchesDB(Database(tmp_path / "dispatch.db"))
+    import backend.database as db_pkg
+    monkeypatch.setattr(db_pkg, "get_automation_dispatches_db", lambda: ddb)
+    return ddb
+
+
+def _synced_repo(store):
+    store.register_repo("acme/widgets")
+    store.mark_backfill_done("acme/widgets")
+    store.update_last_synced("acme/widgets")
+
+
+def _run_incremental(store, numbers, prs_by_number):
+    with patch(f"{WORKER}.fetch_pr_numbers", return_value=numbers), \
+         patch(f"{WORKER}.fetch_full_pr", side_effect=lambda o, r, n: prs_by_number[n]):
+        incremental_sync_repo(store, "acme/widgets", history_days=180)
+
+
+def test_incremental_records_candidates_only_for_unseen_prs(store, dispatches, monkeypatch):
+    from backend.services import automation_config
+    monkeypatch.setattr(automation_config, "get_config", lambda: _automation_cfg())
+    _synced_repo(store)
+    store.upsert_pr("acme/widgets", _pr(1))  # already known
+
+    _run_incremental(store, [1, 2], {1: _pr(1), 2: _pr(2)})
+
+    assert dispatches.get_by_pr("acme/widgets", 2) is not None
+    assert dispatches.get_by_pr("acme/widgets", 1) is None
+
+
+def test_incremental_records_nothing_when_scope_off(store, dispatches, monkeypatch):
+    from backend.services import automation_config
+    monkeypatch.setattr(automation_config, "get_config", lambda: _automation_cfg(scope="off"))
+    _synced_repo(store)
+    _run_incremental(store, [2], {2: _pr(2)})
+    assert dispatches.get_pending(10) == []
+
+
+def test_incremental_records_nothing_for_non_allowlisted_repo(store, dispatches, monkeypatch):
+    from backend.services import automation_config
+    monkeypatch.setattr(automation_config, "get_config",
+                        lambda: _automation_cfg(repoAllowlist=["other/repo"]))
+    _synced_repo(store)
+    _run_incremental(store, [2], {2: _pr(2)})
+    assert dispatches.get_pending(10) == []
+
+
+def test_incremental_author_scope_filters_authors(store, dispatches, monkeypatch):
+    from backend.services import automation_config
+    monkeypatch.setattr(automation_config, "get_config",
+                        lambda: _automation_cfg(scope="authors", authors=["alice"]))
+    _synced_repo(store)
+    bob_pr = _pr(3)
+    bob_pr["author"] = {"login": "bob"}
+    _run_incremental(store, [2, 3], {2: _pr(2), 3: bob_pr})
+    assert dispatches.get_by_pr("acme/widgets", 2) is not None
+    assert dispatches.get_by_pr("acme/widgets", 3) is None
+
+
+def test_incremental_skips_closed_and_draft_prs(store, dispatches, monkeypatch):
+    from backend.services import automation_config
+    monkeypatch.setattr(automation_config, "get_config", lambda: _automation_cfg())
+    _synced_repo(store)
+    draft = _pr(4)
+    draft["isDraft"] = True
+    _run_incremental(store, [4, 5], {4: draft, 5: _pr(5, state="MERGED")})
+    assert dispatches.get_pending(10) == []
+
+
+def test_candidate_hook_failure_does_not_break_sync(store, monkeypatch):
+    from backend.services import automation_config
+    def boom():
+        raise RuntimeError("config unreadable")
+    monkeypatch.setattr(automation_config, "get_config", boom)
+    _synced_repo(store)
+    _run_incremental(store, [2], {2: _pr(2)})   # must not raise
+    assert store.count_prs("acme/widgets") == 1
+
+
+def test_backfill_records_no_candidates(store, dispatches, monkeypatch):
+    from backend.services import automation_config
+    monkeypatch.setattr(automation_config, "get_config", lambda: _automation_cfg())
+    store.register_repo("acme/widgets")
+    with patch(f"{WORKER}.fetch_pr_numbers", side_effect=[[1], []]), \
+         patch(f"{WORKER}.fetch_full_pr", side_effect=lambda o, r, n: _pr(n)):
+        backfill_repo(store, "acme/widgets", history_days=180)
+    assert dispatches.get_pending(10) == []

@@ -10,6 +10,7 @@ import { AnalyticsView } from './components/analytics/AnalyticsView'
 import { WorkflowsView } from './components/workflows/WorkflowsView'
 import { RepoStatsView } from './components/repo-stats/RepoStatsView'
 import { ReviewLogsView } from './components/reviewLogs/ReviewLogsView'
+import { AutomationPanel } from './components/automation/AutomationPanel'
 import { QueuePanel } from './components/queue/QueuePanel'
 import { ReviewErrorModal } from './components/reviews/ReviewErrorModal'
 import { AuditErrorModal } from './components/audits/AuditErrorModal'
@@ -23,6 +24,7 @@ import { useAccountStore } from './stores/useAccountStore'
 import { useUIStore } from './stores/useUIStore'
 import { useQueueStore } from './stores/useQueueStore'
 import { useAutoVerdictStore } from './stores/useAutoVerdictStore'
+import { useAutomationStore } from './stores/useAutomationStore'
 import { useSettingsPersistence } from './hooks/useSettingsPersistence'
 import { fetchMergeQueue } from './api/queue'
 
@@ -31,6 +33,7 @@ function App() {
   const activeView = useUIStore((state) => state.activeView)
   const setMergeQueue = useQueueStore((state) => state.setMergeQueue)
   const loadAutoVerdictConfig = useAutoVerdictStore((state) => state.load)
+  const loadAutomation = useAutomationStore((state) => state.load)
 
   useSettingsPersistence()
 
@@ -46,7 +49,10 @@ function App() {
     // Load the auto-verdict criteria once so card tooltips and the header
     // indicator reflect the stored thresholds, not the client-side defaults.
     loadAutoVerdictConfig()
-  }, [loadAutoVerdictConfig])
+    // Load the automation config + reviewer registry so reviewer pickers and
+    // the header indicator always have the live reviewer list.
+    loadAutomation()
+  }, [loadAutoVerdictConfig, loadAutomation])
 
   useEffect(() => {
     // Load the merge queue once on startup so PR-list queue buttons and the
@@ -70,6 +76,8 @@ function App() {
         return <RepoStatsView />
       case 'review-logs':
         return <ReviewLogsView />
+      case 'automation':
+        return <AutomationPanel />
       default:
         return null
     }

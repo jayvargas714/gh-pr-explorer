@@ -59,6 +59,7 @@ const GROUPS: GroupDef[] = [
       { key: 'auto:armed',           label: '🤖 Armed' },
       { key: 'auto:posted',          label: '🤖 Verdict Posted' },
       { key: 'auto:needs_approval',  label: '🤖 Needs Manual Approval' },
+      { key: 'auto:unidentified',    label: '❓ Unidentified' },
     ],
   },
   {

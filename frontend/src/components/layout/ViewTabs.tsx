@@ -9,6 +9,7 @@ export function ViewTabs() {
     { id: 'workflows' as const, label: 'CI/Workflows', icon: '⚙️' },
     { id: 'repo-stats' as const, label: 'Repo Stats', icon: '📋' },
     { id: 'review-logs' as const, label: 'Review Logs', icon: '📜' },
+    { id: 'automation' as const, label: 'Automation', icon: '🤖' },
   ]
 
   return (

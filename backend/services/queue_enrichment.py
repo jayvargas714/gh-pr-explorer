@@ -9,7 +9,10 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional
 
-from backend.database import get_queue_db, get_reviews_db, get_audits_db, get_auto_verdicts_db
+from backend.database import (
+    get_queue_db, get_reviews_db, get_audits_db, get_auto_verdicts_db,
+    get_automation_dispatches_db,
+)
 from backend.services.github_service import fetch_pr_queue_data
 from backend.services.pr_service import get_ci_status, get_current_reviewers, get_review_status
 
@@ -160,12 +163,42 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db, auto_verd
         "minorIssueTitles": minor_issue_titles,
         "isFollowup": is_followup,
         "autoVerdict": format_auto_verdict_state(item, auto_verdict_last),
+        "automation": format_automation_state(
+            get_automation_dispatches_db().get_by_pr(item["repo"], item["pr_number"])
+        ),
         "reviewDecision": review_decision,
         "ciStatus": ci_status,
         "statusCheckRollup": status_check_rollup,
         "isDraft": is_draft,
         "currentReviewers": current_reviewers,
         "revLog": rev_log,
+    }
+
+
+def format_automation_state(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Shape an automation_dispatches row for the card payload. None -> None."""
+    if not row:
+        return None
+    rule_name = None
+    matched_rules: List[str] = []
+    raw = row.get("outcome_json")
+    if raw:
+        try:
+            outcome = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(outcome, dict):
+                rule_name = outcome.get("rule")
+                matched = outcome.get("matched_rules")
+                if isinstance(matched, list):
+                    matched_rules = matched
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return {
+        "status": row.get("status"),
+        "reviewerKey": row.get("reviewer_key"),
+        "ruleName": rule_name,
+        "matchedRules": matched_rules,
+        "detail": row.get("detail"),
+        "updatedAt": row.get("updated_at"),
     }
 
 

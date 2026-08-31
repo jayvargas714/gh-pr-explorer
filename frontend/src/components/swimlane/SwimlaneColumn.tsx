@@ -181,15 +181,16 @@ export function SwimlaneColumn({ lane, cards, canDelete, sortable, isHighlighted
         ) : (
           <h3
             className="mx-swl-column__name"
-            onDoubleClick={() => setEditing(true)}
-            title="Double-click to rename"
+            onDoubleClick={lane.isProtected ? undefined : () => setEditing(true)}
+            title={lane.isProtected ? 'Protected lane — cannot be renamed or deleted' : 'Double-click to rename'}
           >
             {lane.name}
             {lane.isDefault && <span className="mx-swl-column__default-tag">default</span>}
+            {lane.isProtected && <span className="mx-swl-column__default-tag">🤖 auto</span>}
           </h3>
         )}
         <span className="mx-swl-column__count">{cards.length}</span>
-        {canDelete && (
+        {canDelete && !lane.isProtected && (
           <Button
             variant="ghost"
             size="sm"

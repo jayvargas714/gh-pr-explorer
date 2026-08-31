@@ -7,7 +7,7 @@ from backend.database import get_queue_db
 from backend.services.auto_verdict_config import validate_override
 from backend.services.github_service import fetch_pr_state_and_sha
 from backend.services.queue_enrichment import enrich_queue_items
-from backend.services.review_service import VALID_REVIEWER_TYPES
+from backend.services.review_service import valid_reviewer_types
 from backend.routes import error_response
 
 VALID_AUTO_VERDICT_MODES = ("verdict", "comment")
@@ -108,7 +108,7 @@ def set_queue_auto_verdict(pr_number):
             return jsonify({"error": "Missing 'enabled' in request body"}), 400
 
         reviewer_type = data.get("reviewerType") or "default"
-        if reviewer_type not in VALID_REVIEWER_TYPES:
+        if reviewer_type not in valid_reviewer_types():
             return jsonify({"error": f"Invalid reviewerType: {reviewer_type}"}), 400
 
         mode = data.get("mode") or "verdict"

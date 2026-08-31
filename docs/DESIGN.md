@@ -198,7 +198,9 @@ The database module provides SQLite-based persistence for reviews and merge queu
 | `ReviewEventsDB` | Appends and queries review lifecycle events (start/completion/failure/retry) for the Review Logs tab |
 | `AuditsDB` | Handles PB↔ED audit storage, retrieval, and search operations (parallel to `ReviewsDB`) |
 | `MergeQueueDB` | Manages merge queue persistence and ordering |
-| `SwimlanesDB` | Manages swimlane definitions and per-card lane assignments (including pin state) for the Kanban view of the merge queue |
+| `SwimlanesDB` | Manages swimlane definitions and per-card lane assignments (including pin state and the protected Auto lane) for the Kanban view of the merge queue |
+| `ReviewersDB` | Configurable reviewer registry (key → label, Claude agent name, prompt context); seeds and locks the three builtins |
+| `AutomationDispatchesDB` | Durable ledger of automation pipeline decisions; `UNIQUE(repo, pr_number)` is the auto-dispatch idempotence guard |
 | `DevStatsDB` | Caches developer statistics with 4-hour TTL for improved performance |
 | `LifecycleCacheDB` | Caches PR lifecycle and review timing data with 2-hour TTL |
 | `WorkflowCacheDB` | Caches workflow runs data with configurable TTL (default 1 hour) for stale-while-revalidate serving |
@@ -434,6 +436,7 @@ CREATE TABLE IF NOT EXISTS swimlanes (
     color TEXT NOT NULL,            -- one of: success, warning, error, info, primary, accent, violet, slate
     position INTEGER NOT NULL,
     is_default INTEGER DEFAULT 0,   -- exactly one row may have is_default=1
+    is_protected INTEGER NOT NULL DEFAULT 0,  -- protected lanes (the Auto lane) refuse delete/rename
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_swimlanes_position ON swimlanes(position);
@@ -450,6 +453,34 @@ CREATE TABLE IF NOT EXISTS swimlane_assignments (
     FOREIGN KEY (swimlane_id) REFERENCES swimlanes(id) ON DELETE SET NULL
 );
 CREATE INDEX idx_swl_assign_lane ON swimlane_assignments(swimlane_id);
+
+-- Reviewer registry: configurable reviewer agents (builtins seeded + locked)
+CREATE TABLE IF NOT EXISTS reviewers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL UNIQUE,       -- slug: ^[a-z0-9_-]{1,32}$
+    label TEXT NOT NULL,
+    agent_name TEXT NOT NULL,       -- Claude agent name used in the review prompt
+    prompt_context TEXT,            -- optional prefix injected into the review prompt
+    is_builtin INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Automation dispatches: one row per PR the automation pipeline has seen.
+-- UNIQUE(repo, pr_number) is the restart-proof auto-dispatch idempotence guard.
+CREATE TABLE IF NOT EXISTS automation_dispatches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending|dispatched|unidentified|skipped|failed
+    outcome_json TEXT,              -- classify_files result (rule, matched_rules, counts)
+    reviewer_key TEXT,              -- routed reviewer for matched/default outcomes
+    detail TEXT,                    -- error / skip reason
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(repo, pr_number)
+);
+CREATE INDEX idx_automation_dispatches_status ON automation_dispatches(status);
 ```
 
 #### ReviewsDB Methods
@@ -577,7 +608,8 @@ The frontend uses React 18 with TypeScript, built via Vite. State management use
 
 #### Main Tab Architecture
 
-The application uses a 5-tab layout as the primary navigation:
+The application uses a 6-tab layout as the primary navigation (Pull Requests,
+Analytics, CI/Workflows, Repo Stats, Review Logs, Automation):
 
 | Tab | View Key | Description |
 |-----|----------|-------------|
@@ -1274,6 +1306,7 @@ A Trello-style alternative view of the merge queue. Cards displayed inside swiml
 | `color` | One of 8 palette keys: `success`, `warning`, `error`, `info`, `primary`, `accent`, `violet`, `slate`. Each maps to a Matrix UI CSS custom property |
 | `position` | 1-based ordering across lanes |
 | `isDefault` | Exactly one lane is the default; new merge queue items land here |
+| `isProtected` | Protected lanes (the automation "Auto" lane) cannot be deleted or renamed; recolor and reorder stay allowed |
 
 #### UI Components
 
@@ -1320,11 +1353,11 @@ Lane deletion behavior: if the lane is empty, deletion is silent. If it has card
 Two SQLite tables:
 
 ```sql
-swimlanes (id, name, color, position, is_default, created_at)
+swimlanes (id, name, color, position, is_default, is_protected, created_at)
 swimlane_assignments (id, queue_item_id UNIQUE, swimlane_id, position_in_lane, updated_at)
 ```
 
-`swimlane_assignments.queue_item_id` cascades from `merge_queue(id)`. `swimlane_assignments.swimlane_id` is `ON DELETE SET NULL`, with `delete_lane()` re-homing orphans to the default. On startup, `create_app()` invokes `ensure_default_lane()` and `reconcile_assignments()` to handle drift and bootstrap the feature on existing databases.
+`swimlane_assignments.queue_item_id` cascades from `merge_queue(id)`. `swimlane_assignments.swimlane_id` is `ON DELETE SET NULL`, with `delete_lane()` re-homing orphans to the default. On startup, `create_app()` invokes `ensure_default_lane()` and `reconcile_assignments()` to handle drift and bootstrap the feature on existing databases; `get_board` additionally invokes `ensure_auto_lane()` so the protected Auto lane self-heals (see the Automation feature section).
 
 #### Filtering
 
@@ -1660,7 +1693,7 @@ The comment body is composed the same way a manually posted verdict is (summary,
 
 #### How It Works
 
-1. The user sets thresholds once in the **Auto Verdict Criteria** panel (🤖 button in the header, or "Edit global criteria…" from any card's auto popover).
+1. The user sets thresholds once in the **Auto Verdict Criteria** section of the Automation tab (🤖 button in the header jumps there, or "Edit global criteria…" from any card's auto popover).
 2. On a queue or swimlane card, the **🤖 Auto** button arms that PR, picks the mode (verdict / comment), and picks which reviewer agent its auto review uses. Optionally, the popover's "Override for this PR…" sets per-PR criteria (see below).
 3. A review completes — started from anywhere, by any surface.
 4. `check_review_status` saves the review, then spawns a thread running `maybe_post_auto_verdict` (`backend/services/auto_verdict_service.py`).
@@ -1773,7 +1806,7 @@ auto_verdict_criteria TEXT      -- per-PR criteria override (JSON); NULL = use g
 | Component | Location | Description |
 |-----------|----------|-------------|
 | `AutoVerdictToggle` | Queue / swimlane card action row | `🤖 Auto` (or `💬 Auto` in comment mode) button, `--active` when armed. Opens a popover with arm/disarm, a mode radio group (verdict / comment), a reviewer-agent radio group, the effective criteria (with an `overridden` chip when a per-PR override is set), an "Override for this PR…" link, and an "Edit global criteria…" link |
-| `AutoVerdictConfigModal` | Overlay | The criteria panel: master toggle, three threshold inputs, auto-approve toggle, auto follow-up review toggle, Cancel/Save. With the optional `perPR` prop it edits a PR's criteria override instead: seeded from the effective config, master toggle hidden, plus a "Use defaults" button that clears the override |
+| `AutoVerdictConfigModal` | Overlay | Criteria editor opened from a card's 🤖 menu: "Edit global criteria…" edits the global config; with the `perPR` prop it edits that PR's criteria override (seeded from the effective config, master toggle hidden, "Use defaults" clears it). The header path moved to the Automation tab (`AutoVerdictCriteriaSection`); modal and section render the shared `AutoVerdictCriteriaForm` |
 | `AutoVerdictBadge` | Card badge row | Outcome badge with a tooltip carrying the reason, tallies, and local timestamp |
 | 🤖 header button | Header | Opens the criteria panel; shows an `on` chip while the master switch is enabled |
 | `RevLogBadge` | Card rev-log popover | Shows the verdict as a chip on the triggering review's row (reason in the tooltip); orphaned verdicts render as standalone `AUTO`-tagged entries whose click opens the derived-from review |
@@ -2127,6 +2160,114 @@ flips to local data without a manual refresh.
 `poll_interval_seconds` (120), `history_days` (180), `max_synced_repos` (10,
 least-recently-visited repos beyond the cap fall back to the live path),
 `exclude_repos` ([]).
+
+### Automation (Full Auto Review Pipeline)
+
+**Purpose**: A master **Automation tab** (sixth main tab, 🤖 in the header jumps to
+it) consolidating all auto-mode configuration, plus a full-automation pipeline:
+newly arriving PRs are detected by the PR sync worker, routed to a reviewer by
+configurable file-pattern rules, placed in a permanent protected **Auto** swimlane,
+and reviewed automatically — with per-rule auto-verdict/auto-comment behavior.
+Nothing is hardcoded (reviewers, patterns, repos): the tool stays generic for other
+repos and reviewer sets.
+
+**Reviewer registry** (`reviewers` table, `backend/database/reviewers.py`):
+each row maps a key (slug) to a display label, a Claude agent name, and optional
+prompt context prepended to the review prompt. Seeded idempotently with the three
+builtins previously hardcoded in `review_service.py`:
+`default` → elite-code-reviewer, `pb` → product-brief-reviewer, `ed` → ed-reviewer
+(the old `pb_context` strings became their `prompt_context`). Builtins cannot be
+deleted or repointed to another agent; label/context stay editable. Dispatch
+resolves the agent via `_resolve_reviewer()` (unknown key → warn + fall back to
+`default`); `valid_reviewer_types()` replaces the old hardcoded tuple in route
+validation, and every frontend picker (`ReviewerPickerMenu`, `AutoVerdictToggle`)
+maps over `useAutomationStore.reviewers` instead of local constants.
+
+**Automation config** (`user_settings['automation_config']`,
+`backend/services/automation_config.py`, same pattern as `auto_verdict_config.py`):
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `scope` | `"off"` | `off` \| `authors` (only listed authors) \| `all` new PRs |
+| `authors` | `[]` | GitHub logins, used when scope is `authors` |
+| `repoAllowlist` | `[]` | `owner/repo` list; empty = nothing processed |
+| `maxConcurrentAutoReviews` | `2` | cap on running auto-started reviews |
+| `ignorePatterns` | `[]` | globs stripped before classification (index files) |
+| `defaultRule` | default reviewer, verdict off | applies when no rule matches |
+| `rules` | `[]` | ordered `{name, patterns[], reviewerKey, autoVerdict, autoVerdictMode}` |
+
+All defaults are off/empty: installing the feature dispatches nothing until the
+operator sets a scope AND allowlists repos. `validate_config` rejects unknown
+reviewer keys, bad scopes/modes, empty rule names/patterns, concurrency < 1.
+
+**Detection** (`pr_sync_worker.incremental_sync_repo`): before hydration the
+worker computes `new_numbers = fetched − known rows`; after hydration
+`_record_automation_candidates` filters them (scope on, repo allowlisted, state
+OPEN, not draft, author in scope) and inserts `pending` rows into
+`automation_dispatches`. `UNIQUE(repo, pr_number)` makes the row a restart-proof
+idempotence guard: a PR is auto-dispatched at most once, ever. Backfill never
+calls the hook, so enabling automation cannot sweep existing PRs — only PRs first
+seen after enabling are picked up. A draft that later marks ready is already
+"known" and is not re-triggered (accepted v1 limitation). The hook is fully
+wrapped: a failure can never break the sync cycle.
+
+**Classification** (`backend/services/automation_service.py`, pure):
+`matches(path, pattern)` = `fnmatch.fnmatchcase` against the full repo-relative
+path OR the basename (note `*` crosses `/` in fnmatch). `classify_files` strips
+ignore-pattern files, then attributes each remaining file to the first rule (list
+order) with a matching pattern:
+- every file → the same single rule → **matched** (that rule's reviewer)
+- no file matches any rule (or all files ignored / empty) → **default**
+- files span ≥2 rules, or mix rule + unmatched → **unidentified**
+
+**Dispatch worker** (`backend/services/automation_dispatch_worker.py`, daemon
+started unconditionally from `app.py`, 30s interval; the loop's own
+`scope == 'off'` check is the live kill switch). Each cycle, within a budget of
+`maxConcurrentAutoReviews − running auto-started reviews`, drains `pending` rows:
+re-check repo allowlisted (else `skipped`) → `fetch_pr_files` (REST files endpoint
+with `--paginate`; `gh pr view --json files` truncates at 100) → classify → PR
+metadata from `synced_prs` (fallback `fetch_full_pr`) → add to merge queue if
+absent → `assign_card_to_lane` into the Auto lane → for unidentified, persist and
+stop (no review); otherwise `begin_review(reviewer_type=rule.reviewerKey,
+auto_started=True)` and, only after a 201, arm per-PR auto-verdict with the rule's
+`autoVerdict`/`autoVerdictMode` via `set_auto_verdict`. `begin_review` 409 (a
+review already running) → `skipped`; other failures increment `attempts` and
+retry next cycle, `failed` after 3. Follow-up reviews stay owned by the existing
+auto-review watcher once the card is armed.
+
+**Dispatch statuses** (`automation_dispatches.status`): `pending` → `dispatched`
+| `unidentified` | `skipped` | `failed`. The row also stores `outcome_json`
+(classification result), `reviewer_key`, `detail`, `attempts`.
+
+**Protected Auto lane**: `swimlanes.is_protected` column; `ensure_auto_lane()`
+seeds one violet "Auto" lane (self-heals from `get_board`). `delete_lane` and
+rename refuse protected lanes (recolor allowed); the frontend hides the delete
+button and rename affordance and shows a `🤖 auto` tag. `assign_card_to_lane`
+places a card at the bottom of a lane idempotently (used by the dispatcher so
+auto cards land in Auto instead of the default lane).
+
+**Card surface**: enriched queue items carry `automation:
+{status, reviewerKey, ruleName, matchedRules, detail, updatedAt} | null`
+(`format_automation_state` in `queue_enrichment.py`). `QueueItem` renders — in
+the title row, outside the `hasReview` gate — `❓ Unidentified` (warning, tooltip
+lists the spanned rules), `🤖 Auto` (info, tooltip names rule + reviewer), or
+`🤖 Auto failed` (error, tooltip carries the detail). The swimlane badge filter
+gains an `auto:unidentified` chip in the Auto Verdict group. Routing an
+unidentified PR is manual by design: the operator uses the normal review
+button/picker and AutoVerdictToggle on the card.
+
+**Automation tab** (`frontend/src/components/automation/`): `AutomationPanel`
+(draft state, one explicit Save for the config blob, dirty indicator) with
+sections: `ScopeSection` (off/authors/all cards, author + repo chip lists,
+concurrency), `RoutingRulesSection` (ordered rules with ↑/↓, pattern chips,
+reviewer select, per-rule verdict toggle + mode, ignore patterns, pinned default
+rule), `ReviewerRegistrySection` (table + inline add/edit/delete, builtins
+locked), and `AutoVerdictCriteriaSection` — the global auto-verdict criteria form
+relocated from the old header modal (storage and API unchanged; the shared form
+lives in `AutoVerdictCriteriaForm`, still used by the per-PR override modal).
+State: `useAutomationStore` (config + reviewers, loaded at app start). The header
+🤖 button now navigates to the tab and shows `on` when auto verdicts are enabled
+or automation scope ≠ off.
 
 ---
 
@@ -2903,6 +3044,43 @@ in the payload is dropped. A PR that is not in the merge queue returns 404.
   "message": "Auto verdict criteria updated"
 }
 ```
+
+---
+
+### Automation
+
+**GET** `/api/reviewers`
+
+Lists the reviewer registry (builtins first).
+
+**Response**:
+```json
+{
+  "reviewers": [
+    {"key": "default", "label": "Default Reviewer", "agentName": "elite-code-reviewer",
+     "promptContext": null, "isBuiltin": true}
+  ]
+}
+```
+
+**POST** `/api/reviewers` — body `{"key", "label", "agentName", "promptContext"?}`.
+Key must match `^[a-z0-9_-]{1,32}$` and be unique. Returns `201 {"reviewer": {...}}`;
+400 on validation errors.
+
+**PATCH** `/api/reviewers/<key>` — body `{"label"?, "agentName"?, "promptContext"?}`.
+Key is immutable; builtins refuse `agentName` changes. Returns `{"reviewer": {...}}`.
+
+**DELETE** `/api/reviewers/<key>` — 400 for builtins. A deleted key still referenced
+by a card or rule falls back to `default` at dispatch time with a logged warning
+(saving a config that references an unknown key is rejected).
+
+**GET** `/api/automation/config`
+
+Returns `{"config": {...}}` — stored `automation_config` merged over the defaults
+(see the Automation feature section for the shape).
+
+**PUT** `/api/automation/config` — body `{"config": {...}}` (or the bare object).
+Validates and persists; 400 with a message on bad scope/mode/rule/reviewer key.
 
 ---
 
@@ -3691,6 +3869,11 @@ Clears the in-memory cache.
 
 **File**: `/Users/jvargas714/Documents/dev/gh-pr-explorer/config.json`
 
+Runtime-editable configuration lives in the DB-backed `user_settings` table
+instead of this file: `auto_verdict_config` (Auto Verdicts feature) and
+`automation_config` (Automation feature) are both edited from the Automation tab
+and validated server-side; see those feature sections for their shapes.
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `port` | integer | 5714 | HTTP server port (Flask API) |
@@ -4402,6 +4585,7 @@ gh-pr-explorer/
 │       ├── review_routes.py        # /api/reviews CRUD + status + inline-comments + check-new-commits
 │       ├── history_routes.py       # /api/review-history list, detail, PR reviews, stats, check
 │       ├── settings_routes.py      # /api/settings CRUD
+│       ├── automation_routes.py    # /api/reviewers CRUD + /api/automation/config
 │       ├── cache_routes.py         # /api/clear-cache
 │       └── repo_stats_routes.py        # /api/repos/.../repo-stats, repo-stats/loc
 │   │

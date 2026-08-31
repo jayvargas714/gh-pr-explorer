@@ -20,7 +20,9 @@ export async function fetchActiveReviews(): Promise<ReviewsResponse> {
 /**
  * Start a code review
  */
-export type ReviewerType = 'default' | 'pb' | 'ed' | 'audit'
+// Reviewer registry key (see /api/reviewers), plus the special 'audit' flow
+// which runs outside the registry.
+export type ReviewerType = string
 
 export async function startReview(data: {
   number: number

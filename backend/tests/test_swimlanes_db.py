@@ -147,3 +147,53 @@ def test_move_card_across_lanes_preserves_pin(db, swl):
     # a's pin flag persisted.
     pinned = {x["queue_item_id"]: x["is_pinned"] for x in swl.get_assignments()}
     assert pinned[a] == 1
+
+
+# ----- Protected Auto lane -----
+
+
+def test_ensure_auto_lane_seeds_protected_lane(swl):
+    lane = swl.ensure_auto_lane()
+    assert lane["name"] == "Auto"
+    assert lane["is_protected"] == 1
+    assert lane["is_default"] == 0
+
+
+def test_ensure_auto_lane_is_idempotent(swl):
+    first = swl.ensure_auto_lane()
+    second = swl.ensure_auto_lane()
+    assert first["id"] == second["id"]
+    assert sum(1 for lane in swl.list_lanes() if lane["is_protected"]) == 1
+
+
+def test_delete_protected_lane_refused(swl):
+    lane = swl.ensure_auto_lane()
+    with pytest.raises(ValueError, match="protected"):
+        swl.delete_lane(lane["id"])
+
+
+def test_rename_protected_lane_refused_but_recolor_allowed(swl):
+    lane = swl.ensure_auto_lane()
+    with pytest.raises(ValueError, match="protected"):
+        swl.update_lane(lane["id"], name="Renamed")
+    updated = swl.update_lane(lane["id"], color="accent")
+    assert updated["color"] == "accent"
+    assert updated["name"] == "Auto"
+
+
+def test_assign_card_to_lane_moves_card_to_bottom(db, swl):
+    auto_lane = swl.ensure_auto_lane()
+    a = _add_card(db, swl, 1)
+    b = _add_card(db, swl, 2)
+    swl.assign_card_to_lane(a, auto_lane["id"])
+    swl.assign_card_to_lane(b, auto_lane["id"])
+    assert _lane_order(swl, auto_lane["id"]) == [a, b]
+    assert _lane_order(swl, swl.get_default_lane()["id"]) == []
+
+
+def test_assign_card_to_lane_is_idempotent(db, swl):
+    auto_lane = swl.ensure_auto_lane()
+    a = _add_card(db, swl, 1)
+    swl.assign_card_to_lane(a, auto_lane["id"])
+    swl.assign_card_to_lane(a, auto_lane["id"])
+    assert _lane_order(swl, auto_lane["id"]) == [a]

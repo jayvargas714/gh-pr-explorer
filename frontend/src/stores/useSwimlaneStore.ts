@@ -23,7 +23,7 @@ export type BadgeFilterKey =
   | 'ci:success' | 'ci:failure' | 'ci:pending'
   | 'has_review' | 'score:good' | 'score:ok' | 'score:bad'
   | 'new_commits' | 'reviewers_requested' | 'followup'
-  | 'auto:armed' | 'auto:posted' | 'auto:needs_approval'
+  | 'auto:armed' | 'auto:posted' | 'auto:needs_approval' | 'auto:unidentified'
 
 type BadgeDimension =
   | 'state' | 'draft' | 'review' | 'ci' | 'review_score'
@@ -50,6 +50,7 @@ export const BADGE_DIMENSION: Record<BadgeFilterKey, BadgeDimension> = {
   'auto:armed': 'auto_verdict',
   'auto:posted': 'auto_verdict',
   'auto:needs_approval': 'auto_verdict',
+  'auto:unidentified': 'auto_verdict',
 }
 
 export type BadgeFilterMode = 'OR' | 'AND'
@@ -198,6 +199,7 @@ function cardMatchesBadge(card: MergeQueueItem, key: BadgeFilterKey): boolean {
     case 'auto:armed':          return !!card.autoVerdict?.enabled
     case 'auto:posted':         return card.autoVerdict?.last?.outcome === 'posted'
     case 'auto:needs_approval': return card.autoVerdict?.last?.outcome === 'suppressed'
+    case 'auto:unidentified':   return card.automation?.status === 'unidentified'
   }
 }
 
