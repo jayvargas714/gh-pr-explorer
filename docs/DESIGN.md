@@ -1488,6 +1488,20 @@ A running review examines the PR as it stood when the review spawned; commits pu
 
 Division of labor with the auto follow-up watcher: `auto_review_watcher` reacts to commits that arrive *after* a review finished (armed PRs only) and explicitly skips running reviews; the stale watcher reacts to commits that arrive *while* a review runs (any review, manual or auto-started). Neither can double-start the other's review — `begin_review()` rejects duplicate runs with 409.
 
+#### Startup Reconciliation of Orphaned Reviews
+
+A service restart wipes the in-memory `active_reviews` registry and kills the Claude CLI subprocesses it was tracking, so any review in flight (or waiting out a retry backoff) would be silently lost — no terminal event, no review row, nothing left to retry it, and an automation ledger that already says `dispatched` and so never touches the PR again.
+
+`backend/services/review_reconciliation.py` closes that gap. `reconcile_orphaned_reviews()` runs once at startup (synchronously in `app.py`, before any watcher thread spawns, so a freshly started review can never be mistaken for an orphan):
+
+1. **Detect**: `ReviewEventsDB.get_orphaned_runs()` — runs with a `started` event but no `completed`/`gave_up`/`cancelled` event (a `failed` attempt alone is not terminal: a retry may have been armed when the process died). Each result carries the latest started event's spawn facts (attempt, pid, reviewer_agent, is_followup, auto_started).
+2. **Close**: best-effort SIGTERM of the recorded PID (the CLI child may have been reparented and still be running uselessly), then a `cancelled` event with reason `orphaned` — which also makes the run terminal, so reconciliation is idempotent across restarts.
+3. **Restart** (skipped when the PR already has a completed review newer than the orphaned run — e.g. the follow-up watcher recovered it — or the PR is no longer open):
+   - dispatch row `dispatched` → `requeue()` back to `pending` with detail "requeued after restart (orphaned review)"; the dispatch worker re-dispatches with routing, verdict arming, and the concurrency budget;
+   - otherwise (manual run) → `begin_review()` directly with the recorded reviewer agent, follow-up flag, and auto_started.
+
+Every orphan is handled in its own try/except and the function never raises — a reconciliation failure must not stop the app from starting.
+
 #### Split Review / Audit Triggers
 
 Every PR card — on the **PR list**, the **Merge Queue**, and the **Swimlane board** (queue and swimlane cards both render through `QueueItem`) — shows **two independent controls side by side**, so a review and a PB↔ED audit can run on the **same** PR at the same time, each tracking its own running/failed state (the backend already executes them independently):
@@ -1898,6 +1912,7 @@ Both vocabularies are closed sets. Recorders never invent a value.
 | `attempts_exhausted` | Set on the `gave_up` event |
 | `cancelled` | User-initiated termination |
 | `stale_commits` | The stale-review watcher stopped a running review because new commits landed; `detail` carries the old and new short SHAs |
+| `orphaned` | Startup reconciliation closed a run the previous process left in flight (service restart killed it) |
 | `auto_suppressed` | Criteria were met but auto-approve is off, so nothing was posted |
 | `auto_skipped` | The review was not eligible (PR closed, no usable content, non-completed status) |
 | `post_failed` | A verdict was chosen but GitHub rejected the post |

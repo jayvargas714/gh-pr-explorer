@@ -19,6 +19,7 @@ from backend.services.auto_review_watcher import auto_review_watcher_loop
 from backend.services.auto_verdict_watcher import auto_verdict_watcher_loop
 from backend.services.automation_dispatch_worker import automation_dispatch_worker_loop
 from backend.services.pr_sync_worker import pr_sync_worker_loop
+from backend.services.review_reconciliation import reconcile_orphaned_reviews
 from backend.services.stale_review_watcher import stale_review_watcher_loop
 
 app = create_app()
@@ -35,6 +36,10 @@ if __name__ == "__main__":
     # Under debug mode Flask's reloader runs this module twice; only the child
     # process (WERKZEUG_RUN_MAIN=true) should own the watcher.
     if not config.get("debug") or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        # Close and restart review runs the previous process left in flight.
+        # Synchronous, and before the watchers spawn, so a freshly started
+        # review can never be mistaken for an orphan.
+        reconcile_orphaned_reviews()
         threading.Thread(target=auto_verdict_watcher_loop, daemon=True).start()
         # Watch armed PRs for new commits so follow-up reviews start themselves.
         threading.Thread(target=auto_review_watcher_loop, daemon=True).start()

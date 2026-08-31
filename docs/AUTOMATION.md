@@ -173,6 +173,11 @@ and never post.
   PRs wait in line.
 - Failures (file fetch, review spawn) retry up to 3 times, then mark the PR
   `Auto failed` for manual handling.
+- **Restarts heal themselves.** Reviews that were running when the service went
+  down are detected at the next startup: the lost run is closed in the Review
+  Logs (reason "lost in a service restart") and the review restarts on its own —
+  auto-dispatched PRs go back through the pipeline, manual reviews respawn
+  directly. Deploying an update mid-review costs nothing.
 
 ## Troubleshooting
 

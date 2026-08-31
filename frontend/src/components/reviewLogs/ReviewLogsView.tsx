@@ -31,6 +31,7 @@ const REASON_LABELS: Record<string, string> = {
   attempts_exhausted: 'all attempts used',
   cancelled: 'cancelled by user',
   stale_commits: 'stopped: new commits made the review stale',
+  orphaned: 'lost in a service restart',
   auto_suppressed: 'suppressed by criteria',
   auto_skipped: 'not eligible',
   post_failed: 'GitHub rejected the post',

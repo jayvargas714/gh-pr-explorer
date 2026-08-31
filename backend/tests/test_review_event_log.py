@@ -112,8 +112,41 @@ def test_every_reason_constant_is_in_the_db_vocabulary():
     from backend.database.review_events import VALID_REASONS
     for constant in (rel.REASON_NO_OUTPUT, rel.REASON_NONZERO_EXIT,
                      rel.REASON_SPAWN_FAILED, rel.REASON_ATTEMPTS_EXHAUSTED,
-                     rel.REASON_CANCELLED, rel.REASON_STALE_COMMITS):
+                     rel.REASON_CANCELLED, rel.REASON_STALE_COMMITS,
+                     rel.REASON_ORPHANED):
         assert constant in VALID_REASONS
+
+
+def test_get_orphaned_runs_finds_started_runs_without_terminal_events(events_db):
+    # Run A: completed — not an orphan.
+    events_db.log_event("started", REPO, 1, "run-a", attempt=1, pid=11,
+                        reviewer_agent="default", is_followup=False, auto_started=True)
+    events_db.log_event("completed", REPO, 1, "run-a", attempt=1, review_id=5)
+    # Run B: in flight when the process died — orphan.
+    events_db.log_event("started", REPO, 2, "run-b", attempt=1, pid=22,
+                        reviewer_agent="pb", is_followup=True, auto_started=False)
+    # Run C: lost during retry backoff (failed attempt, retry armed, no terminal) — orphan.
+    events_db.log_event("started", REPO, 3, "run-c", attempt=1, pid=33,
+                        reviewer_agent="default", is_followup=False, auto_started=True)
+    events_db.log_event("failed", REPO, 3, "run-c", attempt=1, reason="nonzero_exit")
+    events_db.log_event("retry_scheduled", REPO, 3, "run-c", attempt=1)
+    # Run D: cancelled — not an orphan.
+    events_db.log_event("started", REPO, 4, "run-d", attempt=1, pid=44)
+    events_db.log_event("cancelled", REPO, 4, "run-d", attempt=1, reason="cancelled")
+
+    orphans = events_db.get_orphaned_runs()
+
+    by_run = {o["run_id"]: o for o in orphans}
+    assert set(by_run) == {"run-b", "run-c"}
+    b = by_run["run-b"]
+    assert b["repo"] == REPO
+    assert b["pr_number"] == 2
+    assert b["pid"] == 22
+    assert b["reviewer_agent"] == "pb"
+    assert b["is_followup"] == 1
+    assert b["auto_started"] == 0
+    assert b["attempt"] == 1
+    assert b["created_at"]
 
 
 @pytest.mark.parametrize("recorder,kwargs", [

@@ -1206,6 +1206,7 @@ export type ReviewLogReason =
   | 'attempts_exhausted'
   | 'cancelled'
   | 'stale_commits'
+  | 'orphaned'
   | 'auto_suppressed'
   | 'auto_skipped'
   | 'post_failed'

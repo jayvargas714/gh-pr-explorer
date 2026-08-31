@@ -16,7 +16,7 @@ VALID_EVENTS = (
 )
 VALID_REASONS = (
     "no_output", "nonzero_exit", "spawn_failed", "attempts_exhausted", "cancelled",
-    "stale_commits", "auto_suppressed", "auto_skipped", "post_failed",
+    "stale_commits", "orphaned", "auto_suppressed", "auto_skipped", "post_failed",
 )
 
 # Columns callers may set through log_event(**fields), in insert order.
@@ -108,6 +108,33 @@ class ReviewEventsDB:
             )
             row = cursor.fetchone()
             return row[0] if row else None
+
+    def get_orphaned_runs(self) -> List[Dict[str, Any]]:
+        """Runs that never reached a terminal event, one row per run.
+
+        Terminal means completed, gave_up, or cancelled — a `failed` attempt is
+        not terminal (a retry may have been armed when the process died). Each
+        result is the run's latest `started` event, carrying the spawn facts
+        (attempt, pid, reviewer_agent, is_followup, auto_started) that startup
+        reconciliation needs to record the loss and restart the review.
+        """
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT e.* FROM review_events e
+                JOIN (
+                    SELECT run_id, MAX(id) AS last_started_id
+                    FROM review_events
+                    WHERE event = 'started'
+                    GROUP BY run_id
+                ) latest ON e.id = latest.last_started_id
+                WHERE e.run_id NOT IN (
+                    SELECT DISTINCT run_id FROM review_events
+                    WHERE event IN ('completed', 'gave_up', 'cancelled')
+                )
+                ORDER BY e.id ASC
+            """)
+            return [dict(row) for row in cursor.fetchall()]
 
     def list_events(
         self,
