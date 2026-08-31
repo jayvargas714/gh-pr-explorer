@@ -264,3 +264,47 @@
     overflow-x: auto;
   }
 }
+
+/* Running-now strip: live view of the in-memory active review registry */
+.mx-review-logs__running {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  border: 1px solid var(--mx-color-border);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.mx-review-logs__running-title {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mx-review-logs__running-count {
+  margin-left: 0.35rem;
+  opacity: 0.8;
+}
+
+.mx-review-logs__running-empty {
+  opacity: 0.65;
+  font-size: 0.85rem;
+}
+
+.mx-review-logs__running-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.mx-review-logs__running-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.mx-review-logs__running-meta {
+  opacity: 0.7;
+}

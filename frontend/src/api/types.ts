@@ -518,6 +518,14 @@ export interface Review {
   review_file: string
   exit_code: number | null
   error_output: string
+  // Always present in API responses; optional because optimistic local
+  // entries (review buttons) construct Review literals before the server
+  // echoes the full row back.
+  is_followup?: boolean
+  auto_started?: boolean
+  attempt?: number
+  max_attempts?: number | null
+  reviewer_type?: string
 }
 
 export interface ReviewHistoryItem {

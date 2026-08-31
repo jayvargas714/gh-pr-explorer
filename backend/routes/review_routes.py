@@ -46,7 +46,9 @@ def get_reviews():
                 "error_output": review.get("error_output", ""),
                 "is_followup": review.get("is_followup", False),
                 "auto_started": review.get("auto_started", False),
-                "attempt": review.get("attempt", 1)
+                "attempt": review.get("attempt", 1),
+                "max_attempts": review.get("max_attempts"),
+                "reviewer_type": review.get("reviewer_type", "default")
             })
 
     return jsonify({"reviews": reviews_list})

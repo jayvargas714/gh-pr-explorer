@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useAccountStore } from '../../stores/useAccountStore'
 import { fetchReviewLogs, fetchReviewLogStats } from '../../api/reviewLogs'
-import { ReviewIssueCounts, ReviewLogEvent, ReviewLogStats } from '../../api/types'
+import { fetchActiveReviews } from '../../api/reviews'
+import { Review, ReviewIssueCounts, ReviewLogEvent, ReviewLogStats } from '../../api/types'
 import { Spinner } from '../common/Spinner'
 import { Alert } from '../common/Alert'
 import { Badge } from '../common/Badge'
@@ -313,6 +314,74 @@ function PostedCell({ verdict }: { verdict: ReviewLogEvent | null }) {
   )
 }
 
+const RUNNING_POLL_MS = 10_000
+
+function elapsedSince(startedAtIso: string): string {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(startedAtIso).getTime()) / 1000))
+  return formatDuration(seconds)
+}
+
+/** Live strip of reviews running right now, from the in-memory registry.
+ * Polls while the tab is mounted so a dispatched or finished review shows up
+ * without a manual refresh. */
+function RunningReviewsStrip() {
+  const [running, setRunning] = useState<Review[]>([])
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const resp = await fetchActiveReviews()
+        if (!cancelled) {
+          setRunning(resp.reviews.filter((r) => r.status === 'running'))
+          setLoaded(true)
+        }
+      } catch {
+        // Transient poll failure: keep showing the last known state.
+      }
+    }
+    poll()
+    const timer = setInterval(poll, RUNNING_POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [])
+
+  return (
+    <div className="mx-review-logs__running">
+      <span className="mx-review-logs__running-title">
+        {running.length > 0 ? '▶' : '⏸'} Running now
+        {loaded && <span className="mx-review-logs__running-count">{running.length}</span>}
+      </span>
+      {!loaded ? (
+        <span className="mx-review-logs__running-empty">checking…</span>
+      ) : running.length === 0 ? (
+        <span className="mx-review-logs__running-empty">no reviews are running right now</span>
+      ) : (
+        <div className="mx-review-logs__running-rows">
+          {running.map((r) => (
+            <span key={r.key} className="mx-review-logs__running-row">
+              <a href={r.pr_url || `https://github.com/${r.owner}/${r.repo}/pull/${r.pr_number}`}
+                 target="_blank" rel="noreferrer">
+                {r.owner}/{r.repo}#{r.pr_number}
+              </a>
+              <Badge size="sm" variant="info">{r.reviewer_type ?? 'default'}</Badge>
+              {r.is_followup && <Badge size="sm" variant="neutral">follow-up</Badge>}
+              {r.auto_started && <Badge size="sm" variant="neutral">auto</Badge>}
+              <span className="mx-review-logs__running-meta">
+                attempt {r.attempt ?? 1}{r.max_attempts ? `/${r.max_attempts}` : ''}
+                {r.started_at ? ` · running ${elapsedSince(r.started_at)}` : ''}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function ReviewLogsView() {
   const { selectedRepo } = useAccountStore()
   const [allRepos, setAllRepos] = useState(false)
@@ -432,6 +501,8 @@ export function ReviewLogsView() {
           <Button onClick={load}>Refresh</Button>
         </div>
       </div>
+
+      <RunningReviewsStrip />
 
       {stats && (
         <div className="mx-review-logs__stats">

@@ -1963,7 +1963,12 @@ Call sites:
 
 #### UI
 
-`components/reviewLogs/ReviewLogsView.tsx` renders a summary strip (successes,
+`components/reviewLogs/ReviewLogsView.tsx` opens with a **Running now strip**
+(`RunningReviewsStrip`): the live in-memory registry via `GET /api/reviews`,
+polled every 10s while the tab is mounted — each running review as a PR link
+with reviewer, follow-up/auto tags, attempt count, and elapsed time, and an
+explicit "no reviews are running right now" state so an idle system is
+distinguishable from a stuck one. Below it, the view renders a summary strip (successes,
 failures by reason, and how many runs a retry rescued) above a table grouped by
 `run_id`, each group collapsible to its attempt rows.
 
@@ -3425,11 +3430,18 @@ Returns all active and recent reviews with their current statuses.
       "pr_url": "https://github.com/owner/repo/pull/123",
       "review_file": "/path/to/reviews/owner-repo-pr-123.md",
       "exit_code": null,
-      "error_output": ""
+      "error_output": "",
+      "is_followup": false,
+      "auto_started": true,
+      "attempt": 1,
+      "max_attempts": 3,
+      "reviewer_type": "default"
     }
   ]
 }
 ```
+
+Backs the Review Logs tab's "Running now" strip as well as per-card spinners.
 
 ---
 

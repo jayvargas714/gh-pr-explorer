@@ -74,12 +74,12 @@ Keep `docs/DESIGN.md` updated whenever any design aspect changes, and update the
 | — Inline Comments Posting | 1590 | Post critical issues to GitHub |
 | — Review Verdict | 1638 | Approve/Request-Changes/Comment composer, verdict source toggle |
 | — Auto Verdicts | 1711 | Armed cards, verdict vs comment mode, criteria thresholds, per-PR criteria overrides, auto approve/changes-requested, watcher threads, auto follow-up reviews, optimistic arming |
-| — Review Event Log | 1862 | Per-attempt event log, run_id grouping, closed event/reason vocabularies, verdict posted/not-posted events, day-paginated Review Logs tab (day navigator, calendar jump, load-older), run hover panel w/ issue counts |
+| — Review Event Log | 1862 | Per-attempt event log, run_id grouping, closed event/reason vocabularies, verdict posted/not-posted events, day-paginated Review Logs tab (Running-now strip, day navigator, calendar jump, load-older), run hover panel w/ issue counts |
 | — PR List Sync | 2110 | DB-backed PR list: synced_repos/synced_prs tables, background sync worker (backfill + incremental), three-way route dispatch (DB/hybrid/live), per-card refresh, `pr_sync` config |
 | — Automation (Full Auto Pipeline) | 2193 | Automation tab (active-config summary strip, pipeline table w/ Remove/Re-enroll), reviewer registry, routing rules + ignore patterns, seed + backfill scripts, dispatch condition gates (CI pass, behind-base limit, non-draft; open PRs wait indefinitely, drafts off the board), pipeline size cap, manual enroll/opt-out control + badge on all card surfaces, automation_dispatches, dispatch worker, protected Auto lane, `automation_config` |
-| **API Endpoints** | 2389 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 3053, Automation/Reviewers at 3165, Review Logs at 3900 |
-| **Configuration** | 4018 | `config.json` options, incl. review retry + log retention, `pr_sync` block; DB-backed settings keys note |
-| **Technical Details** | 4075 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (4338), follow-up parent selection (4384), Review JSON Schema (4417) |
-| **Future Considerations** | 4588 | Improvements, known limitations |
-| **Appendix** | 4650 | Dependencies, file structure, run instructions |
+| **API Endpoints** | 2394 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 3058, Automation/Reviewers at 3170, Review Logs at 3912 |
+| **Configuration** | 4030 | `config.json` options, incl. review retry + log retention, `pr_sync` block; DB-backed settings keys note |
+| **Technical Details** | 4087 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (4350), follow-up parent selection (4396), Review JSON Schema (4429) |
+| **Future Considerations** | 4600 | Improvements, known limitations |
+| **Appendix** | 4662 | Dependencies, file structure, run instructions |
 
