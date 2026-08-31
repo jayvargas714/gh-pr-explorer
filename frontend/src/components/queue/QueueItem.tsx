@@ -10,6 +10,7 @@ import { NotesModal } from './NotesModal'
 import { VerdictModal } from './VerdictModal'
 import { QueueDescriptionModal } from './QueueDescriptionModal'
 import { QueueReviewButton } from '../reviews/QueueReviewButton'
+import { AutomationPipelineControl } from '../common/AutomationPipelineControl'
 import { AuditButton } from '../audits/AuditButton'
 import { AutoVerdictToggle } from '../autoVerdict/AutoVerdictToggle'
 import { AutoVerdictBadge } from '../autoVerdict/AutoVerdictBadge'
@@ -155,47 +156,18 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
     )
   }
 
-  // Automation pipeline state. Deliberately outside the hasReview-gated badge
-  // row below: an unidentified PR has no review yet, which is exactly when the
-  // operator needs to see the badge.
-  const getAutomationBadge = () => {
-    const automation = item.automation
-    if (!automation) return null
-    switch (automation.status) {
-      case 'unidentified':
-        return (
-          <span data-tooltip={`Automation couldn't pick a reviewer — files span: ${automation.matchedRules.join(', ') || 'no rules'}. Start the review manually.`}>
-            <Badge variant="warning">❓ Unidentified</Badge>
-          </span>
-        )
-      case 'dispatched':
-        return (
-          <span data-tooltip={`Auto-reviewed via ${automation.ruleName ?? 'default rule'} (${automation.reviewerKey})`}>
-            <Badge variant="info">🤖 Auto</Badge>
-          </span>
-        )
-      case 'failed':
-        return (
-          <span data-tooltip={`Automation gave up: ${automation.detail ?? 'unknown error'}`}>
-            <Badge variant="error">🤖 Auto failed</Badge>
-          </span>
-        )
-      case 'pending':
-        return (
-          <span data-tooltip={automation.detail ?? 'Waiting for dispatch conditions (CI, freshness, non-draft)'}>
-            <Badge variant="neutral">⏳ Auto waiting</Badge>
-          </span>
-        )
-      case 'skipped':
-        return (
-          <span data-tooltip={`Auto review skipped: ${automation.detail ?? 'no reason recorded'}`}>
-            <Badge variant="neutral">🤖 Auto skipped</Badge>
-          </span>
-        )
-      default:
-        return null
-    }
-  }
+  // Automation pipeline badge + add/remove control (shared with PR list
+  // cards). Deliberately outside the hasReview-gated badge row below: an
+  // unidentified PR has no review yet, which is exactly when the operator
+  // needs to see the badge.
+  const getAutomationBadge = () => (
+    <AutomationPipelineControl
+      repoFull={item.repo}
+      prNumber={item.number}
+      automation={item.automation}
+      prState={item.prState ?? undefined}
+    />
+  )
 
   return (
     <>

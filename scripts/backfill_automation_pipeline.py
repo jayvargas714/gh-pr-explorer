@@ -75,7 +75,10 @@ def backfill():
                 dispatches.record_candidate(repo_full, number)
                 headroom -= 1
                 summary["inserted"] += 1
-            elif existing["status"] in ("skipped", "failed"):
+            elif (existing["status"] in ("skipped", "failed")
+                  and existing.get("detail") != "manual opt-out"):
+                # An operator's explicit opt-out sticks until re-enrolled by
+                # hand; everything else skipped/failed gets a second chance.
                 if headroom <= 0:
                     summary["capped"] += 1
                     continue

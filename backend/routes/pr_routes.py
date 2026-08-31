@@ -8,7 +8,7 @@ from backend.config import get_config, get_pr_sync_config
 from backend.extensions import logger
 from backend.filters.pr_filter_builder import PRFilterParams, PRFilterBuilder
 from backend.routes import error_response
-from backend.database import get_timeline_cache_db, get_synced_prs_db
+from backend.database import get_automation_dispatches_db, get_timeline_cache_db, get_synced_prs_db
 from backend.services.github_service import (
     run_gh_command, parse_json_output, TransientGitHubError,
     PR_LIST_JSON_FIELDS as PR_JSON_FIELDS, fetch_full_pr,
@@ -51,16 +51,40 @@ def _get_pr_by_number(owner, repo, pr_number):
         pr["reviewDecision"] = _STATUS_TO_DECISION.get(pr["reviewStatus"], pr.get("reviewDecision"))
         pr["ciStatus"] = get_ci_status(pr.get("statusCheckRollup"))
         pr["currentReviewers"] = get_current_reviewers(reviews)
+        _attach_automation([pr], f"{owner}/{repo}")
         return jsonify({"prs": [pr]})
     except RuntimeError:
         return jsonify({"prs": []})
 
 
-def _postprocess_and_filter(prs, params):
+def _attach_automation(prs, repo_full):
+    """Stamp each PR with its automation pipeline row (or None), the same
+    `automation` shape queue cards carry, so the pipeline badge renders on the
+    main PR list too. Never fails the list."""
+    try:
+        from backend.services.queue_enrichment import format_automation_state
+
+        dispatches = get_automation_dispatches_db()
+        pairs = [(repo_full, pr["number"]) for pr in prs if pr.get("number")]
+        rows = {}
+        # Chunked: each pair costs two SQL variables and SQLite caps them.
+        for i in range(0, len(pairs), 400):
+            rows.update(dispatches.get_for_prs(pairs[i:i + 400]))
+        for pr in prs:
+            pr["automation"] = format_automation_state(rows.get((repo_full, pr.get("number"))))
+    except Exception as e:
+        logger.warning(f"Could not attach automation state for {repo_full}: {e}")
+        for pr in prs:
+            pr.setdefault("automation", None)
+    return prs
+
+
+def _postprocess_and_filter(prs, params, repo_full=None):
     """Compute serve-time statuses and apply draft/review/CI post-filters.
 
     Shared by the DB, hybrid, and live paths so all three return identical
-    shapes.
+    shapes. When repo_full is given, rows also get their automation pipeline
+    state attached.
     """
     # Post-filter by draft status (gh search qualifier draft: is unreliable)
     if params.draft == "true":
@@ -97,6 +121,8 @@ def _postprocess_and_filter(prs, params):
         selected_statuses = {s.strip() for s in params.status.split(",") if s.strip()}
         prs = [pr for pr in prs if pr.get("ciStatus") in selected_statuses]
 
+    if repo_full:
+        _attach_automation(prs, repo_full)
     return prs
 
 
@@ -155,21 +181,21 @@ def get_prs(owner, repo):
             else:
                 prs = store.get_prs(repo_full, states=states_for(params))
                 prs = sort_prs_locally(filter_prs_locally(prs, params), params)
-            prs = _postprocess_and_filter(prs, params)[: params.limit]
+            prs = _postprocess_and_filter(prs, params, repo_full)[: params.limit]
             return jsonify({"prs": prs, "sync": _sync_meta("ready", repo_row)})
 
         # Live path: unsynced repo, or backfill still running.
         live_status = "backfilling" if repo_row else "live"
         try:
             prs = parse_json_output(run_gh_command(builder.build()))
-            prs = _postprocess_and_filter(prs, params)
+            prs = _postprocess_and_filter(prs, params, repo_full)
             return jsonify({"prs": prs, "sync": _sync_meta(live_status, repo_row)})
         except TransientGitHubError:
             # Mid-backfill upstream flake: partial local data beats an error page.
             if repo_row and store.count_prs(repo_full):
                 prs = store.get_prs(repo_full, states=states_for(params))
                 prs = sort_prs_locally(filter_prs_locally(prs, params), params)
-                prs = _postprocess_and_filter(prs, params)[: params.limit]
+                prs = _postprocess_and_filter(prs, params, repo_full)[: params.limit]
                 return jsonify({"prs": prs, "sync": _sync_meta("backfilling", repo_row)})
             raise
 
@@ -204,7 +230,7 @@ def refresh_pr(owner, repo, pr_number):
 
     store.upsert_pr(repo_full, pr)
     row = store.get_prs_by_numbers(repo_full, [pr_number]).get(pr_number, pr)
-    processed = _postprocess_and_filter([row], PRFilterParams())
+    processed = _postprocess_and_filter([row], PRFilterParams(), repo_full)
     return jsonify({"pr": processed[0] if processed else row})
 
 

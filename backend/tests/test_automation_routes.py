@@ -161,6 +161,84 @@ def test_list_dispatches_rejects_unknown_status(client):
     assert c.get("/api/automation/dispatches?status=exploded").status_code == 400
 
 
+def test_enroll_adds_missing_pr_to_pipeline(client):
+    c, _, dispatches_db = client
+    resp = c.post("/api/automation/dispatches/owner/repo/5/enroll")
+    assert resp.status_code == 201
+    assert resp.get_json()["dispatch"]["status"] == "pending"
+    assert dispatches_db.get_by_pr("owner/repo", 5)["status"] == "pending"
+
+
+def test_enroll_revives_skipped_row(client):
+    c, _, dispatches_db = client
+    dispatches_db.record_candidate("owner/repo", 5)
+    row = dispatches_db.get_by_pr("owner/repo", 5)
+    dispatches_db.set_status(row["id"], "skipped", detail="manual opt-out")
+
+    resp = c.post("/api/automation/dispatches/owner/repo/5/enroll")
+
+    assert resp.status_code == 200
+    updated = dispatches_db.get_by_pr("owner/repo", 5)
+    assert updated["status"] == "pending"
+    assert updated["detail"] == "manually re-enrolled"
+
+
+def test_enroll_is_a_noop_for_active_rows(client):
+    c, _, dispatches_db = client
+    dispatches_db.record_candidate("owner/repo", 5)
+
+    resp = c.post("/api/automation/dispatches/owner/repo/5/enroll")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["dispatch"]["status"] == "pending"
+
+
+def test_enroll_refuses_dispatched_rows(client):
+    c, _, dispatches_db = client
+    dispatches_db.record_candidate("owner/repo", 5)
+    dispatches_db.set_status(dispatches_db.get_by_pr("owner/repo", 5)["id"], "dispatched")
+
+    resp = c.post("/api/automation/dispatches/owner/repo/5/enroll")
+
+    assert resp.status_code == 409
+    assert dispatches_db.get_by_pr("owner/repo", 5)["status"] == "dispatched"
+
+
+def test_enroll_respects_pipeline_cap(client, monkeypatch):
+    c, _, dispatches_db = client
+    from backend.services import automation_config
+    stored = automation_config.get_config()
+    stored["maxPipelineSize"] = 1
+    monkeypatch.setattr(automation_config, "get_config", lambda: stored)
+    dispatches_db.record_candidate("owner/repo", 1)
+
+    resp = c.post("/api/automation/dispatches/owner/repo/5/enroll")
+
+    assert resp.status_code == 409
+    assert dispatches_db.get_by_pr("owner/repo", 5) is None
+
+
+def test_optout_removes_pending_row_from_pipeline(client):
+    c, _, dispatches_db = client
+    dispatches_db.record_candidate("owner/repo", 5)
+
+    resp = c.post("/api/automation/dispatches/owner/repo/5/optout")
+
+    assert resp.status_code == 200
+    row = dispatches_db.get_by_pr("owner/repo", 5)
+    assert row["status"] == "skipped"
+    assert row["detail"] == "manual opt-out"
+
+
+def test_optout_requires_a_pending_row(client):
+    c, _, dispatches_db = client
+    assert c.post("/api/automation/dispatches/owner/repo/5/optout").status_code == 404
+
+    dispatches_db.record_candidate("owner/repo", 5)
+    dispatches_db.set_status(dispatches_db.get_by_pr("owner/repo", 5)["id"], "dispatched")
+    assert c.post("/api/automation/dispatches/owner/repo/5/optout").status_code == 409
+
+
 def test_put_automation_config_accepts_custom_reviewer_key(client):
     c, reviewers_db, _ = client
     reviewers_db.create("rust", "Rust", "rust-engineer")

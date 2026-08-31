@@ -113,6 +113,22 @@ def test_backfill_leaves_active_and_terminal_dispatch_rows_alone(dispatches, mon
     assert summary["unchanged"] == 3
 
 
+def test_backfill_never_revives_manual_optouts(dispatches, monkeypatch):
+    """A PR the operator explicitly removed stays out until re-enrolled by hand."""
+    dispatches.record_candidate(REPO, 1)
+    row = dispatches.get_by_pr(REPO, 1)
+    dispatches.set_status(row["id"], "skipped", detail="manual opt-out")
+    _stub(monkeypatch, _cfg(), {REPO: [_pr(1)]})
+
+    summary = script.backfill()
+
+    updated = dispatches.get_by_pr(REPO, 1)
+    assert updated["status"] == "skipped"
+    assert updated["detail"] == "manual opt-out"
+    assert summary["revived"] == 0
+    assert summary["unchanged"] == 1
+
+
 def test_backfill_respects_pipeline_cap(dispatches, monkeypatch):
     dispatches.record_candidate(REPO, 90)  # existing pending row occupies the cap
     _stub(monkeypatch, _cfg(maxPipelineSize=2), {REPO: [_pr(1), _pr(2), _pr(3)]})

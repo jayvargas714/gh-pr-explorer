@@ -4,13 +4,15 @@ import { Badge } from '../common/Badge'
 import { ReviewersBadge } from '../common/ReviewersBadge'
 import { CIStatusBadge } from '../common/CIStatusBadge'
 import { ChangesRequestedModal } from '../common/ChangesRequestedModal'
+import { AutomationPipelineControl } from '../common/AutomationPipelineControl'
 
 interface PRBadgesProps {
   pr: PullRequest
   divergence?: DivergenceInfo
+  repoFull?: string
 }
 
-export function PRBadges({ pr, divergence }: PRBadgesProps) {
+export function PRBadges({ pr, divergence, repoFull }: PRBadgesProps) {
   const [showChangesModal, setShowChangesModal] = useState(false)
   const reviewers = pr.currentReviewers || []
 
@@ -107,6 +109,15 @@ export function PRBadges({ pr, divergence }: PRBadgesProps) {
     reviewers.length > 0 ? <ReviewersBadge key="reviewers" reviewers={reviewers} /> : null,
     getCIStatusBadge(),
     getDivergenceBadge(),
+    repoFull ? (
+      <AutomationPipelineControl
+        key="auto-pipeline"
+        repoFull={repoFull}
+        prNumber={pr.number}
+        automation={pr.automation}
+        prState={pr.state}
+      />
+    ) : null,
   ].filter(Boolean)
 
   if (badges.length === 0 && !showChangesModal) return null

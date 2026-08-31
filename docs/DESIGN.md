@@ -2249,8 +2249,22 @@ author when scope is `authors`, then inserts missing rows as `pending` and
 revives `skipped`/`failed` rows of still-open PRs back to `pending` (via
 `AutomationDispatchesDB.requeue`, which clears attempts and replaces the detail
 with "revived by backfill"). `pending`/`dispatched`/`unidentified` rows are left
-untouched, preserving dispatch-at-most-once. Respects `maxPipelineSize` and
-prints inserted/revived/unchanged/filtered/capped counts.
+untouched, preserving dispatch-at-most-once. Rows whose detail is
+`manual opt-out` are never revived — an operator's explicit removal sticks
+until re-enrolled by hand. Respects `maxPipelineSize` and prints
+inserted/revived/unchanged/filtered/capped counts.
+
+**Manual pipeline control**: the operator can add or remove any PR by hand.
+`POST /api/automation/dispatches/<owner>/<repo>/<pr>/enroll` inserts a missing
+row as `pending` (or revives a `skipped`/`failed` row with detail
+"manually re-enrolled"); a row already `pending` is a no-op, and
+`dispatched`/`unidentified` rows are refused (409) — dispatch-at-most-once is
+never bypassed. The cap applies. `POST …/optout` flips a `pending` row to
+`skipped` with detail `manual opt-out` (404 when absent, 409 when not
+pending); the dispatch worker ignores non-pending rows, so that is the whole
+opt-out, and the backfill script honors it. Both are exposed as the
+`🤖+`/`🤖−` toggle in `AutomationPipelineControl` (on PR list and queue/
+swimlane cards) and as Remove/Re-enroll row actions in the pipeline table.
 
 **Classification** (`backend/services/automation_service.py`, pure):
 `matches(path, pattern)` = `fnmatch.fnmatchcase` against the full repo-relative
@@ -2315,8 +2329,16 @@ auto cards land in Auto instead of the default lane).
 
 **Card surface**: enriched queue items carry `automation:
 {status, reviewerKey, ruleName, matchedRules, detail, updatedAt} | null`
-(`format_automation_state` in `queue_enrichment.py`). `QueueItem` renders — in
-the title row, outside the `hasReview` gate — `❓ Unidentified` (warning, tooltip
+(`format_automation_state` in `queue_enrichment.py`), and the main PR list
+carries the same field per row (`_attach_automation` in `pr_routes.py`, one
+batched `get_for_prs` lookup, failure-safe) — so pipeline membership is visible
+on all three surfaces: PR list, merge queue, swimlanes. Both card kinds render
+the shared `AutomationPipelineControl` (badge + `🤖+`/`🤖−` add/remove toggle
+hitting the enroll/optout endpoints with optimistic local state; the toggle
+shows add for un-enrolled open PRs and skipped/failed rows, remove for pending
+rows, nothing for dispatched/unidentified). The badge states — rendered in
+`QueueItem`'s title row outside the `hasReview` gate, and in `PRBadges` on the
+PR list — are `❓ Unidentified` (warning, tooltip
 lists the spanned rules), `🤖 Auto` (info, tooltip names rule + reviewer),
 `🤖 Auto failed` (error, tooltip carries the detail), `⏳ Auto waiting` (neutral,
 tooltip carries the blocking reason while a pending row waits on the dispatch
@@ -3179,6 +3201,21 @@ The pipeline view: `automation_dispatches` rows, most recently updated first.
   ]
 }
 ```
+
+**POST** `/api/automation/dispatches/<owner>/<repo>/<pr_number>/enroll`
+
+Manually add the PR to the pipeline. Inserts a `pending` row (201), revives a
+`skipped`/`failed` row with detail "manually re-enrolled" (200), no-ops on an
+already-pending row (200). 409 when the row is `dispatched`/`unidentified`
+(dispatch-at-most-once) or the pipeline is at `maxPipelineSize`. Returns
+`{"dispatch": {...}, "message": "..."}`.
+
+**POST** `/api/automation/dispatches/<owner>/<repo>/<pr_number>/optout`
+
+Remove a waiting PR from the pipeline (manual mode): flips a `pending` row to
+`skipped` with detail `manual opt-out`, which the backfill script never
+revives. 404 when the PR has no row, 409 when the row is not pending. Returns
+`{"dispatch": {...}, "message": "..."}`.
 
 ---
 

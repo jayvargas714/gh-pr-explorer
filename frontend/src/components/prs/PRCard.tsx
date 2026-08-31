@@ -158,7 +158,7 @@ export function PRCard({ pr }: PRCardProps) {
         </div>
       </div>
 
-      <PRBadges pr={pr} divergence={divergence} />
+      <PRBadges pr={pr} divergence={divergence} repoFull={repoFullName} />
 
       <div className="mx-pr-card__stats">
         <span className="mx-pr-card__stat mx-pr-card__stat--additions">

@@ -110,15 +110,35 @@ python scripts/backfill_automation_pipeline.py
 It enrolls every open PR in your allowlisted repos (drafts included; author
 scope respected), revives PRs a previous run skipped or failed, never touches
 PRs already dispatched or waiting, and reports what it did. Safe to re-run —
-each PR is still auto-dispatched at most once.
+each PR is still auto-dispatched at most once, and PRs you removed by hand
+(manual opt-out) are never re-enrolled by the script.
+
+## Adding and removing PRs by hand
+
+You have full per-PR control over pipeline membership:
+
+- **On any card** — PR list, merge queue, or swimlane — the automation badge
+  area carries a small toggle: `🤖+` adds the PR to the pipeline (or revives a
+  skipped/failed one), `🤖−` removes a waiting PR (manual mode). A removed PR
+  shows `🤖 Auto skipped · manual opt-out` and stays out — the backfill script
+  won't re-add it — until you press `🤖+` again.
+- **In the Pipeline table** the same actions appear as **Remove** (on waiting
+  rows) and **Re-enroll** (on skipped/failed rows).
+
+PRs already auto-reviewed (`🤖 Auto`) or unidentified can't be re-added — a PR
+is auto-dispatched at most once; use the normal Review button for another pass.
 
 ## What you'll see
 
 - **Auto lane** on the swimlane board — permanent (no delete/rename), tagged
   `🤖 auto`. Every auto-processed PR lands there; you can still drag cards out.
 - **Pipeline table** (top of the Automation tab) — every PR the pipeline is
-  holding or has handled, filterable by status. This is where parked drafts are
-  visible.
+  holding or has handled, filterable by status, with Remove/Re-enroll actions.
+  This is where parked drafts are visible.
+- **Pipeline badge on every surface** — the same automation badge (waiting /
+  auto / skipped / failed / unidentified) now shows on main PR list cards too,
+  not just queue and swimlane cards, so you can tell at a glance whether any
+  PR is in the pipeline.
 - **Card badges**: `⏳ Auto waiting` (conditions not met yet; tooltip says why),
   `🤖 Auto` (auto-reviewed; tooltip names the rule and reviewer),
   `❓ Unidentified` (tooltip lists the rules the files spanned),

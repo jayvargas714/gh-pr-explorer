@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { listAutomationDispatches } from '../../api/automation'
+import {
+  enrollAutomationDispatch,
+  listAutomationDispatches,
+  optOutAutomationDispatch,
+} from '../../api/automation'
 import { AutomationDispatchRow } from '../../api/types'
 import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
@@ -42,6 +46,43 @@ export function PipelineSection() {
 
   const pendingCount = rows.filter((r) => r.status === 'pending').length
 
+  const [actingOn, setActingOn] = useState<string | null>(null)
+
+  const act = async (row: AutomationDispatchRow, action: 'remove' | 'enroll') => {
+    const key = `${row.repo}#${row.prNumber}`
+    setActingOn(key)
+    setError(null)
+    try {
+      if (action === 'remove') await optOutAutomationDispatch(row.repo, row.prNumber)
+      else await enrollAutomationDispatch(row.repo, row.prNumber)
+      await refresh(statusFilter)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : `Failed to ${action} ${key}`)
+    } finally {
+      setActingOn(null)
+    }
+  }
+
+  const rowAction = (row: AutomationDispatchRow) => {
+    const key = `${row.repo}#${row.prNumber}`
+    if (row.status === 'pending') {
+      return (
+        <Button size="sm" variant="danger" disabled={actingOn !== null}
+                onClick={() => act(row, 'remove')}>
+          {actingOn === key ? '…' : 'Remove'}
+        </Button>
+      )
+    }
+    if (row.status === 'skipped' || row.status === 'failed') {
+      return (
+        <Button size="sm" disabled={actingOn !== null} onClick={() => act(row, 'enroll')}>
+          {actingOn === key ? '…' : 'Re-enroll'}
+        </Button>
+      )
+    }
+    return null
+  }
+
   return (
     <section className="mx-automation__section">
       <h3 className="mx-automation__section-title">Pipeline</h3>
@@ -83,6 +124,7 @@ export function PipelineSection() {
               <th>Detail</th>
               <th>Reviewer</th>
               <th>Updated (UTC)</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -101,6 +143,7 @@ export function PipelineSection() {
                 <td className="mx-automation__pipeline-detail">{row.detail || '—'}</td>
                 <td>{row.reviewerKey || '—'}</td>
                 <td>{row.updatedAt}</td>
+                <td>{rowAction(row)}</td>
               </tr>
             ))}
           </tbody>

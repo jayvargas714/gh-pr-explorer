@@ -15,9 +15,16 @@ def store(tmp_path):
 
 
 @pytest.fixture
-def client(store, monkeypatch):
+def dispatches(tmp_path):
+    from backend.database.automation_dispatches import AutomationDispatchesDB
+    return AutomationDispatchesDB(Database(tmp_path / "test.db"))
+
+
+@pytest.fixture
+def client(store, dispatches, monkeypatch):
     import backend.routes.pr_routes as pr_routes
     monkeypatch.setattr(pr_routes, "get_synced_prs_db", lambda: store)
+    monkeypatch.setattr(pr_routes, "get_automation_dispatches_db", lambda: dispatches)
     monkeypatch.setattr(pr_routes, "get_pr_sync_config", lambda: {
         "enabled": True, "poll_interval_seconds": 120, "history_days": 180,
         "max_synced_repos": 10, "exclude_repos": ["acme/excluded"],
@@ -58,6 +65,24 @@ def test_db_path_serves_from_store_without_gh(client, store):
     assert body["prs"][0]["fetchedAt"]
     assert body["prs"][0]["reviewStatus"]  # computed at serve time
     mock_gh.assert_not_called()
+
+
+def test_pr_list_carries_automation_pipeline_state(client, store, dispatches):
+    """PR list rows get the same `automation` field queue cards have, so the
+    pipeline badge can render on the main PR list."""
+    store.register_repo("acme/widgets")
+    store.mark_backfill_done("acme/widgets")
+    store.update_last_synced("acme/widgets")
+    store.upsert_pr("acme/widgets", _pr(1))
+    store.upsert_pr("acme/widgets", _pr(2))
+    dispatches.record_candidate("acme/widgets", 1)
+
+    with patch("backend.routes.pr_routes.run_gh_command"):
+        resp = client.get("/api/repos/acme/widgets/prs?state=open")
+
+    prs = {p["number"]: p for p in resp.get_json()["prs"]}
+    assert prs[1]["automation"]["status"] == "pending"
+    assert prs[2]["automation"] is None
 
 
 def test_visit_registers_repo(client, store):

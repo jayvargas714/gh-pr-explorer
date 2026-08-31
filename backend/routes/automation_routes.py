@@ -30,19 +30,75 @@ def list_automation_dispatches():
     except Exception as e:
         return error_response("Internal server error", 500, f"Error listing automation dispatches: {e}")
 
-    return jsonify({"dispatches": [
-        {
-            "repo": row["repo"],
-            "prNumber": row["pr_number"],
-            "status": row["status"],
-            "detail": row["detail"],
-            "reviewerKey": row["reviewer_key"],
-            "attempts": row["attempts"],
-            "createdAt": row["created_at"],
-            "updatedAt": row["updated_at"],
-        }
-        for row in rows
-    ]})
+    return jsonify({"dispatches": [_dispatch_payload(row) for row in rows]})
+
+
+def _dispatch_payload(row):
+    return {
+        "repo": row["repo"],
+        "prNumber": row["pr_number"],
+        "status": row["status"],
+        "detail": row["detail"],
+        "reviewerKey": row["reviewer_key"],
+        "attempts": row["attempts"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+@automation_bp.route("/api/automation/dispatches/<owner>/<repo>/<int:pr_number>/enroll",
+                     methods=["POST"])
+def enroll_automation_dispatch(owner, repo, pr_number):
+    """Manually add a PR to the automation pipeline (or revive a skipped/failed row).
+
+    A row that is already pending is a no-op; dispatched/unidentified rows are
+    refused — a PR is auto-dispatched at most once.
+    """
+    repo_full = f"{owner}/{repo}"
+    dispatches = get_automation_dispatches_db()
+    row = dispatches.get_by_pr(repo_full, pr_number)
+
+    if row and row["status"] == "pending":
+        return jsonify({"dispatch": _dispatch_payload(row), "message": "Already in the pipeline"})
+    if row and row["status"] in ("dispatched", "unidentified"):
+        return jsonify({"error": f"PR was already {row['status']} — a PR is auto-dispatched at most once"}), 409
+
+    cap = automation_config.get_config().get("maxPipelineSize", 1000)
+    if dispatches.count_pending() >= cap:
+        return jsonify({"error": f"Pipeline is at maxPipelineSize ({cap})"}), 409
+
+    if row is None:
+        dispatches.record_candidate(repo_full, pr_number)
+        status = 201
+    else:  # skipped or failed
+        dispatches.requeue(row["id"], detail="manually re-enrolled")
+        status = 200
+    fresh = dispatches.get_by_pr(repo_full, pr_number)
+    logger_msg = "enrolled" if status == 201 else "re-enrolled"
+    return jsonify({"dispatch": _dispatch_payload(fresh),
+                    "message": f"PR {logger_msg} in the automation pipeline"}), status
+
+
+@automation_bp.route("/api/automation/dispatches/<owner>/<repo>/<int:pr_number>/optout",
+                     methods=["POST"])
+def optout_automation_dispatch(owner, repo, pr_number):
+    """Remove a waiting PR from the pipeline (manual mode).
+
+    Only pending rows can opt out; the backfill script never revives a
+    "manual opt-out" row, so the choice sticks until explicitly re-enrolled.
+    """
+    repo_full = f"{owner}/{repo}"
+    dispatches = get_automation_dispatches_db()
+    row = dispatches.get_by_pr(repo_full, pr_number)
+    if row is None:
+        return jsonify({"error": "PR is not in the pipeline"}), 404
+    if row["status"] != "pending":
+        return jsonify({"error": f"PR is {row['status']}, not waiting — nothing to remove"}), 409
+
+    dispatches.set_status(row["id"], "skipped", detail="manual opt-out")
+    fresh = dispatches.get_by_pr(repo_full, pr_number)
+    return jsonify({"dispatch": _dispatch_payload(fresh),
+                    "message": "PR removed from the automation pipeline"})
 
 
 @automation_bp.route("/api/automation/config", methods=["GET"])

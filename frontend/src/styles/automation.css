@@ -414,3 +414,30 @@
   color: var(--mx-color-error, #ff5555);
   font-size: 0.85rem;
 }
+
+/* Pipeline badge + add/remove control, shared by PR list and queue cards */
+.mx-auto-pipeline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.mx-auto-pipeline__toggle {
+  background: transparent;
+  border: 1px solid var(--mx-color-border);
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  padding: 0.05rem 0.3rem;
+}
+
+.mx-auto-pipeline__toggle:hover:not(:disabled) {
+  border-color: var(--mx-color-primary, #00cc66);
+}
+
+.mx-auto-pipeline__toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

@@ -70,6 +70,9 @@ export interface PullRequest {
   changedFiles: number
   milestone: Milestone | null
   fetchedAt?: string | null
+  // Automation pipeline state (null/absent when the PR was never enrolled).
+  // Drives the pipeline badge + add/remove control on PR list cards.
+  automation?: AutomationDispatchState | null
 }
 
 export interface Label {

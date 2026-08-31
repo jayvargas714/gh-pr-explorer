@@ -76,10 +76,10 @@ Keep `docs/DESIGN.md` updated whenever any design aspect changes, and update the
 | — Auto Verdicts | 1697 | Armed cards, verdict vs comment mode, criteria thresholds, per-PR criteria overrides, auto approve/changes-requested, watcher threads, auto follow-up reviews, optimistic arming |
 | — Review Event Log | 1848 | Per-attempt event log, run_id grouping, closed event/reason vocabularies, verdict posted/not-posted events, day-paginated Review Logs tab (day navigator, calendar jump, load-older), run hover panel w/ issue counts |
 | — PR List Sync | 2095 | DB-backed PR list: synced_repos/synced_prs tables, background sync worker (backfill + incremental), three-way route dispatch (DB/hybrid/live), per-card refresh, `pr_sync` config |
-| — Automation (Full Auto Pipeline) | 2178 | Automation tab (active-config summary strip, pipeline table), reviewer registry, routing rules + ignore patterns, seed + backfill scripts, dispatch condition gates (CI pass, behind-base limit, non-draft; open PRs wait indefinitely, drafts off the board), pipeline size cap, unidentified/waiting badges, automation_dispatches, dispatch worker, protected Auto lane, `automation_config` |
-| **API Endpoints** | 2352 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 3016, Automation/Reviewers at 3128, Review Logs at 3848 |
-| **Configuration** | 3966 | `config.json` options, incl. review retry + log retention, `pr_sync` block; DB-backed settings keys note |
-| **Technical Details** | 4023 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (4286), follow-up parent selection (4332), Review JSON Schema (4365) |
-| **Future Considerations** | 4536 | Improvements, known limitations |
-| **Appendix** | 4598 | Dependencies, file structure, run instructions |
+| — Automation (Full Auto Pipeline) | 2178 | Automation tab (active-config summary strip, pipeline table w/ Remove/Re-enroll), reviewer registry, routing rules + ignore patterns, seed + backfill scripts, dispatch condition gates (CI pass, behind-base limit, non-draft; open PRs wait indefinitely, drafts off the board), pipeline size cap, manual enroll/opt-out control + badge on all card surfaces, automation_dispatches, dispatch worker, protected Auto lane, `automation_config` |
+| **API Endpoints** | 2374 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 3038, Automation/Reviewers at 3150, Review Logs at 3885 |
+| **Configuration** | 4003 | `config.json` options, incl. review retry + log retention, `pr_sync` block; DB-backed settings keys note |
+| **Technical Details** | 4060 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (4323), follow-up parent selection (4369), Review JSON Schema (4402) |
+| **Future Considerations** | 4573 | Improvements, known limitations |
+| **Appendix** | 4635 | Dependencies, file structure, run instructions |
 

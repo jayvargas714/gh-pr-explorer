@@ -24,6 +24,22 @@ export async function listAutomationDispatches(
   return api.get(`/automation/dispatches?${params}`)
 }
 
+/** Manually add a PR to the automation pipeline (revives skipped/failed rows). */
+export async function enrollAutomationDispatch(
+  repoFull: string,
+  prNumber: number
+): Promise<{ dispatch: AutomationDispatchRow; message: string }> {
+  return api.post(`/automation/dispatches/${repoFull}/${prNumber}/enroll`, {})
+}
+
+/** Remove a waiting PR from the pipeline (manual opt-out). */
+export async function optOutAutomationDispatch(
+  repoFull: string,
+  prNumber: number
+): Promise<{ dispatch: AutomationDispatchRow; message: string }> {
+  return api.post(`/automation/dispatches/${repoFull}/${prNumber}/optout`, {})
+}
+
 /** List the reviewer registry (builtins first). */
 export async function listReviewers(): Promise<{ reviewers: ReviewerInfo[] }> {
   return api.get('/reviewers')
