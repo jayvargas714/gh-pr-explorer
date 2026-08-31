@@ -2203,6 +2203,13 @@ All defaults are off/empty: installing the feature dispatches nothing until the
 operator sets a scope AND allowlists repos. `validate_config` rejects unknown
 reviewer keys, bad scopes/modes, empty rule names/patterns, concurrency < 1.
 
+**Seeding** (`scripts/seed_automation_config.py`): installs a starter ruleset
+from `scripts/automation_seed.json` — the internal Scala convention (PB/ED
+rules, index-file ignores, elite default) — via the validated `save_config`
+path. Refuses to touch an existing config unless `--force` (which replaces the
+whole blob); the shipped seed keeps `scope: off` and an empty allowlist, so
+seeding never starts dispatching. Other installations copy and edit the JSON.
+
 **Detection** (`pr_sync_worker.incremental_sync_repo`): before hydration the
 worker computes `new_numbers = fetched − known rows`; after hydration
 `_record_automation_candidates` filters them (scope on, repo allowlisted, state
@@ -2283,8 +2290,11 @@ unidentified PR is manual by design: the operator uses the normal review
 button/picker and AutoVerdictToggle on the card.
 
 **Automation tab** (`frontend/src/components/automation/`): `AutomationPanel`
-(draft state, one explicit Save for the config blob, dirty indicator) with
-sections: `ScopeSection` (off/authors/all cards, author + repo chip lists,
+(draft state, one explicit Save for the config blob, dirty indicator) opens with
+`ActiveConfigSummary` — a read-only ●&nbsp;ACTIVE/○&nbsp;OFF strip of the SAVED
+config (scope + authors, allowlisted repos, rule→reviewer routing map, dispatch
+conditions, concurrency), distinct from the unsaved draft below — followed by
+the sections: `ScopeSection` (off/authors/all cards, author + repo chip lists,
 concurrency), `RoutingRulesSection` (ordered rules with ↑/↓, pattern chips,
 reviewer select, per-rule verdict toggle + mode, ignore patterns, pinned default
 rule), `ReviewerRegistrySection` (table + inline add/edit/delete, builtins

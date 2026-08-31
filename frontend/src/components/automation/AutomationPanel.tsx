@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Alert } from '../common/Alert'
 import { Button } from '../common/Button'
 import { useAutomationStore } from '../../stores/useAutomationStore'
+import { ActiveConfigSummary } from './ActiveConfigSummary'
 import { ScopeSection } from './ScopeSection'
 import { ReviewerRegistrySection } from './ReviewerRegistrySection'
 import { RoutingRulesSection } from './RoutingRulesSection'
@@ -57,6 +58,8 @@ export function AutomationPanel() {
       </div>
 
       {error && <Alert variant="error">{error}</Alert>}
+
+      <ActiveConfigSummary />
 
       <ScopeSection draft={draft} setDraft={updateDraft} saving={saving} />
       <RoutingRulesSection draft={draft} setDraft={updateDraft} saving={saving} />

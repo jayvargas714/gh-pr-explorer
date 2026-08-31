@@ -18,7 +18,19 @@ configured in the tab, so the pipeline works for any repo and any reviewer set.
 
 ## Quick start
 
-1. Open the **Automation** tab (sixth tab, or the 🤖 header button).
+For the internal Scala setup, seed the standard ruleset first (PB/ED routing +
+index-file ignores; safe — it never turns automation on by itself, and it won't
+touch an already-configured instance):
+
+```bash
+python scripts/seed_automation_config.py
+```
+
+Then in the UI (skip step 3 if you seeded):
+
+1. Open the **Automation** tab (sixth tab, or the 🤖 header button). The
+   summary strip at the top always shows the **active (saved)** configuration —
+   what the pipeline is running with right now.
 2. **Reviewer Registry** — check the reviewers you need exist. The three
    builtins (default / pb / ed) are seeded; add custom ones with a key, label,
    and Claude agent name.
