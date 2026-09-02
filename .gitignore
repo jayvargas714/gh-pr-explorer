@@ -26,7 +26,7 @@ frontend/.env
 frontend/.vite/
 
 # Logs
-gh-pr-explorer.log
+logs/
 
 # Superpowers
 docs/superpowers/

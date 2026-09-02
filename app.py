@@ -15,6 +15,7 @@ from backend import (
     startup_purge_review_events,
 )
 from backend.config import get_config, get_pr_sync_config
+from backend.logging_setup import configure_logging
 from backend.services.auto_review_watcher import auto_review_watcher_loop
 from backend.services.auto_verdict_watcher import auto_verdict_watcher_loop
 from backend.services.automation_dispatch_worker import automation_dispatch_worker_loop
@@ -25,6 +26,9 @@ from backend.services.stale_review_watcher import stale_review_watcher_loop
 app = create_app()
 
 if __name__ == "__main__":
+    # Console + logs/pr-explorer_<UTC>.log + logs/error.log, before anything
+    # below can log so startup reconciliation lands on disk too.
+    configure_logging()
     config = get_config()
 
     # Refresh stale caches in background on startup

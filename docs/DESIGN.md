@@ -4152,6 +4152,7 @@ and validated server-side; see those feature sections for their shapes.
 | `review_tasks_max` | integer | 256 | `TasksMax` for the review scope — hard cap on processes/threads a review can spawn (the Aug 31 incident was ~1,700 git processes from one run). `0` disables. |
 | `review_workspace` | object | see below | Throwaway per-PR git workspaces for review runs. `root` (string, `~/.cache/gh-pr-explorer/review-workspaces`) — where workspaces live; `~`/`$VAR` expanded. `fetch_depth` (int, 50) — shallow-fetch depth in the prescribed recipe. `fetch_timeout_seconds` (int, 600) — `timeout` wrapped around the recipe's fetch. `sweep_after_hours` (int, 24) — sweeper deletes leftover workspace dirs older than this that no running review owns. |
 | `review_log_retention_days` | integer | 90 | How long review lifecycle events are kept. Purged once on startup; `0` disables purging. |
+| `log_retention_days` | integer | 30 | How long per-run process log files (`logs/pr-explorer_*.log`) are kept. Pruned once on startup; `0` disables pruning. `logs/error.log` is never pruned. See "Logging" under Technical Details. |
 | `past_reviews_dir` | string | `<reviews_dir>/past-reviews` | Legacy reviews directory used only by the one-time `migrate_data.py` import. Supports `~`/`$VAR` expansion. |
 | `pr_sync` | object | see below | PR List Sync worker settings. Optional block; every key has an internal default. `enabled` (bool, true) — master switch; `false` reverts the PR list to live fetching. `poll_interval_seconds` (int, 120) — worker cycle interval. `history_days` (int, 180) — how far back closed/merged PRs are synced and kept. `max_synced_repos` (int, 10) — most-recently-visited repos kept in sync; the rest fall back to the live path. `exclude_repos` (list, `[]`) — `"owner/name"` strings never synced. |
 
@@ -4181,6 +4182,7 @@ and validated server-side; see those feature sections for their shapes.
     "sweep_after_hours": 24
   },
   "review_log_retention_days": 90,
+  "log_retention_days": 30,
   "post_review_started_comment": true,
   "review_section_names": {
     "critical": "Critical Issues",
@@ -4400,16 +4402,17 @@ GitHub's GraphQL API has a limit of 500,000 nodes per request. To prevent errors
 
 ### Logging
 
-The application uses Python's built-in logging module for operational visibility:
+The application uses Python's built-in logging module. `backend/extensions.py` installs a console-only `basicConfig` at import so scripts and tests get output with no setup; the launcher (`app.py`) then calls `configure_logging()` from `backend/logging_setup.py`, which replaces the root handlers with three sharing one UTC format:
 
-```python
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger(__name__)
-```
+| Destination | Level | Notes |
+|-------------|-------|-------|
+| stderr | INFO | Same terminal experience as before |
+| `logs/pr-explorer_<YYYY-MM-DDTHH-MM-SSZ>.log` | INFO | One file per process start, named by UTC start time; includes werkzeug access lines (ANSI color codes stripped in both files) |
+| `logs/error.log` | ERROR | Appended across runs, never pruned; each start writes one `Process started` boundary line (the only sub-ERROR record let through, via a `run_marker` filter) |
+
+Line format (timestamps UTC): `2026-09-02T14:03:11.482Z WARNING  [Thread-3 (automation_dispatch_worker_loop)] backend.services.automation_dispatch_worker: budget exhausted`. Routes log through the shared `gh_pr_explorer` logger from `backend/extensions.py`; services and database modules use `logging.getLogger(__name__)`, so the `%(name)s` field tells them apart. `%(threadName)s` separates the background workers from the request path.
+
+`configure_logging()` also installs `sys.excepthook` / `threading.excepthook` wrappers that log uncaught exceptions at CRITICAL (so a crashed daemon worker reaches both files rather than only stderr), and prunes `logs/pr-explorer_*.log` files older than `log_retention_days` (default 30; `0` disables). `logs/` is gitignored; `run-app.sh` creates it and prints where to look.
 
 **Logged Events**:
 

@@ -22,6 +22,10 @@ DEFAULT_REVIEW_RETRY_DELAY_SECONDS = 30
 # How long review lifecycle events are kept before the startup purge drops them.
 DEFAULT_REVIEW_LOG_RETENTION_DAYS = 90
 
+# How long per-run process log files under logs/ are kept before the startup
+# prune deletes them. error.log is never pruned.
+DEFAULT_LOG_RETENTION_DAYS = 30
+
 # Wall-clock limit for one review attempt. A run past the limit is killed
 # (process group and all) and treated as a failed attempt under the retry
 # policy. Zero disables the limit.
@@ -173,6 +177,20 @@ def get_review_log_retention_days() -> int:
         days = int(config.get("review_log_retention_days", DEFAULT_REVIEW_LOG_RETENTION_DAYS))
     except (TypeError, ValueError):
         days = DEFAULT_REVIEW_LOG_RETENTION_DAYS
+    return max(0, days)
+
+
+def get_log_retention_days() -> int:
+    """Get the process log file retention window in days.
+
+    Reads config.json's "log_retention_days". Zero or negative disables
+    pruning; a malformed value falls back to the default.
+    """
+    config = get_config()
+    try:
+        days = int(config.get("log_retention_days", DEFAULT_LOG_RETENTION_DAYS))
+    except (TypeError, ValueError):
+        days = DEFAULT_LOG_RETENTION_DAYS
     return max(0, days)
 
 

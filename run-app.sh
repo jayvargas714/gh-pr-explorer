@@ -17,6 +17,10 @@ fi
 # Build frontend
 cd frontend && npm run build && cd ..
 
+# Process logs: app.py writes logs/pr-explorer_<UTC start>.log per run and
+# appends ERROR+ lines to logs/error.log (see backend/logging_setup.py).
+mkdir -p logs
+
 # Trap signals so Ctrl+C cleanly stops the server
 cleanup() {
   echo ""
@@ -31,6 +35,7 @@ trap cleanup INT TERM
 # Start Flask in background so trap can catch signals
 python app.py &
 server_pid=$!
+echo "Logs: ./logs (this run: newest logs/pr-explorer_*.log; errors: logs/error.log)"
 
 # Wait for server process
 wait "$server_pid"

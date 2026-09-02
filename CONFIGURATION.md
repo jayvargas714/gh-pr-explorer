@@ -314,7 +314,7 @@ No frontend .env needed (serves from dist/)
 
 ## Need Help?
 
-- Check logs in terminal where Flask is running
+- Check logs in the terminal where Flask is running, or in `logs/` (per-run `pr-explorer_<UTC>.log`; ERROR+ lines also collected in `logs/error.log`)
 - Check browser console for frontend errors
 - Verify network connectivity with `ping 192.168.1.100`
 - Test backend directly: `curl http://192.168.1.100:5050/api/user`

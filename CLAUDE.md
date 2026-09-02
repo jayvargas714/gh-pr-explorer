@@ -78,8 +78,8 @@ Keep `docs/DESIGN.md` updated whenever any design aspect changes, and update the
 | — PR List Sync | 2167 | DB-backed PR list: synced_repos/synced_prs tables, background sync worker (backfill + incremental), three-way route dispatch (DB/hybrid/live), per-card refresh, `pr_sync` config |
 | — Automation (Full Auto Pipeline) | 2250 | Automation tab (active-config summary strip, pipeline table w/ Remove/Re-enroll), reviewer registry, routing rules + ignore patterns, seed + backfill scripts, dispatch condition gates (base branch must be `requireBaseBranch` (default main), CI pass, behind-base limit, non-draft; open PRs wait indefinitely unless `dispatchTimeoutHours` is set, drafts off the board), unified concurrency budget in begin_review, pipeline size cap, manual enroll/opt-out control + badge on all card surfaces, automation_dispatches, dispatch worker, protected Auto lane, `automation_config` |
 | **API Endpoints** | 2475 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 3139, Automation/Reviewers at 3251, Review Logs at 4007 |
-| **Configuration** | 4125 | `config.json` options, incl. review retry + log retention, `pr_sync` block; DB-backed settings keys note |
-| **Technical Details** | 4195 | gh CLI integration, caching, parallel fetch, logging, attempt outcome + retry policy (4458), follow-up parent selection (4511), Review JSON Schema (4544) |
-| **Future Considerations** | 4715 | Improvements, known limitations |
-| **Appendix** | 4777 | Dependencies, file structure, run instructions |
+| **Configuration** | 4125 | `config.json` options, incl. review retry + log retention, `log_retention_days`, `pr_sync` block; DB-backed settings keys note |
+| **Technical Details** | 4197 | gh CLI integration, caching, parallel fetch, logging (4403: UTC per-run files + error.log), attempt outcome + retry policy (4461), follow-up parent selection (4514), Review JSON Schema (4547) |
+| **Future Considerations** | 4718 | Improvements, known limitations |
+| **Appendix** | 4780 | Dependencies, file structure, run instructions |
 
