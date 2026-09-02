@@ -7,7 +7,7 @@ from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-VALID_OUTCOMES = ("pending", "posted", "suppressed", "skipped", "error")
+VALID_OUTCOMES = ("pending", "posted", "suppressed", "skipped", "error", "deferred")
 
 
 class AutoVerdictsDB:
@@ -87,6 +87,17 @@ class AutoVerdictsDB:
                 error_detail, review_id,
             ))
         logger.info(f"Auto verdict for review {review_id}: outcome={outcome} event={event} — {reason}")
+
+    def get_deferred(self) -> List[Dict[str, Any]]:
+        """All verdicts deferred by a rate limit, oldest first — the retry queue."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM auto_verdicts
+                WHERE outcome = 'deferred'
+                ORDER BY created_at ASC, id ASC
+            """)
+            return [dict(row) for row in cursor.fetchall()]
 
     def get_latest_for_pr(self, repo: str, pr_number: int) -> Optional[Dict[str, Any]]:
         """Most recent auto verdict for a PR, or None."""

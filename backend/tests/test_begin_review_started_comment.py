@@ -125,3 +125,18 @@ def test_failed_sha_fetch_records_no_baseline(monkeypatch, posted):
     assert status == 201
     with reviews_lock:
         assert active_reviews[KEY]["head_sha_at_start"] is None
+
+
+def test_attempt_sha_and_note_are_forwarded(monkeypatch, posted):
+    stub_spawn(monkeypatch, object(), "/tmp/review.md")
+
+    review_service.begin_review(
+        OWNER, REPO, PR, PR_URL, reviews_db=None,
+        comment_note="restarted after new commits",
+    )
+
+    kwargs = posted[0]["kwargs"]
+    assert kwargs["attempt"] == 1
+    assert kwargs["max_attempts"] >= 1
+    assert kwargs["head_sha"] == "feed0000baseline"
+    assert kwargs["note"] == "restarted after new commits"

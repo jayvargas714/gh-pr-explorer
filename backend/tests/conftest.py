@@ -26,3 +26,23 @@ def isolate_review_event_log(monkeypatch, tmp_path):
     isolated = ReviewEventsDB(Database(db_path))
     monkeypatch.setattr(review_event_log, "get_review_events_db", lambda: isolated)
     return isolated
+
+
+@pytest.fixture(autouse=True)
+def isolate_pr_status_comments(monkeypatch):
+    """Keep PR status comments off the real gh CLI.
+
+    Status comments are posted from many lifecycle paths (begin_review, retry
+    scheduling, watchers, the dispatch worker), so a test driving any of them
+    would otherwise shell out to gh and comment on a real PR. Tests that assert
+    on comment calls monkeypatch the specific post_* function they care about;
+    this is the suite-wide safety net for everything else.
+    """
+    from backend.services import pr_status_comments
+
+    calls = []
+    monkeypatch.setattr(
+        pr_status_comments, "run_gh_command",
+        lambda args, **kwargs: (calls.append(args), "")[1],
+    )
+    return calls

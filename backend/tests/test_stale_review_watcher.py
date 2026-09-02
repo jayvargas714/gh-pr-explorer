@@ -66,7 +66,7 @@ def harness(monkeypatch):
         "backend.services.review_service.begin_review", h.begin_review
     )
     monkeypatch.setattr(
-        "backend.services.review_started_service.post_review_stopped_stale_comment",
+        "backend.services.pr_status_comments.post_review_stopped_stale_comment",
         h.post_review_stopped_stale_comment,
     )
     monkeypatch.setattr("backend.database.get_reviews_db", lambda: "reviews-db")
@@ -107,11 +107,9 @@ def test_new_commit_stops_comments_and_restarts(harness):
     assert OLD_SHA[:8] in cancel["detail"] and NEW_SHA[:8] in cancel["detail"]
     assert cancel["require_running"] is True
 
-    assert len(harness.commented) == 1
-    comment = harness.commented[0]
-    assert comment["old_sha"] == OLD_SHA
-    assert comment["new_sha"] == NEW_SHA
-    assert comment["reviewer_type"] == "security"
+    # A successful restart posts no standalone "stopped" comment — the restart
+    # story travels in the replacement review's started-comment note instead.
+    assert harness.commented == []
 
     assert len(harness.started) == 1
     start = harness.started[0]
@@ -122,6 +120,20 @@ def test_new_commit_stops_comments_and_restarts(harness):
     assert start["auto_started"] is True
     assert start["pr_title"] == "title"
     assert start["pr_author"] == "author"
+    assert OLD_SHA[:8] in start["comment_note"] and NEW_SHA[:8] in start["comment_note"]
+
+
+def test_failed_restart_posts_the_stopped_comment(harness):
+    harness.active_reviews[KEY] = running_review(reviewer="security")
+    harness.begin_result = ({"error": "spawn failed"}, 500)
+
+    watcher.scan_for_stale_reviews()
+
+    assert len(harness.commented) == 1
+    comment = harness.commented[0]
+    assert comment["old_sha"] == OLD_SHA
+    assert comment["new_sha"] == NEW_SHA
+    assert comment["reviewer_type"] == "security"
 
 
 def test_unchanged_sha_does_not_trigger(harness):

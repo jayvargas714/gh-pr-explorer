@@ -20,7 +20,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "repoAllowlist": [],               # 'owner/repo'; empty = nothing processed
     "maxConcurrentAutoReviews": 2,
     "requireCiPass": True,             # CI must be completed and passing before dispatch
+    "requireBaseBranch": "main",       # PR must target this branch to dispatch; "" = any base
     "maxBehindBase": 10,               # max commits the PR branch may be behind its base head
+    "dispatchTimeoutHours": 0,         # skip rows still waiting after this many hours; 0 = wait forever
     "maxPipelineSize": 1000,           # max pending pipeline rows; new candidates are refused at the cap
     "ignorePatterns": [],              # globs stripped before classification
     "defaultRule": {"reviewerKey": "default", "autoVerdict": False, "autoVerdictMode": "verdict"},
@@ -112,6 +114,13 @@ def validate_config(payload: Dict[str, Any], valid_reviewer_keys: Iterable[str])
 
     config["requireCiPass"] = bool(payload.get("requireCiPass", DEFAULT_CONFIG["requireCiPass"]))
 
+    base_branch = payload.get("requireBaseBranch", DEFAULT_CONFIG["requireBaseBranch"])
+    if base_branch is None:
+        base_branch = ""
+    if not isinstance(base_branch, str):
+        raise ValueError("requireBaseBranch must be a string (empty to allow any base)")
+    config["requireBaseBranch"] = base_branch.strip()
+
     try:
         max_behind = int(payload.get("maxBehindBase", DEFAULT_CONFIG["maxBehindBase"]))
     except (TypeError, ValueError):
@@ -119,6 +128,14 @@ def validate_config(payload: Dict[str, Any], valid_reviewer_keys: Iterable[str])
     if max_behind < 0:
         raise ValueError("maxBehindBase must be zero or greater")
     config["maxBehindBase"] = max_behind
+
+    try:
+        timeout_hours = int(payload.get("dispatchTimeoutHours", DEFAULT_CONFIG["dispatchTimeoutHours"]))
+    except (TypeError, ValueError):
+        raise ValueError("dispatchTimeoutHours must be an integer")
+    if timeout_hours < 0:
+        raise ValueError("dispatchTimeoutHours must be zero or greater")
+    config["dispatchTimeoutHours"] = timeout_hours
 
     try:
         pipeline_size = int(payload.get("maxPipelineSize", DEFAULT_CONFIG["maxPipelineSize"]))

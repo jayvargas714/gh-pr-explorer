@@ -29,7 +29,7 @@ def scan_and_start_followups():
     from backend.database import get_queue_db, get_reviews_db
     from backend.extensions import active_reviews, reviews_lock
     from backend.services.auto_verdict_config import apply_override, get_criteria
-    from backend.services.github_service import fetch_pr_state_and_sha
+    from backend.services.github_service import fetch_open_prs_head_shas
     from backend.services.review_service import begin_review
 
     armed = [item for item in get_queue_db().get_queue() if item.get("auto_verdict_enabled")]
@@ -41,6 +41,10 @@ def scan_and_start_followups():
     global_criteria = get_criteria()
 
     reviews_db = get_reviews_db()
+    # One batched head-SHA fetch per repo per cycle, fetched lazily only when
+    # a candidate survives the local (gh-free) checks. Per-PR polling here used
+    # to burn the shared GraphQL rate limit dry under heavy review cycles.
+    open_shas_by_repo = {}
     for item in armed:
         if not apply_override(global_criteria, item).get("autoFollowupReview"):
             continue
@@ -66,11 +70,14 @@ def scan_and_start_followups():
             # could re-review without any new commits, so leave it to the human.
             continue
 
-        pr_state, current_sha = fetch_pr_state_and_sha(owner, repo, pr_number)
+        if repo_full not in open_shas_by_repo:
+            open_shas_by_repo[repo_full] = fetch_open_prs_head_shas(owner, repo)
+        open_shas = open_shas_by_repo[repo_full]
+        if open_shas is None:
+            continue  # fetch failed — unknown, not "no open PRs"; retry next cycle
+        current_sha = open_shas.get(pr_number)
         if not current_sha or current_sha == last_reviewed_sha:
-            continue
-        if pr_state and pr_state != "OPEN":
-            continue
+            continue  # absent from the open list = closed or merged
         if _attempted_shas.get(key) == current_sha:
             continue
 
@@ -88,7 +95,12 @@ def scan_and_start_followups():
             pr_author=item.get("pr_author"),
             reviewer_type=reviewer_type,
         )
-        if status != 201:
+        if status == 429:
+            # Concurrency budget full — not a failure. Forget the SHA so the
+            # next cycle tries again once a slot frees up.
+            _attempted_shas.pop(key, None)
+            logger.info(f"Auto follow-up review for {key} deferred: {payload.get('error')}")
+        elif status != 201:
             logger.error(f"Auto follow-up review failed to start for {key}: {payload.get('error')}")
 
 

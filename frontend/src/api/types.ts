@@ -337,7 +337,7 @@ export interface RevLogEntry {
   reason?: string | null      // auto verdicts only: the criteria evaluation
   reviewId?: number | null    // auto verdicts only: the review that triggered it
   // Reviews only: auto verdict derived from this review, folded into the row
-  verdictOutcome?: string | null  // posted/suppressed/skipped/error
+  verdictOutcome?: string | null  // posted/suppressed/skipped/error/deferred
   verdictEvent?: string | null    // APPROVE/REQUEST_CHANGES/COMMENT
   verdictReason?: string | null   // the criteria evaluation
 }
@@ -360,7 +360,7 @@ export interface AutoVerdictConfig {
   autoFollowupReview: boolean
 }
 
-export type AutoVerdictOutcome = 'pending' | 'posted' | 'suppressed' | 'skipped' | 'error'
+export type AutoVerdictOutcome = 'pending' | 'posted' | 'suppressed' | 'skipped' | 'error' | 'deferred'
 
 /** The most recent auto verdict recorded for a PR. */
 export interface AutoVerdictRecord {
@@ -474,6 +474,8 @@ export interface AutomationConfig {
   // Dispatch conditions: a detected PR waits until these hold, for as long as
   // it stays open. maxPipelineSize caps how many PRs may wait at once.
   requireCiPass: boolean
+  /** PR must target this branch to dispatch; empty string = any base. */
+  requireBaseBranch: string
   maxBehindBase: number
   maxPipelineSize: number
   ignorePatterns: string[]
@@ -1234,6 +1236,7 @@ export type ReviewLogEventName =
 export type ReviewLogReason =
   | 'no_output'
   | 'nonzero_exit'
+  | 'timeout'
   | 'spawn_failed'
   | 'attempts_exhausted'
   | 'cancelled'
@@ -1242,6 +1245,7 @@ export type ReviewLogReason =
   | 'auto_suppressed'
   | 'auto_skipped'
   | 'post_failed'
+  | 'rate_limited'
 
 /** Issue tally for a review, or null when the review's content can't be read. */
 export interface ReviewIssueCounts {

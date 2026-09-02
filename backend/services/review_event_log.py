@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 REASON_NO_OUTPUT = "no_output"
 REASON_NONZERO_EXIT = "nonzero_exit"
+REASON_TIMEOUT = "timeout"
 REASON_SPAWN_FAILED = "spawn_failed"
 REASON_ATTEMPTS_EXHAUSTED = "attempts_exhausted"
 REASON_CANCELLED = "cancelled"
@@ -25,6 +26,7 @@ REASON_ORPHANED = "orphaned"
 REASON_AUTO_SUPPRESSED = "auto_suppressed"
 REASON_AUTO_SKIPPED = "auto_skipped"
 REASON_POST_FAILED = "post_failed"
+REASON_RATE_LIMITED = "rate_limited"
 
 
 def new_run_id() -> str:
@@ -145,8 +147,10 @@ def record_verdict_not_posted(repo, pr_number, *, review_id, reason, event=None,
     """An auto verdict was evaluated but nothing was posted.
 
     ``reason`` must be one of REASON_AUTO_SUPPRESSED / REASON_AUTO_SKIPPED /
-    REASON_POST_FAILED. ``event`` is the verdict that would have been posted,
-    when one was chosen before the decision fell through.
+    REASON_POST_FAILED / REASON_RATE_LIMITED. ``event`` is the verdict that
+    would have been posted, when one was chosen before the decision fell
+    through. A rate_limited event is not terminal: the retry sweep may still
+    post the verdict, recording a later verdict_posted on the same run.
     """
     run_id = _run_id_for_review(review_id)
     if not run_id:

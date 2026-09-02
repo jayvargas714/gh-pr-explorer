@@ -22,6 +22,30 @@ DEFAULT_REVIEW_RETRY_DELAY_SECONDS = 30
 # How long review lifecycle events are kept before the startup purge drops them.
 DEFAULT_REVIEW_LOG_RETENTION_DAYS = 90
 
+# Wall-clock limit for one review attempt. A run past the limit is killed
+# (process group and all) and treated as a failed attempt under the retry
+# policy. Zero disables the limit.
+DEFAULT_REVIEW_TIMEOUT_MINUTES = 60
+
+# Resource ceilings applied to each review subprocess via a systemd user scope
+# (when systemd-run is available). TasksMax is the hard stop against process
+# fan-out inside a review — the Aug 31 incident was ~1,700 git processes from
+# one run; MemoryMax kills a runaway review instead of the box.
+DEFAULT_REVIEW_MEMORY_MAX = "12G"
+DEFAULT_REVIEW_TASKS_MAX = 256
+
+# Throwaway per-PR git workspaces for review runs; overridable via
+# config.json's "review_workspace" block. Reviews must never touch the
+# developer checkouts, so each run gets its own shallow clone under `root`,
+# removed when the run reaches a terminal state (the sweeper catches dirs a
+# crashed process left behind).
+DEFAULT_REVIEW_WORKSPACE = {
+    "root": "~/.cache/gh-pr-explorer/review-workspaces",
+    "fetch_depth": 50,
+    "fetch_timeout_seconds": 600,
+    "sweep_after_hours": 24,
+}
+
 
 def _resolve_path(raw: str) -> Path:
     """Expand ~ and environment variables in a configured path."""
@@ -78,6 +102,64 @@ def get_review_retry_settings() -> tuple:
     delay = max(0.0, delay)
 
     return max_attempts, delay
+
+
+def get_review_timeout_seconds() -> float:
+    """Get the per-attempt review wall-clock limit, in seconds.
+
+    Reads config.json's "review_timeout_minutes". Zero or negative disables the
+    limit; a malformed value falls back to the default.
+    """
+    config = get_config()
+    try:
+        minutes = float(config.get("review_timeout_minutes", DEFAULT_REVIEW_TIMEOUT_MINUTES))
+    except (TypeError, ValueError):
+        minutes = DEFAULT_REVIEW_TIMEOUT_MINUTES
+    return max(0.0, minutes * 60)
+
+
+def get_review_resource_limits() -> tuple:
+    """Get the cgroup ceilings for review subprocesses.
+
+    Reads config.json's "review_memory_max" (a systemd size string like "12G";
+    empty disables) and "review_tasks_max" (max processes/threads; 0 disables).
+
+    Returns:
+        tuple: (memory_max, tasks_max)
+    """
+    config = get_config()
+    memory_max = config.get("review_memory_max", DEFAULT_REVIEW_MEMORY_MAX)
+    memory_max = str(memory_max).strip() if memory_max else ""
+    try:
+        tasks_max = int(config.get("review_tasks_max", DEFAULT_REVIEW_TASKS_MAX))
+    except (TypeError, ValueError):
+        tasks_max = DEFAULT_REVIEW_TASKS_MAX
+    return memory_max, max(0, tasks_max)
+
+
+def get_review_workspace_config() -> Dict[str, Any]:
+    """Get the review workspace settings, merged over defaults and sanitized.
+
+    "root" is returned as a resolved Path; the numeric knobs fall back to their
+    defaults when malformed (mirrors get_pr_sync_config's tolerance).
+    """
+    config = get_config()
+    raw = config.get("review_workspace")
+    merged = dict(DEFAULT_REVIEW_WORKSPACE)
+    if isinstance(raw, dict):
+        for key in DEFAULT_REVIEW_WORKSPACE:
+            if key in raw:
+                merged[key] = raw[key]
+
+    for key, minimum in (("fetch_depth", 1), ("fetch_timeout_seconds", 30), ("sweep_after_hours", 1)):
+        try:
+            merged[key] = max(minimum, int(merged[key]))
+        except (TypeError, ValueError):
+            merged[key] = DEFAULT_REVIEW_WORKSPACE[key]
+
+    root = merged.get("root") or DEFAULT_REVIEW_WORKSPACE["root"]
+    merged["root"] = _resolve_path(str(root))
+    return merged
 
 
 def get_review_log_retention_days() -> int:

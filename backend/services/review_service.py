@@ -2,15 +2,29 @@
 
 import json
 import logging
+import os
+import shutil
+import signal
 import subprocess
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backend.config import get_review_retry_settings, get_reviews_dir
+from backend.config import (
+    get_review_resource_limits,
+    get_review_retry_settings,
+    get_review_timeout_seconds,
+    get_review_workspace_config,
+    get_reviews_dir,
+)
 from backend.services.github_service import fetch_pr_head_sha, fetch_pr_state
-from backend.services.review_started_service import post_review_started_comment
+from backend.services.pr_status_comments import (
+    delete_status_comments,
+    post_review_gave_up_comment,
+    post_review_retry_scheduled_comment,
+    post_review_started_comment,
+)
 from backend.services.review_event_log import (
     new_run_id,
     record_cancelled,
@@ -23,6 +37,7 @@ from backend.services.review_event_log import (
     REASON_NO_OUTPUT,
     REASON_NONZERO_EXIT,
     REASON_SPAWN_FAILED,
+    REASON_TIMEOUT,
 )
 from backend.services.review_schema import (
     extract_markdown_summary,
@@ -63,6 +78,48 @@ _FOREGROUND_INSTRUCTIONS = (
 )
 
 
+def _workspace_instructions(owner, repo, pr_number, head_sha):
+    """The mandatory code-access recipe embedded in every review prompt.
+
+    Reviewers used to improvise their own snapshot of the repo under review;
+    one improvisation — a blobless partial clone from a local checkout — spawned
+    ~1,700 git processes and OOM'd the machine (Aug 31 incident). This pins the
+    one proven-safe pattern: a throwaway shallow fetch from GitHub over HTTPS,
+    in a per-PR workspace the app cleans up afterwards.
+    """
+    ws = _workspace_dir(owner, repo, pr_number)
+    fetch_cfg = get_review_workspace_config()
+    clone_url = f"https://github.com/{owner}/{repo}.git"
+    if head_sha:
+        head = head_sha
+        resolve = ""
+    else:
+        head = "<head-sha>"
+        resolve = (
+            "First resolve the PR's head SHA with `gh pr view --json headRefOid` "
+            "and substitute it for <head-sha> below. "
+        )
+    return (
+        f"CODE ACCESS (mandatory): examine the PR's code ONLY in the throwaway "
+        f"workspace {ws}, created exactly like this: {resolve}"
+        f"`rm -rf {ws} && mkdir -p {ws} && cd {ws} && git init -q repo && cd repo && "
+        f"git remote add origin {clone_url} && "
+        f"timeout {fetch_cfg['fetch_timeout_seconds']} git fetch -q "
+        f"--depth={fetch_cfg['fetch_depth']} --no-tags origin {head} && "
+        f"git checkout -q -f {head}`. "
+        f"If you need other commits (the base branch head, a previously reviewed "
+        f"SHA), add them to that same fetch command. "
+        f"HARD LIMITS — a violation of these previously took down this machine: "
+        f"run git ONLY inside {ws}; NEVER run git clone or git fetch against a "
+        f"local filesystem path or any existing checkout on this machine — fetch "
+        f"only from {clone_url}; NEVER use --filter, --reference, --shared, "
+        f"--mirror, or --recurse-submodules; NEVER run a git command in the "
+        f"background — foreground only, wrapped in `timeout` as shown; do not "
+        f"create worktrees or branches in any repo outside {ws}. "
+        f"When the review files are written, delete the workspace: rm -rf {ws}. "
+    )
+
+
 def review_produced_output(review_file):
     """True when a review run actually wrote something we can ingest.
 
@@ -79,6 +136,177 @@ def review_produced_output(review_file):
 # How far back to look for a follow-up's parent. A PR accumulates a handful of
 # reviews, so this only needs to outrun a plausible run of consecutive failures.
 PREVIOUS_REVIEW_SEARCH_LIMIT = 20
+
+
+def _workspace_dir(owner, repo, pr_number):
+    """The throwaway git workspace for a PR's review runs.
+
+    Deterministic per PR (one review per PR runs at a time, so no collisions):
+    the prompt, the terminal-state cleanup, and the sweeper all derive the same
+    path without plumbing it through spawn arguments.
+    """
+    root = get_review_workspace_config()["root"]
+    return root / f"{owner}-{repo.replace('/', '-')}-pr-{pr_number}"
+
+
+def _cleanup_workspace_for_key(key):
+    """Best-effort removal of a finished review's workspace."""
+    parts = key.split("/")
+    if len(parts) != 3:
+        return
+    try:
+        ws = _workspace_dir(parts[0], parts[1], parts[2])
+        if ws.is_dir():
+            shutil.rmtree(ws, ignore_errors=True)
+            logger.info(f"Removed review workspace {ws}")
+    except Exception:
+        logger.warning(f"Could not remove review workspace for {key}")
+
+
+def sweep_stale_workspaces():
+    """Delete review workspaces whose last activity predates the sweep window.
+
+    Terminal-state cleanup already removes a run's workspace; this catches dirs
+    left behind by a crash or kill -9. Never raises.
+    """
+    try:
+        ws_config = get_review_workspace_config()
+        root = ws_config["root"]
+        if not root.is_dir():
+            return
+        cutoff = time.time() - ws_config["sweep_after_hours"] * 3600
+
+        from backend.extensions import active_reviews, reviews_lock
+        with reviews_lock:
+            running_keys = [k for k, e in active_reviews.items()
+                            if e.get("status") == "running"]
+        in_use = set()
+        for k in running_keys:
+            parts = k.split("/")
+            if len(parts) == 3:
+                in_use.add(f"{parts[0]}-{parts[1]}-pr-{parts[2]}")
+
+        for child in root.iterdir():
+            if not child.is_dir() or child.name in in_use:
+                continue
+            try:
+                if child.stat().st_mtime < cutoff:
+                    shutil.rmtree(child, ignore_errors=True)
+                    logger.info(f"Swept stale review workspace {child}")
+            except OSError:
+                continue
+    except Exception:
+        logger.exception("Review workspace sweep failed")
+
+
+def _kill_process_group(process):
+    """SIGTERM, then SIGKILL, the review's whole process group.
+
+    Reviews spawn with start_new_session=True, so the CLI leads its own group
+    and every descendant (git included) dies with it. The Aug 31 OOM storm
+    survived every cancel precisely because only the CLI PID was signalled —
+    its orphaned git children ground on for ten more hours.
+
+    Raises nothing for an already-dead group; propagates unexpected errors so
+    callers can report a process that would not die.
+    """
+    try:
+        pgid = os.getpgid(process.pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        pgid = None
+
+    def _signal(sig):
+        if pgid is not None and pgid == process.pid:
+            os.killpg(pgid, sig)
+        elif sig == signal.SIGTERM:
+            process.terminate()
+        else:
+            process.kill()
+
+    try:
+        _signal(signal.SIGTERM)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            _signal(signal.SIGKILL)
+            process.wait(timeout=2)
+    except ProcessLookupError:
+        pass
+
+
+def count_running_reviews():
+    """Number of reviews currently running, auto-started and manual alike."""
+    from backend.extensions import active_reviews, reviews_lock
+
+    with reviews_lock:
+        return sum(1 for entry in active_reviews.values()
+                   if entry.get("status") == "running")
+
+
+# Cached result of the one-time systemd-run --user probe. Reset only by a
+# process restart, which is exactly when the environment could have changed.
+_SYSTEMD_RUN_STATE = {"checked": False, "available": False}
+
+
+def _resource_limit_prefix():
+    """systemd-run prefix that boxes a review into a resource-capped scope.
+
+    MemoryMax kills a runaway review instead of the machine; TasksMax is the
+    hard stop against process fan-out (the Aug 31 incident was ~1,700 git
+    processes from a single run). Returns [] when limits are disabled or
+    systemd-run --user is unusable here — the review still runs, uncapped.
+    """
+    memory_max, tasks_max = get_review_resource_limits()
+    props = []
+    if memory_max:
+        props += ["-p", f"MemoryMax={memory_max}", "-p", "MemorySwapMax=0"]
+    if tasks_max:
+        props += ["-p", f"TasksMax={tasks_max}"]
+    if not props:
+        return []
+
+    if not _SYSTEMD_RUN_STATE["checked"]:
+        _SYSTEMD_RUN_STATE["checked"] = True
+        try:
+            probe = subprocess.run(
+                ["systemd-run", "--user", "--scope", "-q", "true"],
+                capture_output=True, timeout=10,
+            )
+            _SYSTEMD_RUN_STATE["available"] = probe.returncode == 0
+        except Exception:
+            _SYSTEMD_RUN_STATE["available"] = False
+        if not _SYSTEMD_RUN_STATE["available"]:
+            logger.warning(
+                "systemd-run --user is not usable here — review resource limits "
+                "(MemoryMax/TasksMax) will NOT be enforced"
+            )
+
+    if not _SYSTEMD_RUN_STATE["available"]:
+        return []
+    return ["systemd-run", "--user", "--scope", "-q"] + props
+
+
+def _run_log_path(review_file):
+    """Where a run's CLI stdout/stderr goes (all attempts append to one file)."""
+    if not review_file:
+        return None
+    review_path = Path(review_file)
+    return review_path.parent / "logs" / (review_path.stem + ".log")
+
+
+def _read_log_tail(review_file, max_bytes=2000):
+    """Last chunk of a run's CLI output, for error reporting. Never raises."""
+    log_path = _run_log_path(review_file)
+    if not log_path:
+        return ""
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - max_bytes))
+            return f.read().decode("utf-8", errors="replace").strip()
+    except OSError:
+        return ""
 
 
 def _is_error_stub(content_json):
@@ -286,6 +514,24 @@ def check_review_status(key, active_reviews, reviews_lock, reviews_db):
     The reported status stays "running" across retries so callers see one
     continuous review rather than a burst of failures.
     """
+    # Status comments make gh calls, which must not run under reviews_lock
+    # (they would stall every review poll for seconds) — the locked body queues
+    # them as (fn, args, kwargs) and they post here after the lock is released.
+    pending_comments = []
+    try:
+        return _check_review_status_locked(
+            key, active_reviews, reviews_lock, reviews_db, pending_comments
+        )
+    finally:
+        for fn, args, kwargs in pending_comments:
+            try:
+                fn(*args, **kwargs)
+            except Exception as e:
+                logger.warning(f"Status comment for {key} failed: {e}")
+
+
+def _check_review_status_locked(key, active_reviews, reviews_lock, reviews_db,
+                                pending_comments):
     with reviews_lock:
         if key not in active_reviews:
             return None
@@ -297,6 +543,7 @@ def check_review_status(key, active_reviews, reviews_lock, reviews_db):
             status = "completed" if succeeded else "failed"
             review["status"] = status
             review["completed_at"] = datetime.now(timezone.utc).isoformat()
+            _cleanup_workspace_for_key(key)
             review_id = save_review_to_db(key, review, status, reviews_db)
 
             target = _event_target_for(key, review)
@@ -317,7 +564,7 @@ def check_review_status(key, active_reviews, reviews_lock, reviews_db):
         # than sleeping keeps the poll cheap and the lock short.
         if review.get("retry_at") is not None:
             if time.monotonic() >= review["retry_at"]:
-                if not _respawn_review(key, review):
+                if not _respawn_review(key, review, pending_comments):
                     finalize(False)
             return review
 
@@ -326,24 +573,48 @@ def check_review_status(key, active_reviews, reviews_lock, reviews_db):
             return review
         exit_code = process.poll()
         if exit_code is None:
+            deadline = review.get("deadline")
+            if not deadline or time.monotonic() < deadline:
+                return review
+            # The attempt ran past the wall-clock limit. Kill the whole process
+            # group — a wedged run's git children must die with the CLI — and
+            # hand the failure to the normal retry policy.
+            logger.error(
+                f"Review for {key} exceeded its time limit — killing process "
+                f"group (PID {process.pid})"
+            )
+            try:
+                _kill_process_group(process)
+            except Exception as e:
+                logger.error(f"Could not kill timed-out review for {key}: {e}")
+                return review
+            review["exit_code"] = None
+            review["last_failure"] = (
+                REASON_TIMEOUT,
+                f"killed after exceeding {get_review_timeout_seconds():g}s",
+            )
+            target = _event_target_for(key, review)
+            if target:
+                run_id, full_repo, pr_number = target
+                record_failed(
+                    run_id, full_repo, pr_number,
+                    attempt=review.get("attempt", 1),
+                    max_attempts=review.get("max_attempts"),
+                    reason=REASON_TIMEOUT,
+                    detail=f"killed after exceeding {get_review_timeout_seconds():g}s",
+                    review_file=review.get("review_file"),
+                )
+            if not _schedule_review_retry(key, review, pending_comments):
+                finalize(False)
             return review
-
-        try:
-            stdout, stderr = process.communicate(timeout=1)
-            if stderr:
-                review["error_output"] = stderr.strip()[-2000:]
-            if stdout:
-                review["stdout"] = stdout.strip()[-500:]
-        except subprocess.TimeoutExpired:
-            pass
-        except Exception as e:
-            logger.error(f"Error reading process output for {key}: {e}")
 
         review["exit_code"] = exit_code
         produced_output = review_produced_output(review.get("review_file"))
 
         if exit_code != 0:
-            error_msg = review.get("error_output", "Unknown error")
+            error_msg = (_read_log_tail(review.get("review_file"))
+                         or review.get("error_output") or "Unknown error")
+            review["error_output"] = error_msg
             logger.error(f"Review failed: {key} (exit code: {exit_code})\nError: {error_msg}")
             failure_reason = REASON_NONZERO_EXIT
             failure_detail = error_msg[:500]
@@ -363,6 +634,7 @@ def check_review_status(key, active_reviews, reviews_lock, reviews_db):
             failure_detail = None
 
         if failure_reason:
+            review["last_failure"] = (failure_reason, failure_detail)
             target = _event_target_for(key, review)
             if target:
                 run_id, full_repo, pr_number = target
@@ -378,13 +650,24 @@ def check_review_status(key, active_reviews, reviews_lock, reviews_db):
 
         if exit_code == 0 and produced_output:
             finalize(True)
-        elif not _schedule_review_retry(key, review):
+        elif not _schedule_review_retry(key, review, pending_comments):
             finalize(False)
 
         return review
 
 
-def _schedule_review_retry(key, review):
+def _comment_target_for(key):
+    """(owner, repo, pr_number) from an active_reviews key, or None."""
+    parts = key.split("/")
+    if len(parts) < 3:
+        return None
+    try:
+        return parts[0], parts[1], int(parts[2])
+    except ValueError:
+        return None
+
+
+def _schedule_review_retry(key, review, pending_comments):
     """Arm a delayed retry for a failed attempt.
 
     Returns:
@@ -393,14 +676,22 @@ def _schedule_review_retry(key, review):
     """
     max_attempts, retry_delay = get_review_retry_settings()
     attempt = review.get("attempt", 1)
+    failure_reason, failure_detail = review.get("last_failure") or ("unknown", None)
+    target = _comment_target_for(key)
 
     if attempt >= max_attempts:
         logger.error(f"Review for {key} failed after {attempt} attempt(s) — giving up")
-        target = _event_target_for(key, review)
-        if target:
-            run_id, full_repo, pr_number = target
+        event_target = _event_target_for(key, review)
+        if event_target:
+            run_id, full_repo, pr_number = event_target
             record_gave_up(run_id, full_repo, pr_number,
                            attempt=attempt, max_attempts=max_attempts)
+        if target:
+            pending_comments.append((post_review_gave_up_comment, target, {
+                "reviewer_type": review.get("reviewer_type", "default"),
+                "attempt": attempt, "max_attempts": max_attempts,
+                "reason": failure_reason, "detail": failure_detail,
+            }))
         return False
 
     if not review.get("spawn"):
@@ -414,16 +705,23 @@ def _schedule_review_retry(key, review):
         f"retrying in {retry_delay:g}s"
     )
 
-    target = _event_target_for(key, review)
-    if target:
-        run_id, full_repo, pr_number = target
+    event_target = _event_target_for(key, review)
+    if event_target:
+        run_id, full_repo, pr_number = event_target
         record_retry_scheduled(run_id, full_repo, pr_number,
                                attempt=attempt, max_attempts=max_attempts,
                                delay_seconds=retry_delay)
+    if target:
+        pending_comments.append((post_review_retry_scheduled_comment, target, {
+            "reviewer_type": review.get("reviewer_type", "default"),
+            "attempt": attempt, "max_attempts": max_attempts,
+            "delay_seconds": retry_delay,
+            "reason": failure_reason, "detail": failure_detail,
+        }))
     return True
 
 
-def _respawn_review(key, review):
+def _respawn_review(key, review, pending_comments):
     """Start the next review attempt.
 
     Returns:
@@ -432,32 +730,43 @@ def _respawn_review(key, review):
     """
     review["retry_at"] = None
     review["attempt"] = review.get("attempt", 1) + 1
+    target = _comment_target_for(key)
 
     process, result, _ = start_review_process(**review["spawn"])
     if process is None:
         logger.error(f"Could not start retry attempt {review['attempt']} for {key}: {result}")
-        target = _event_target_for(key, review)
-        if target:
-            run_id, full_repo, pr_number = target
+        event_target = _event_target_for(key, review)
+        if event_target:
+            run_id, full_repo, pr_number = event_target
             record_failed(run_id, full_repo, pr_number,
                           attempt=review["attempt"],
                           max_attempts=review.get("max_attempts"),
                           reason=REASON_SPAWN_FAILED,
                           detail=str(result)[:500])
+        if target:
+            pending_comments.append((post_review_gave_up_comment, target, {
+                "reviewer_type": review.get("reviewer_type", "default"),
+                "attempt": review["attempt"],
+                "max_attempts": review.get("max_attempts"),
+                "reason": REASON_SPAWN_FAILED, "detail": str(result)[:500],
+                "spawn_failed": True,
+            }))
         return False
 
     review["process"] = process
     review["review_file"] = result
     review["exit_code"] = None
     review["error_output"] = ""
+    timeout = get_review_timeout_seconds()
+    review["deadline"] = (time.monotonic() + timeout) if timeout else None
     logger.info(
         f"Started retry attempt {review['attempt']} for {key} (PID {process.pid})"
     )
 
-    target = _event_target_for(key, review)
-    if target:
-        run_id, full_repo, pr_number = target
-        spawn = review.get("spawn") or {}
+    event_target = _event_target_for(key, review)
+    spawn = review.get("spawn") or {}
+    if event_target:
+        run_id, full_repo, pr_number = event_target
         record_started(
             run_id, full_repo, pr_number,
             attempt=review["attempt"],
@@ -468,6 +777,15 @@ def _respawn_review(key, review):
             review_file=result,
             pid=getattr(process, "pid", None),
         )
+    if target:
+        pending_comments.append((post_review_started_comment, target, {
+            "is_followup": spawn.get("is_followup", False),
+            "reviewer_type": spawn.get("reviewer_type", "default"),
+            "auto_started": review.get("auto_started", False),
+            "attempt": review["attempt"],
+            "max_attempts": review.get("max_attempts"),
+            "head_sha": spawn.get("head_sha"),
+        }))
     return True
 
 
@@ -530,14 +848,8 @@ def cancel_active_review(key, *, reason=REASON_CANCELLED, detail=None,
         process = review.get("process")
         if process and review.get("status") == "running":
             try:
-                logger.info(f"Terminating review process (PID {process.pid}) for {key}")
-                process.terminate()
-                try:
-                    process.wait(timeout=2)
-                    logger.info(f"Review process terminated gracefully for {key}")
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    logger.warning(f"Review process killed (did not terminate gracefully) for {key}")
+                logger.info(f"Terminating review process group (PID {process.pid}) for {key}")
+                _kill_process_group(process)
                 review["status"] = "cancelled"
             except Exception as e:
                 logger.error(f"Failed to terminate review process for {key}: {e}")
@@ -553,8 +865,16 @@ def cancel_active_review(key, *, reason=REASON_CANCELLED, detail=None,
             )
 
         del active_reviews[key]
-        logger.info(f"Review cancelled and removed: {key}")
-        return "cancelled"
+
+    _cleanup_workspace_for_key(key)
+    if reason == REASON_CANCELLED:
+        # A deliberate user cancel is silent, but the "review in progress"
+        # status comment must not outlive the review it announces.
+        target = _comment_target_for(key)
+        if target:
+            delete_status_comments(*target)
+    logger.info(f"Review cancelled and removed: {key}")
+    return "cancelled"
 
 
 def valid_reviewer_types():
@@ -586,16 +906,25 @@ def _resolve_reviewer(reviewer_type):
 def begin_review(owner, repo, pr_number, pr_url, reviews_db,
                  is_followup=False, previous_review_id=None,
                  pr_title=None, pr_author=None, reviewer_type="default",
-                 auto_started=False):
+                 auto_started=False, bypass_budget=False, comment_note=None):
     """Start a review and register it in active_reviews.
 
     Shared by the POST /api/reviews route and the auto follow-up review
     watcher so both paths keep identical semantics (previous-review lookup,
     fallback to a normal review, duplicate-run rejection).
 
+    Every auto-started spawn is gated by the maxConcurrentAutoReviews budget
+    here, whichever path asked for it — before this gate only the dispatch
+    worker checked, and the watchers piled reviews past the limit (8 running
+    with a budget of 7 the night of the Aug 31 OOM). Manual reviews are always
+    admitted but count toward the running total. bypass_budget is for the
+    stale-review watcher's cancel-and-replace, which never raises concurrency.
+
     Returns:
         tuple: (payload dict, status) where status is 201 on success,
-        409 if a review is already running for this PR, 500 on spawn failure.
+        409 if a review is already running for this PR, 429 if the concurrency
+        budget is full (payload carries "over_budget": True), 500 on spawn
+        failure.
     """
     from backend.extensions import active_reviews, reviews_lock
 
@@ -607,6 +936,20 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
             if existing["status"] == "running":
                 logger.warning(f"Review already in progress for {key}")
                 return {"error": "Review already in progress for this PR"}, 409
+
+    if auto_started and not bypass_budget:
+        from backend.services.automation_config import get_config as get_automation_config
+        limit = get_automation_config()["maxConcurrentAutoReviews"]
+        running = count_running_reviews()
+        if running >= limit:
+            logger.info(
+                f"Auto review for {key} deferred: {running} review(s) running "
+                f">= budget {limit}"
+            )
+            return {
+                "error": f"Concurrency budget full ({running}/{limit} reviews running)",
+                "over_budget": True,
+            }, 429
 
     previous_review_content = None
     parent_id = None
@@ -647,6 +990,7 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
         is_followup=is_followup,
         previous_review_content=previous_review_content,
         reviewer_type=reviewer_type,
+        head_sha=head_sha_at_start,
     )
 
     if process is None:
@@ -664,10 +1008,12 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
         "is_followup": is_followup,
         "previous_review_content": previous_review_content,
         "reviewer_type": reviewer_type,
+        "head_sha": head_sha_at_start,
     }
 
     run_id = new_run_id()
     max_attempts, _ = get_review_retry_settings()
+    timeout = get_review_timeout_seconds()
 
     with reviews_lock:
         active_reviews[key] = {
@@ -687,7 +1033,8 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
             "attempt": 1,
             "retry_at": None,
             "run_id": run_id,
-            "max_attempts": max_attempts
+            "max_attempts": max_attempts,
+            "deadline": (time.monotonic() + timeout) if timeout else None,
         }
 
     record_started(
@@ -706,6 +1053,10 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
         is_followup=is_followup,
         reviewer_type=reviewer_type,
         auto_started=auto_started,
+        attempt=1,
+        max_attempts=max_attempts,
+        head_sha=head_sha_at_start,
+        note=comment_note,
     )
 
     return {
@@ -717,13 +1068,16 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
     }, 201
 
 
-def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, previous_review_content=None, reviewer_type="default"):
+def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, previous_review_content=None, reviewer_type="default", head_sha=None):
     """Start a Claude CLI review process in the background.
 
     Args:
         previous_review_content: For follow-ups, the JSON string of the previous review's content_json.
         reviewer_type: Reviewer registry key (see backend/database/reviewers.py).
             Unknown keys fall back to "default".
+        head_sha: The PR head SHA the review should examine, when the caller
+            knows it; baked into the workspace recipe so the reviewer need not
+            resolve it.
 
     Returns:
         tuple: (process, review_file_path_or_error, is_followup)
@@ -745,6 +1099,7 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
 
     agent_name = reviewer["agent_name"]
     pb_context = reviewer["prompt_context"] or ""
+    workspace_instructions = _workspace_instructions(owner, repo, pr_number, head_sha)
 
     if is_followup and previous_review_content:
         # Convert raw JSON to readable markdown for the prompt
@@ -769,6 +1124,7 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
             f'Do NOT use "title", "details", or "id" as alternative field names. '
             f"Use the {agent_name} agent. "
             f"{_FOREGROUND_INSTRUCTIONS}"
+            f"{workspace_instructions}"
             f"Write the review to {review_file}. "
             f"ALSO write a structured JSON version to {json_file} following this schema: "
             f"{_SCHEMA_INSTRUCTIONS} "
@@ -780,16 +1136,19 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
             f"{pb_context}"
             f"Use the {agent_name} agent. "
             f"{_FOREGROUND_INSTRUCTIONS}"
+            f"{workspace_instructions}"
             f"Write the review to {review_file}. "
             f"ALSO write a structured JSON version to {json_file} following this schema: "
             f"{_SCHEMA_INSTRUCTIONS} "
             f"IMPORTANT: Include a final score from 0-10 in both formats."
         )
 
-    # --dangerously-skip-permissions is required for non-interactive subprocess execution.
-    # This app is single-user/local-only; the flag does not expose a network attack surface.
-    # allowedTools is restricted to read-only git/gh commands + file tools.
-    cmd = [
+    # --dangerously-skip-permissions is required for non-interactive subprocess
+    # execution — which also means the allowedTools list below is advisory, not
+    # enforced. The enforced guardrails are the systemd scope's MemoryMax/
+    # TasksMax, the wall-clock timeout, and process-group kill semantics
+    # (start_new_session) so no descendant outlives a cancel.
+    cmd = _resource_limit_prefix() + [
         "claude",
         "-p", prompt,
         # Pin the model so reviews stay reproducible if the CLI default changes.
@@ -807,12 +1166,35 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
     logger.info(f"Starting {review_type}review for PR #{pr_number} ({owner}/{repo}) using {agent_name}")
     logger.debug(f"Review command: {' '.join(cmd)}")
 
+    # A stale workspace from a crashed earlier run must not leak into this one.
+    try:
+        workspace = _workspace_dir(owner, repo, pr_number)
+        if workspace.is_dir():
+            shutil.rmtree(workspace, ignore_errors=True)
+    except Exception:
+        logger.warning(f"Could not pre-clean review workspace for {owner}/{repo}#{pr_number}")
+
+    # CLI output goes to a per-run log file, not a pipe: nothing drains a pipe
+    # while the run is in flight, so a chatty CLI would fill the 64KB buffer and
+    # wedge forever — permanently "running", never retried, never timed out.
+    log_handle = None
+    try:
+        log_path = _run_log_path(review_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = open(log_path, "a")
+    except OSError as e:
+        logger.warning(f"Could not open review log file for {owner}/{repo}#{pr_number}: {e}")
+
     try:
         process = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
+            stdout=log_handle if log_handle else subprocess.DEVNULL,
+            stderr=subprocess.STDOUT if log_handle else subprocess.DEVNULL,
+            text=True,
+            # Own process group: cancels and timeouts kill the CLI *and* every
+            # descendant. The Aug 31 git storm outlived its review because the
+            # CLI shared our group and only its own PID was ever signalled.
+            start_new_session=True,
         )
         logger.info(f"Review process started with PID {process.pid} for {owner}/{repo}/#{pr_number}")
         return process, str(review_file), is_followup
@@ -823,3 +1205,8 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
     except Exception as e:
         logger.error(f"Failed to start review process: {e}")
         return None, str(e), is_followup
+    finally:
+        # The child holds its own copy of the fd; keeping ours open would leak
+        # one fd per review for the life of the app.
+        if log_handle:
+            log_handle.close()

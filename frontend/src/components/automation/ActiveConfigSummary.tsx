@@ -28,6 +28,7 @@ export function ActiveConfigSummary() {
 
   const conditions = [
     config.requireCiPass ? 'CI must pass' : 'CI not required',
+    config.requireBaseBranch ? `base ${config.requireBaseBranch} only` : 'any base branch',
     `≤ ${config.maxBehindBase} behind base`,
     'no drafts',
     `pipeline cap ${config.maxPipelineSize}`,

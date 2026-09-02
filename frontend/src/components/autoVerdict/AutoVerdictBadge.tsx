@@ -27,6 +27,8 @@ export function describeAutoVerdict(record: AutoVerdictRecord): { label: string;
       return { label: '🤖 passed — approve manually', variant: 'warning' }
     case 'error':
       return { label: '🤖 auto verdict failed', variant: 'error' }
+    case 'deferred':
+      return { label: '🤖 rate limited — will retry', variant: 'warning' }
     case 'pending':
       return { label: '🤖 auto verdict running', variant: 'neutral' }
     default:

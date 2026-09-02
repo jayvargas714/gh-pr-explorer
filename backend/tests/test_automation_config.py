@@ -48,7 +48,8 @@ def test_defaults_are_all_off(settings_db):
     assert config["requireCiPass"] is True
     assert config["maxBehindBase"] == 10
     assert config["maxPipelineSize"] == 1000
-    assert "dispatchTimeoutHours" not in config
+    assert config["dispatchTimeoutHours"] == 0  # 0 = rows wait forever
+    assert config["requireBaseBranch"] == "main"
 
 
 def test_validate_dispatch_condition_fields():
@@ -68,6 +69,19 @@ def test_validate_rejects_bad_dispatch_condition_values():
         automation_config.validate_config(_valid_config(maxPipelineSize=0), KEYS)
     with pytest.raises(ValueError):
         automation_config.validate_config(_valid_config(maxPipelineSize="many"), KEYS)
+
+
+def test_validate_require_base_branch():
+    validated = automation_config.validate_config(
+        _valid_config(requireBaseBranch=" release/v2 "), KEYS)
+    assert validated["requireBaseBranch"] == "release/v2"
+    # Empty and None both mean "any base"
+    assert automation_config.validate_config(
+        _valid_config(requireBaseBranch=""), KEYS)["requireBaseBranch"] == ""
+    assert automation_config.validate_config(
+        _valid_config(requireBaseBranch=None), KEYS)["requireBaseBranch"] == ""
+    with pytest.raises(ValueError):
+        automation_config.validate_config(_valid_config(requireBaseBranch=["main"]), KEYS)
 
 
 def test_validate_accepts_a_full_config():

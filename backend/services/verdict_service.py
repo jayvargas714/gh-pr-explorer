@@ -4,7 +4,11 @@ import json
 import logging
 import subprocess
 
-from backend.services.github_service import fetch_pr_head_sha
+from backend.services.github_service import (
+    RateLimitError,
+    fetch_pr_head_sha,
+    is_rate_limit_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +165,12 @@ def post_verdict(owner, repo, pr_number, event, body, inline_comments=None, revi
             else:
                 validated_file_comments.append(validated)
 
-    current_sha = fetch_pr_head_sha(owner, repo, pr_number)
+    try:
+        current_sha = fetch_pr_head_sha(owner, repo, pr_number, raise_on_rate_limit=True)
+    except RateLimitError:
+        # Retryable: the quota window resets within the hour. 429 lets the
+        # auto-verdict path defer and retry instead of losing the verdict.
+        return {"error": "GitHub API rate limit exceeded", "rate_limited": True}, 429
     if not current_sha:
         return {"error": "Could not fetch PR head commit SHA"}, 500
 
@@ -214,6 +223,9 @@ def post_verdict(owner, repo, pr_number, event, body, inline_comments=None, revi
         logger.info(f"Posted {event} verdict on {owner}/{repo}#{pr_number} with {len(validated_line_comments)} line comments")
     except subprocess.CalledProcessError as e:
         stderr = e.stderr or ""
+        if is_rate_limit_error(stderr):
+            logger.warning(f"Verdict post on {owner}/{repo}#{pr_number} hit the API rate limit")
+            return {"error": "GitHub API rate limit exceeded", "rate_limited": True}, 429
         # If 422 and we had inline comments, the line numbers likely don't match the diff.
         # Fall back: post the review body without inline comments, then try each comment individually.
         if "422" in stderr and validated_line_comments:

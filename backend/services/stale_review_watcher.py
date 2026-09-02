@@ -4,9 +4,9 @@ A running review examines the PR as it stood when the review spawned. When new
 commits land mid-run its findings describe code that no longer exists, so each
 cycle compares every running review's baseline SHA (snapshotted by begin_review)
 against the PR's live head. On a mismatch the review is cancelled (recorded with
-reason "stale_commits"), a "review stopped" comment tells the PR why, and a
-replacement review starts with the original spawn parameters — which posts the
-usual "review started" comment.
+reason "stale_commits") and a replacement review starts with the original spawn
+parameters — its "review started" comment carries a note explaining the restart.
+A standalone "review stopped" comment is posted only when the restart fails.
 
 Complements auto_review_watcher, which handles the other half of the timeline:
 new commits arriving *after* a review finished. That watcher skips running
@@ -35,7 +35,7 @@ def scan_for_stale_reviews():
     from backend.services.github_service import fetch_pr_state_and_sha
     from backend.services.review_event_log import REASON_STALE_COMMITS
     from backend.services.review_service import begin_review, cancel_active_review
-    from backend.services.review_started_service import post_review_stopped_stale_comment
+    from backend.services.pr_status_comments import post_review_stopped_stale_comment
 
     # Snapshot under the lock; the gh calls below must not stall review polls.
     with reviews_lock:
@@ -80,11 +80,12 @@ def scan_for_stale_reviews():
             continue
 
         reviewer_type = spawn.get("reviewer_type", "default")
-        post_review_stopped_stale_comment(
-            owner, repo, pr_number,
-            old_sha=started_sha, new_sha=current_sha, reviewer_type=reviewer_type,
-        )
 
+        # bypass_budget: this replaces the run cancelled just above, so it
+        # never raises concurrency — gating it could turn a stop/restart into
+        # a stop-only and silently drop the review. On success the replacement
+        # review's started comment carries the restart story in its note; the
+        # standalone "stopped" comment is reserved for a failed restart.
         payload, status = begin_review(
             owner, repo, pr_number, spawn["pr_url"], get_reviews_db(),
             is_followup=spawn.get("is_followup", False),
@@ -92,9 +93,18 @@ def scan_for_stale_reviews():
             pr_author=pr_author,
             reviewer_type=reviewer_type,
             auto_started=auto_started,
+            bypass_budget=True,
+            comment_note=(
+                f"restarted after new commits (`{started_sha[:8]}` → "
+                f"`{current_sha[:8]}`) made the running review stale"
+            ),
         )
         if status != 201:
             logger.error(f"Stale-review restart failed to start for {key}: {payload.get('error')}")
+            post_review_stopped_stale_comment(
+                owner, repo, pr_number,
+                old_sha=started_sha, new_sha=current_sha, reviewer_type=reviewer_type,
+            )
 
 
 def stale_review_watcher_loop(interval=WATCH_INTERVAL_SECONDS):

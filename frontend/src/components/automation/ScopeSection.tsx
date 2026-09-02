@@ -117,6 +117,23 @@ export function ScopeSection({ draft, setDraft, saving }: ScopeSectionProps) {
         </div>
 
         <div className="mx-automation__field mx-automation__field--inline">
+          <label htmlFor="automation-base-branch">Required base branch</label>
+          <input
+            id="automation-base-branch"
+            type="text"
+            className="mx-automation__number"
+            value={draft.requireBaseBranch}
+            onChange={(e) => setDraft({ ...draft, requireBaseBranch: e.target.value })}
+            placeholder="any"
+            disabled={saving}
+          />
+          <small className="mx-automation__hint">
+            Only PRs targeting this branch for merge are dispatched; others wait
+            (e.g. stacked PRs until retargeted). Leave empty to allow any base.
+          </small>
+        </div>
+
+        <div className="mx-automation__field mx-automation__field--inline">
           <label htmlFor="automation-max-behind">Max commits behind base</label>
           <input
             id="automation-max-behind"

@@ -4,6 +4,9 @@ check_review_status() is normally driven by the frontend polling GET /api/review
 With no tab open a finished review is neither persisted nor auto-verdicted until
 someone reopens the app. This watcher polls the same function on a timer so armed
 PRs get their verdict as soon as the review process exits.
+
+Each cycle also sweeps rate-limit-deferred verdicts: a post that hit the GitHub
+API quota is retried with backoff once the window resets, instead of being lost.
 """
 
 import logging
@@ -18,6 +21,7 @@ def auto_verdict_watcher_loop(interval=WATCH_INTERVAL_SECONDS):
     """Poll every active review for completion until the process exits."""
     from backend.database import get_reviews_db
     from backend.extensions import active_reviews, reviews_lock
+    from backend.services.auto_verdict_service import retry_deferred_verdicts
     from backend.services.review_service import check_review_status
 
     logger.info(f"Auto-verdict watcher started (interval={interval}s)")
@@ -32,6 +36,7 @@ def auto_verdict_watcher_loop(interval=WATCH_INTERVAL_SECONDS):
                         check_review_status(key, active_reviews, reviews_lock, reviews_db)
                     except Exception as e:
                         logger.error(f"Watcher: failed to check review {key}: {e}")
+            retry_deferred_verdicts()
         except Exception as e:
             logger.error(f"Auto-verdict watcher iteration failed: {e}")
         time.sleep(interval)

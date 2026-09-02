@@ -16,6 +16,7 @@ export const DEFAULT_AUTOMATION_CONFIG: AutomationConfig = {
   repoAllowlist: [],
   maxConcurrentAutoReviews: 2,
   requireCiPass: true,
+  requireBaseBranch: 'main',
   maxBehindBase: 10,
   maxPipelineSize: 1000,
   ignorePatterns: [],

@@ -374,6 +374,57 @@ def test_behind_at_limit_proceeds(env, monkeypatch):
     assert mock_begin.call_count == 1
 
 
+def test_wrong_base_branch_waits(env, monkeypatch):
+    """A stacked PR (base != main) waits; retargeting to main later unblocks it."""
+    pr = _synced_pr(7)
+    pr["baseRefName"] = "feature-parent"
+    env["synced"].upsert_pr(REPO, pr)
+    _, mock_begin = _run_gated(env, monkeypatch, {},
+                               cfg_overrides={"requireBaseBranch": "main"})
+    assert mock_begin.call_count == 0
+    row = env["dispatches"].get_by_pr(REPO, 7)
+    assert row["status"] == "pending"
+    assert "base branch is feature-parent" in row["detail"]
+
+
+def test_unknown_base_branch_waits(env, monkeypatch):
+    pr = _synced_pr(7)
+    pr["baseRefName"] = None
+    env["synced"].upsert_pr(REPO, pr)
+    _, mock_begin = _run_gated(env, monkeypatch, {},
+                               cfg_overrides={"requireBaseBranch": "main"})
+    assert mock_begin.call_count == 0
+    row = env["dispatches"].get_by_pr(REPO, 7)
+    assert "base branch unknown" in row["detail"]
+
+
+def test_matching_base_branch_proceeds(env, monkeypatch):
+    _patch_config(monkeypatch, requireBaseBranch="main")
+    env["dispatches"].record_candidate(REPO, 7)
+    with _gates(), \
+         patch("backend.services.github_service.fetch_pr_files",
+               return_value=["briefs/PB-008-a.md"]), \
+         patch("backend.services.review_service.begin_review",
+               return_value=({"message": "started"}, 201)) as mock_begin:
+        process_pending_dispatches()
+    assert mock_begin.call_count == 1
+
+
+def test_empty_require_base_branch_disables_the_gate(env, monkeypatch):
+    pr = _synced_pr(7)
+    pr["baseRefName"] = "feature-parent"
+    env["synced"].upsert_pr(REPO, pr)
+    _patch_config(monkeypatch, requireBaseBranch="")
+    env["dispatches"].record_candidate(REPO, 7)
+    with _gates(), \
+         patch("backend.services.github_service.fetch_pr_files",
+               return_value=["briefs/PB-008-a.md"]), \
+         patch("backend.services.review_service.begin_review",
+               return_value=({"message": "started"}, 201)) as mock_begin:
+        process_pending_dispatches()
+    assert mock_begin.call_count == 1
+
+
 def test_divergence_check_failure_waits_without_burning_attempts(env, monkeypatch):
     _, mock_begin = _run_gated(env, monkeypatch, {"behind": RuntimeError("compare boom")})
     assert mock_begin.call_count == 0
@@ -469,3 +520,120 @@ def test_waiting_row_does_not_starve_ready_row(env, monkeypatch):
     assert mock_begin.call_count == 1
     assert env["dispatches"].get_by_pr(REPO, 7)["status"] == "pending"
     assert env["dispatches"].get_by_pr(REPO, 8)["status"] == "dispatched"
+
+
+# ----- PR status comments -----
+
+
+@pytest.fixture
+def comments(monkeypatch):
+    """Record every automation status comment the worker would post."""
+    calls = []
+
+    def _recorder(kind):
+        def _post(owner, repo, pr_number, **kwargs):
+            calls.append({"kind": kind, "pr": pr_number, **kwargs})
+            return True
+        return _post
+
+    for kind in ("enrolled", "waiting", "window_expired", "failed", "unidentified"):
+        monkeypatch.setattr(
+            f"backend.services.pr_status_comments.post_automation_{kind}_comment",
+            _recorder(kind),
+        )
+    return calls
+
+
+def _kinds(calls):
+    return [c["kind"] for c in calls]
+
+
+def test_fresh_enrollment_is_announced_once(env, monkeypatch, comments):
+    _run_gated(env, monkeypatch, {"is_draft": True})
+
+    assert _kinds(comments) == ["enrolled", "waiting"]
+    assert comments[1]["reason"] == "PR is a draft"
+
+    # Second cycle: same wait state — nothing new is announced.
+    comments.clear()
+    _run_gated(env, monkeypatch, {"is_draft": True})
+    assert comments == []
+
+
+def test_marked_rows_do_not_reannounce_enrollment(env, monkeypatch, comments):
+    """Backfilled/requeued rows carry a detail and must enroll silently."""
+    env["dispatches"].record_candidate(REPO, 7)
+    row = env["dispatches"].get_by_pr(REPO, 7)
+    env["dispatches"].requeue(row["id"], detail="enrolled by backfill")
+
+    _run_gated(env, monkeypatch, {"is_draft": True})
+
+    assert "enrolled" not in _kinds(comments)
+
+
+def test_wait_reason_change_reposts(env, monkeypatch, comments):
+    _run_gated(env, monkeypatch, {"is_draft": True})
+    comments.clear()
+
+    _run_gated(env, monkeypatch, {"rollup": CI_PENDING})
+
+    assert _kinds(comments) == ["waiting"]
+    assert comments[0]["reason"] == "CI pending"
+
+
+def test_digit_only_wait_change_does_not_repost(env, monkeypatch, comments):
+    _run_gated(env, monkeypatch, {"behind": 12})
+    assert [c["reason"] for c in comments if c["kind"] == "waiting"] == [
+        "12 commits behind base (max 10)"
+    ]
+    comments.clear()
+
+    _run_gated(env, monkeypatch, {"behind": 13})
+
+    assert comments == []
+
+
+def test_window_expiry_is_announced(env, monkeypatch, comments):
+    env["dispatches"].record_candidate(REPO, 7)
+    _age_row(env, 7, hours=100)
+
+    _run_gated(env, monkeypatch, {}, cfg_overrides={"dispatchTimeoutHours": 48})
+
+    assert _kinds(comments) == ["window_expired"]
+    assert comments[0]["timeout_hours"] == 48
+
+
+def test_dispatch_give_up_is_announced(env, monkeypatch, comments):
+    _patch_config(monkeypatch)
+    env["dispatches"].record_candidate(REPO, 7)
+
+    with _gates(), \
+         patch("backend.services.github_service.fetch_pr_files",
+               side_effect=RuntimeError("boom")):
+        for _ in range(3):
+            process_pending_dispatches()
+
+    assert env["dispatches"].get_by_pr(REPO, 7)["status"] == "failed"
+    assert _kinds(comments) == ["enrolled", "failed"]
+    assert comments[1]["attempts"] == 3
+    assert "boom" in comments[1]["detail"]
+
+
+def test_unidentified_routing_is_announced(env, monkeypatch, comments):
+    _patch_config(monkeypatch)
+    env["dispatches"].record_candidate(REPO, 7)
+
+    with _gates(), \
+         patch("backend.services.github_service.fetch_pr_files",
+               return_value=["briefs/PB-008-a.md", "src/main.rs"]):
+        process_pending_dispatches()
+
+    assert _kinds(comments) == ["enrolled", "unidentified"]
+    assert comments[1]["matched_rules"] == ["PB"]
+    assert comments[1]["unmatched_count"] == 1
+
+
+def test_closed_pr_skip_is_silent(env, monkeypatch, comments):
+    _run_gated(env, monkeypatch, {"state": "MERGED"})
+
+    assert comments == []

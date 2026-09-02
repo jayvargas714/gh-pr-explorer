@@ -140,3 +140,29 @@ def test_terminate_failure_keeps_the_entry(cancelled_events):
     with reviews_lock:
         assert KEY in active_reviews
     assert cancelled_events == []
+
+
+def test_user_cancel_cleans_up_status_comments(monkeypatch, cancelled_events):
+    deleted = []
+    monkeypatch.setattr(
+        review_service, "delete_status_comments",
+        lambda owner, repo, pr_number: deleted.append((owner, repo, pr_number)),
+    )
+    put_review(process=FakeProcess())
+
+    assert review_service.cancel_active_review(KEY) == "cancelled"
+    assert deleted == [("owner", "repo", 42)]
+
+
+def test_stale_cancel_leaves_status_comments_alone(monkeypatch, cancelled_events):
+    """The stale watcher's restart posts its own started comment, which
+    supersedes the old one — deleting here would race that flow."""
+    deleted = []
+    monkeypatch.setattr(
+        review_service, "delete_status_comments",
+        lambda owner, repo, pr_number: deleted.append((owner, repo, pr_number)),
+    )
+    put_review(process=FakeProcess())
+
+    review_service.cancel_active_review(KEY, reason=REASON_STALE_COMMITS)
+    assert deleted == []

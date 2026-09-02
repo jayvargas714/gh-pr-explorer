@@ -73,6 +73,12 @@ def backfill():
                     summary["capped"] += 1
                     continue
                 dispatches.record_candidate(repo_full, number)
+                # Mark the row so the dispatch worker's first-evaluation guard
+                # stays quiet: a bulk backfill must not blast "enrolled"
+                # comments onto every open PR in the repo.
+                fresh = dispatches.get_by_pr(repo_full, number)
+                if fresh:
+                    dispatches.requeue(fresh["id"], detail="enrolled by backfill")
                 headroom -= 1
                 summary["inserted"] += 1
             elif (existing["status"] in ("skipped", "failed")

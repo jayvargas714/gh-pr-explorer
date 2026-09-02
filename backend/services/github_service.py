@@ -31,11 +31,27 @@ class TransientGitHubError(RuntimeError):
     pass
 
 
+class RateLimitError(RuntimeError):
+    """Raised when gh CLI fails because the GitHub API rate limit is exhausted.
+
+    Subclasses RuntimeError so callers that catch RuntimeError keep working;
+    callers that can defer-and-retry (the auto-verdict path) catch this first.
+    """
+    pass
+
+
 def is_transient_gh_error(message):
     """True if the error string looks like a transient GitHub/HTTP error."""
     if not message:
         return False
     return any(err in message for err in _TRANSIENT_ERRORS)
+
+
+def is_rate_limit_error(message):
+    """True if the error string is a GitHub primary or secondary rate limit."""
+    if not message:
+        return False
+    return "rate limit" in message.lower()
 
 
 def run_gh_command(args, check=True, max_retries=3, retry_delay=1):
@@ -57,6 +73,11 @@ def run_gh_command(args, check=True, max_retries=3, retry_delay=1):
             return result.stdout.strip()
         except subprocess.CalledProcessError as e:
             stderr = e.stderr or ""
+            if is_rate_limit_error(stderr):
+                # No local backoff: the quota window is up to an hour, so
+                # sleep-retrying here just blocks the calling thread. Callers
+                # that can wait it out (auto verdicts) defer and retry later.
+                raise RateLimitError(f"gh command failed: {stderr}")
             transient = is_transient_gh_error(stderr)
             if attempt < max_retries and transient:
                 backoff = retry_delay * (2 ** attempt)
@@ -212,8 +233,13 @@ def fetch_pr_state(owner, repo, pr_number):
         return None
 
 
-def fetch_pr_head_sha(owner, repo, pr_number):
-    """Fetch the current head commit SHA of a PR from GitHub."""
+def fetch_pr_head_sha(owner, repo, pr_number, raise_on_rate_limit=False):
+    """Fetch the current head commit SHA of a PR from GitHub.
+
+    With raise_on_rate_limit=True a drained API quota propagates as
+    RateLimitError so the caller can defer instead of treating it like a
+    permanent failure; every other error still returns None.
+    """
     try:
         output = run_gh_command([
             "pr", "view", str(pr_number),
@@ -222,6 +248,11 @@ def fetch_pr_head_sha(owner, repo, pr_number):
             "--jq", ".headRefOid"
         ])
         return output.strip() if output else None
+    except RateLimitError as e:
+        if raise_on_rate_limit:
+            raise
+        logger.warning(f"Failed to fetch PR head SHA for {owner}/{repo}#{pr_number}: {e}")
+        return None
     except RuntimeError as e:
         logger.warning(f"Failed to fetch PR head SHA for {owner}/{repo}#{pr_number}: {e}")
         return None
@@ -320,4 +351,35 @@ def fetch_open_prs_queue_data(owner, repo, limit=1000):
         }
         for row in rows
         if isinstance(row, dict) and isinstance(row.get("number"), int)
+    }
+
+
+def fetch_open_prs_head_shas(owner, repo, limit=1000):
+    """Head SHA for every open PR, in ONE gh call.
+
+    The auto follow-up watcher used to run fetch_pr_state_and_sha per armed
+    PR every 60s — dozens of GraphQL calls per cycle against the shared rate
+    limit. One lean `gh pr list` covers the whole repo per cycle instead.
+
+    Returns:
+        dict mapping PR number -> head SHA, or None when the fetch failed.
+        Callers MUST treat None as "unknown", never as "no open PRs". A PR
+        absent from a successful result is not open.
+    """
+    try:
+        output = run_gh_command([
+            "pr", "list", "-R", f"{owner}/{repo}",
+            "--state", "open", "--limit", str(limit),
+            "--json", "number,headRefOid",
+        ])
+        rows = parse_json_output(output)
+    except RuntimeError as e:
+        logger.warning(f"Failed to batch-fetch open PR head SHAs for {owner}/{repo}: {e}")
+        return None
+    if not isinstance(rows, list):
+        return None
+    return {
+        row["number"]: row["headRefOid"]
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("number"), int) and row.get("headRefOid")
     }

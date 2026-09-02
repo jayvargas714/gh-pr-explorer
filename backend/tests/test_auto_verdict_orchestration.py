@@ -68,6 +68,7 @@ def harness(monkeypatch):
     monkeypatch.setattr(svc, "post_verdict", h.post_verdict)
     monkeypatch.setattr(svc, "fetch_pr_state_and_sha", lambda *a: ("OPEN", "sha123"))
     monkeypatch.setattr(svc, "get_authenticated_login", lambda: "me")
+    monkeypatch.setattr(svc, "_retry_schedule", {})
     return h
 
 
@@ -382,3 +383,243 @@ def test_verdict_for_a_review_with_no_run_is_not_recorded(harness, monkeypatch, 
 
     assert result["outcome"] == "posted"          # the verdict still posts
     assert isolate_review_event_log.list_events(repo=REPO)[1] == 0
+
+
+# --- rate-limit deferral and retry -------------------------------------------
+
+RATE_LIMITED = ({"error": "GitHub API rate limit exceeded", "rate_limited": True}, 429)
+
+
+def _defer(harness, monkeypatch, **review_kwargs):
+    """Arm, review, and drive one rate-limited post → a deferred row."""
+    _criteria(monkeypatch)
+    _arm(harness)
+    rid = _review(harness, critical=2, **review_kwargs)
+    harness.post_result = RATE_LIMITED
+    result = svc.maybe_post_auto_verdict(REPO, PR, rid)
+    harness.post_result = ({"message": "ok"}, 200)
+    return rid, result
+
+
+def test_rate_limited_post_is_deferred_not_errored(harness, monkeypatch):
+    rid, result = _defer(harness, monkeypatch)
+
+    assert result["outcome"] == "deferred"
+    row = harness.auto.get_latest_for_pr(REPO, PR)
+    assert row["outcome"] == "deferred"
+    assert row["event"] == "REQUEST_CHANGES"     # the decision is kept for the retry
+
+
+def test_deferral_is_logged_as_rate_limited(harness, monkeypatch, isolate_review_event_log):
+    _criteria(monkeypatch)
+    _arm(harness)
+    rid = _review(harness, critical=2)
+    isolate_review_event_log.log_event("completed", REPO, PR, "run-xyz", attempt=1, review_id=rid)
+    harness.post_result = RATE_LIMITED
+
+    svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    rows = _run_events(isolate_review_event_log, "verdict_not_posted")
+    assert len(rows) == 1
+    assert rows[0]["reason"] == "rate_limited"
+
+
+def test_deferred_verdict_is_posted_by_the_retry_sweep(harness, monkeypatch, isolate_review_event_log):
+    rid, _ = _defer(harness, monkeypatch)
+    isolate_review_event_log.log_event("completed", REPO, PR, "run-xyz", attempt=1, review_id=rid)
+
+    import time
+    svc.retry_deferred_verdicts(now=time.time() + svc.RETRY_INITIAL_BACKOFF_SECONDS + 1)
+
+    assert len(harness.posted) == 2               # the failed attempt + the retry
+    assert harness.posted[1]["event"] == "REQUEST_CHANGES"
+    row = harness.auto.get_latest_for_pr(REPO, PR)
+    assert row["outcome"] == "posted"
+    rows = _run_events(isolate_review_event_log, "verdict_posted")
+    assert len(rows) == 1
+    assert rows[0]["auto_started"] == 1
+
+
+def test_retry_waits_out_the_backoff(harness, monkeypatch):
+    _defer(harness, monkeypatch)
+
+    import time
+    svc.retry_deferred_verdicts(now=time.time() + 10)
+
+    assert len(harness.posted) == 1               # only the original failed attempt
+    assert harness.auto.get_latest_for_pr(REPO, PR)["outcome"] == "deferred"
+
+
+def test_backoff_doubles_after_each_rate_limited_retry(harness, monkeypatch):
+    import time
+    rid, _ = _defer(harness, monkeypatch)
+    harness.post_result = RATE_LIMITED
+    base = time.time()
+
+    first_retry_at = base + svc.RETRY_INITIAL_BACKOFF_SECONDS + 1
+    svc.retry_deferred_verdicts(now=first_retry_at)
+    assert len(harness.posted) == 2               # retried, still rate limited
+
+    # Before the doubled delay elapses: no attempt.
+    svc.retry_deferred_verdicts(now=first_retry_at + svc.RETRY_INITIAL_BACKOFF_SECONDS + 1)
+    assert len(harness.posted) == 2
+
+    # After it: attempted again.
+    svc.retry_deferred_verdicts(now=first_retry_at + 2 * svc.RETRY_INITIAL_BACKOFF_SECONDS + 1)
+    assert len(harness.posted) == 3
+
+
+def test_retry_gives_up_after_the_age_cap(harness, monkeypatch):
+    rid, _ = _defer(harness, monkeypatch)
+
+    import time
+    svc.retry_deferred_verdicts(now=time.time() + svc.RETRY_MAX_AGE_HOURS * 3600 + 60)
+
+    assert len(harness.posted) == 1               # nothing was re-posted
+    row = harness.auto.get_latest_for_pr(REPO, PR)
+    assert row["outcome"] == "error"
+    assert "expired" in row["error_detail"]
+
+
+def test_retry_skips_a_pr_that_closed_while_deferred(harness, monkeypatch):
+    rid, _ = _defer(harness, monkeypatch)
+    monkeypatch.setattr(svc, "fetch_pr_state_and_sha", lambda *a: ("MERGED", "sha123"))
+
+    import time
+    svc.retry_deferred_verdicts(now=time.time() + svc.RETRY_INITIAL_BACKOFF_SECONDS + 1)
+
+    assert len(harness.posted) == 1
+    assert harness.auto.get_latest_for_pr(REPO, PR)["outcome"] == "skipped"
+
+
+def test_retry_skips_a_card_disarmed_while_deferred(harness, monkeypatch):
+    rid, _ = _defer(harness, monkeypatch)
+    harness.queue.set_auto_verdict(PR, REPO, False, "default")
+
+    import time
+    svc.retry_deferred_verdicts(now=time.time() + svc.RETRY_INITIAL_BACKOFF_SECONDS + 1)
+
+    assert len(harness.posted) == 1
+    assert harness.auto.get_latest_for_pr(REPO, PR)["outcome"] == "skipped"
+
+
+def test_deferred_rows_from_before_a_restart_are_retried_immediately(harness, monkeypatch):
+    """A restart loses the in-memory backoff schedule; an unscheduled deferred
+    row is retried on the first sweep rather than waiting forever."""
+    rid, _ = _defer(harness, monkeypatch)
+    svc._retry_schedule.clear()                   # simulate a process restart
+
+    import time
+    svc.retry_deferred_verdicts(now=time.time())
+
+    assert len(harness.posted) == 2
+    assert harness.auto.get_latest_for_pr(REPO, PR)["outcome"] == "posted"
+
+
+# --- PR status comments for verdict outcomes ----------------------------------
+
+@pytest.fixture
+def comments(monkeypatch):
+    """Record every verdict status comment (and cleanup) that would post."""
+    calls = []
+
+    def _recorder(kind):
+        def _post(owner, repo, pr_number, **kwargs):
+            calls.append({"kind": kind, "pr": pr_number, **kwargs})
+            return True
+        return _post
+
+    for kind in ("suppressed", "deferred", "error", "skipped"):
+        monkeypatch.setattr(
+            f"backend.services.pr_status_comments.post_verdict_{kind}_comment",
+            _recorder(kind),
+        )
+    monkeypatch.setattr(
+        "backend.services.pr_status_comments.delete_status_comments",
+        _recorder("deleted"),
+    )
+    return calls
+
+
+def test_suppressed_outcome_comments_with_tallies(harness, monkeypatch, comments):
+    _criteria(monkeypatch, allowAutoApprove=False)
+    _arm(harness)
+    rid = _review(harness, minor=3)
+
+    svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert [c["kind"] for c in comments] == ["suppressed"]
+    assert comments[0]["tallies"] == {"critical": 0, "major": 0, "minor": 3}
+    assert "auto-approve disabled" in comments[0]["reason"]
+
+
+def test_deferred_outcome_comments_with_pending_event(harness, monkeypatch, comments):
+    _criteria(monkeypatch)
+    _arm(harness)
+    rid = _review(harness, critical=2)
+    harness.post_result = RATE_LIMITED
+
+    svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert [c["kind"] for c in comments] == ["deferred"]
+    assert comments[0]["event"] == "REQUEST_CHANGES"
+
+
+def test_error_outcome_comments_with_detail(harness, monkeypatch, comments):
+    _criteria(monkeypatch)
+    _arm(harness)
+    rid = _review(harness, critical=1)
+    harness.post_result = ({"error": "GitHub said no"}, 500)
+
+    svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert [c["kind"] for c in comments] == ["error"]
+    assert "GitHub said no" in comments[0]["error_detail"]
+
+
+def test_posted_outcome_deletes_status_comments_instead(harness, monkeypatch, comments):
+    _criteria(monkeypatch)
+    _arm(harness)
+    rid = _review(harness, critical=1)
+
+    svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert [c["kind"] for c in comments] == ["deleted"]
+
+
+def test_skip_for_unusable_content_comments(harness, monkeypatch, comments):
+    _criteria(monkeypatch)
+    _arm(harness)
+    rid = harness.reviews.save_review(
+        pr_number=PR, repo=REPO, status="completed", content_json="not json",
+    )
+
+    svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert [c["kind"] for c in comments] == ["skipped"]
+
+
+def test_skip_on_closed_pr_is_silent(harness, monkeypatch, comments):
+    _criteria(monkeypatch)
+    monkeypatch.setattr(svc, "fetch_pr_state_and_sha", lambda *a: ("MERGED", "sha123"))
+    _arm(harness)
+    rid = _review(harness, critical=3)
+
+    svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert comments == []
+
+
+def test_retry_expiry_comments_the_error(harness, monkeypatch, comments):
+    _criteria(monkeypatch)
+    _arm(harness)
+    rid = _review(harness, critical=2)
+    harness.post_result = RATE_LIMITED
+    svc.maybe_post_auto_verdict(REPO, PR, rid)
+    comments.clear()
+
+    import time
+    svc.retry_deferred_verdicts(now=time.time() + svc.RETRY_MAX_AGE_HOURS * 3600 + 60)
+
+    assert [c["kind"] for c in comments] == ["error"]
+    assert "expired" in comments[0]["error_detail"]

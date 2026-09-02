@@ -1466,17 +1466,48 @@ The reviewer choice is plumbed through the `reviewer_type` field on `POST /api/r
 
 Every prompt also carries `_FOREGROUND_INSTRUCTIONS`, requiring the wrapper CLI to dispatch the reviewer agent in the foreground and to confirm both files exist before ending its turn. This is load-bearing, not advisory: in `claude -p` a text-only turn ends the run, so a wrapper that backgrounds the reviewer and then narrates progress exits 0 while its agent is killed mid-review, leaving no output. See "Attempt Outcome and Retries" for how such a run is detected and retried.
 
-#### Review Underway PR Comment
+#### Review Workspace & Runaway-Process Guardrails
 
-When a review starts, GitHub PR Explorer posts a plain conversation comment to the PR announcing that a review is in progress, so anyone watching the PR knows work is underway before any results land.
+Reviewers used to improvise their own snapshot of the repo under review; one improvisation — a blobless partial clone (`--filter=blob:none`) from a local checkout — fanned out ~1,700 git processes and OOM'd the host (Aug 31 2026 incident). Every review prompt now carries `_workspace_instructions()` (in `review_service.py`), which pins the one proven-safe pattern and layers hard enforcement around it:
 
-- **Where**: `backend/services/review_started_service.py`, called from `begin_review()` in `review_service.py` after the Claude CLI subprocess spawns successfully and the review is registered in `active_reviews`. Because both `POST /api/reviews` and the auto follow-up watcher funnel through `begin_review()`, manual and auto-started reviews are both covered by this one hook.
-- **What**: an issue comment (`POST repos/{owner}/{repo}/issues/{pr_number}/comments`) — deliberately *not* a formal PR review, which is reserved for the verdict posted by `verdict_service` once findings exist. The body names the reviewer agent and the start time, and its lead line varies for normal, follow-up, and auto-started reviews.
-- **Failure handling**: the post is wrapped so that no exception escapes — a comment failure is logged and the review continues. Announcing a review must never be able to stop one.
-- **Lifecycle**: the comment is posted once and left in place; it is not edited or deleted when the review completes. A PR that goes through several follow-up rounds therefore accumulates one such comment per round.
-- **Config**: set `post_review_started_comment` to `false` in `config.json` to suppress the comment (default `true`). The same flag gates the "review stopped" comment described under Stale-Review Cancellation & Restart below.
+- **Prescribed workspace recipe (prompt-level)**: the reviewer examines the PR's code only in a per-PR throwaway workspace `<review_workspace.root>/<owner>-<repo>-pr-<N>`, built with `git init` + `timeout`-wrapped shallow `git fetch --depth=<fetch_depth> --no-tags` of the head SHA (and any other needed SHAs) from `https://github.com/<owner>/<repo>.git`, then `git checkout -f <head_sha>`. `begin_review()` passes the head SHA it already snapshots (`head_sha_at_start`) into the recipe; without one, the prompt tells the reviewer to resolve it via `gh pr view --json headRefOid`. The prompt explicitly forbids: git against any local filesystem path or existing checkout, `--filter`/`--reference`/`--shared`/`--mirror`/`--recurse-submodules`, backgrounded git commands, and worktrees/branches outside the workspace.
+- **Workspace lifecycle**: `start_review_process()` pre-cleans the workspace dir before each attempt; terminal states (`finalize()`, `cancel_active_review()`) remove it; `sweep_stale_workspaces()` (piggybacked on the dispatch worker loop) deletes any dir older than `review_workspace.sweep_after_hours` that no running review owns — covering crashed processes. Settings live in `config.json`'s `review_workspace` block.
+- **Process group (enforced)**: the CLI spawns with `start_new_session=True`, and every kill path — user cancel, stale-commit cancel, timeout, startup reconciliation — signals the whole group via `os.killpg` (SIGTERM, then SIGKILL after a 2s grace). Before this, kills signalled only the CLI PID and its git descendants survived; the incident's git storm outlived the OOM killer for ten hours that way.
+- **Wall-clock timeout (enforced)**: `check_review_status()` kills any attempt running past `review_timeout_minutes` (default 60; 0 disables), records a `failed` event with reason `timeout`, and hands the run to the normal retry policy.
+- **cgroup ceilings (enforced, when available)**: the CLI command is prefixed with `systemd-run --user --scope -q -p MemoryMax=<review_memory_max> -p MemorySwapMax=0 -p TasksMax=<review_tasks_max>`. TasksMax is the hard stop against process fan-out; MemoryMax kills a runaway review instead of the box. A one-time startup probe checks that `systemd-run --user` works here; if not, the review runs unwrapped and a warning is logged.
+- **CLI output to log files**: stdout/stderr go to `<reviews_dir>/logs/<review-file-stem>.log` (all attempts append) instead of pipes — an undrained pipe let a chatty CLI fill the 64KB buffer and wedge forever. Failure details are read back from the log tail.
 
-No comment is posted when the review is rejected as a duplicate (409) or when the subprocess fails to spawn (500).
+#### PR Status Comments
+
+`backend/services/pr_status_comments.py` posts a plain conversation comment (the issues comments API — deliberately *not* a formal PR review, which is reserved for the verdict posted by `verdict_service`) for each pipeline step, so anyone watching the PR can follow what the pipeline is doing. One named function per event, same convention as `review_event_log`.
+
+**Supersede-delete**: every status comment body ends with the invisible marker `<!-- gh-pr-explorer:status -->`. Posting lists the PR's existing marker comments, posts the new one, then deletes the old ids (list → post → delete: never a zero-comment window, and the new comment can never delete itself), so at most one bot status comment stands per PR at any time. Verdict reviews are PR reviews, not issue comments — the deletion path cannot touch them by construction. `delete_status_comments()` runs the cleanup without posting, used when the story ends with a posted verdict or a silent user cancel. A module lock serializes the sequences across watcher threads.
+
+**The catalog** (event → trigger):
+
+| Comment | Trigger |
+|---------|---------|
+| Code review in progress | `begin_review()` (attempt 1, with reviewer/attempt/short SHA; an optional note carries a stale-restart or post-crash-restart story) and `_respawn_review()` (attempt > 1, "started automatically after a failed attempt") |
+| Attempt failed — retry scheduled | `_schedule_review_retry()` retry branch, with failure reason/detail and the backoff delay |
+| Review failed — giving up | attempts exhausted, or a retry spawn failure (variant lead); includes next-step guidance |
+| Review stopped — new commits | stale watcher, **only when the automatic restart fails** (a successful restart tells the story via the started comment's note) |
+| Review interrupted — requeued | startup reconciliation requeues an orphaned auto review |
+| Review complete — approval needs manual action | auto verdict `suppressed` (passed, auto-approve off), with tallies |
+| Verdict delayed by GitHub rate limit | auto verdict `deferred`, with tallies and the pending event (often cannot post under the same drained quota — absorbed; a later outcome re-tells the story) |
+| Verdict could not be posted | auto verdict `error` (including retry-window expiry), with tallies and the error |
+| Automatic verdict skipped | auto verdict `skipped`, except when the reason is a closed/merged PR (silent) |
+| PR enrolled for automated review | dispatch worker's first evaluation of a fresh row (`detail` NULL, no attempts) — bulk backfills and requeues mark their rows' `detail` so they enroll silently |
+| Automated review waiting | dispatch gate `_wait()`, **only when the blocking reason changes** (digit-insensitive compare against the row's previous `waiting:` detail, so "12 commits behind" → "13 commits behind" does not repost) |
+| Automated review window expired | `dispatchTimeoutHours` exceeded |
+| Automated review dispatch failed | `_retry_or_fail()` give-up after MAX_ATTEMPTS |
+| Automated review needs manual routing | classification `unidentified` |
+
+A posted verdict and a user-initiated cancel post nothing — they only delete the standing status comment. Also deliberately silent: dispatch skips for closed/merged PRs, repo de-allowlisting, review-already-in-progress, and reconciliation's already-recovered/pr-closed outcomes.
+
+- **Failure handling**: `_post_status_comment` never raises — a comment failure is logged and the pipeline step continues; `RateLimitError` short-circuits the remaining calls silently. All gh calls use `max_retries=1`.
+- **Config**: `post_review_started_comment` in `config.json` (default `true`; the name is historical) gates **all** status comments and their supersede-deletes.
+
+No started comment is posted when the review is rejected as a duplicate (409) or when the subprocess fails to spawn (500).
 
 #### Stale-Review Cancellation & Restart
 
@@ -1485,8 +1516,8 @@ A running review examines the PR as it stood when the review spawned; commits pu
 1. **Baseline**: `begin_review()` snapshots the PR head SHA into `head_sha_at_start` on the `active_reviews` entry just before spawning the subprocess. Fetching before the spawn keeps the baseline conservative — a commit racing the spawn triggers a restart rather than slipping through. If the fetch fails, the run simply isn't stale-watched (same "unknown baseline, leave it to the human" convention as the auto follow-up watcher). Retry attempts of the same run keep the original baseline.
 2. **Detection**: each cycle snapshots the running entries under `reviews_lock`, then compares each baseline against the live head via `fetch_pr_state_and_sha` (no gh calls while holding the lock). Unchanged heads, failed fetches, and non-open PRs are skipped. A per-key `_handled_shas` guard keeps a failed restart from being retried every cycle; a newer SHA retries.
 3. **Stop**: the review is terminated through `cancel_active_review()` in `review_service.py` — the same terminate-and-remove path the `DELETE /api/reviews/...` route uses — with `require_running=True`: if the review finished between the snapshot and the cancel, its saved result stands and the follow-up decision is left to the auto follow-up watcher. The event log records `cancelled` with reason `stale_commits` and a `new commits <old> -> <new>` detail on the run.
-4. **Notify**: `post_review_stopped_stale_comment()` (in `review_started_service.py`) posts a "Code review stopped — new commits" PR conversation comment naming both short SHAs and the reviewer agent. It shares the `post_review_started_comment` config flag and, like all lifecycle comments, never raises.
-5. **Restart**: the replacement goes through `begin_review()` with the original spawn parameters (reviewer agent, follow-up flag, PR title/author, `auto_started`), minting a new `run_id`, re-snapshotting the baseline to the new head, and posting the usual "review started" comment — completing the stop/restart pair of comments on the PR.
+4. **Restart**: the replacement goes through `begin_review()` with the original spawn parameters (reviewer agent, follow-up flag, PR title/author, `auto_started`), minting a new `run_id`, re-snapshotting the baseline to the new head, and posting the usual "review started" comment whose note line names both short SHAs and explains the restart.
+5. **Notify on failure only**: when the restart fails to start, `post_review_stopped_stale_comment()` (in `pr_status_comments.py`) posts a "Code review stopped — new commits" comment with next-step guidance — otherwise the started comment's note carries the story and the supersede-delete keeps the PR at one status comment.
 
 Division of labor with the auto follow-up watcher: `auto_review_watcher` reacts to commits that arrive *after* a review finished (armed PRs only) and explicitly skips running reviews; the stale watcher reacts to commits that arrive *while* a review runs (any review, manual or auto-started). Neither can double-start the other's review — `begin_review()` rejects duplicate runs with 409.
 
@@ -1497,10 +1528,10 @@ A service restart wipes the in-memory `active_reviews` registry and kills the Cl
 `backend/services/review_reconciliation.py` closes that gap. `reconcile_orphaned_reviews()` runs once at startup (synchronously in `app.py`, before any watcher thread spawns, so a freshly started review can never be mistaken for an orphan):
 
 1. **Detect**: `ReviewEventsDB.get_orphaned_runs()` — runs with a `started` event but no `completed`/`gave_up`/`cancelled` event (a `failed` attempt alone is not terminal: a retry may have been armed when the process died). Each result carries the latest started event's spawn facts (attempt, pid, reviewer_agent, is_followup, auto_started).
-2. **Close**: best-effort SIGTERM of the recorded PID (the CLI child may have been reparented and still be running uselessly), then a `cancelled` event with reason `orphaned` — which also makes the run terminal, so reconciliation is idempotent across restarts.
+2. **Close**: best-effort SIGTERM of the recorded PID's whole process group (reviews spawn as session leaders, so this reaps any git descendants too; falls back to the lone PID for pre-upgrade orphans), then a `cancelled` event with reason `orphaned` — which also makes the run terminal, so reconciliation is idempotent across restarts.
 3. **Restart** (skipped when the PR already has a completed review newer than the orphaned run — e.g. the follow-up watcher recovered it — or the PR is no longer open):
-   - dispatch row `dispatched` → `requeue()` back to `pending` with detail "requeued after restart (orphaned review)"; the dispatch worker re-dispatches with routing, verdict arming, and the concurrency budget;
-   - otherwise (manual run) → `begin_review()` directly with the recorded reviewer agent, follow-up flag, and auto_started.
+   - **auto-started orphan** (whatever its dispatch-row state, or with no row at all) → its dispatch row is `requeue()`d back to `pending` (or a fresh pending row is created via `record_candidate()`); the dispatch worker re-dispatches with routing, verdict arming, and — critically — pacing under the concurrency budget. Reconciliation never spawns auto reviews directly: doing so produced unbounded restart bursts (6 spawns in 11 seconds after one restart). A requeued follow-up comes back as a fresh review — an accepted trade for bounded bursts.
+   - **manual orphan** → `begin_review()` directly with the recorded reviewer agent and follow-up flag (manual reviews are exempt from the budget but count toward it).
 
 Every orphan is handled in its own try/except and the function never raises — a reconciliation failure must not stop the app from starting.
 
@@ -1516,8 +1547,10 @@ Every PR card — on the **PR list**, the **Merge Queue**, and the **Swimlane bo
 #### Claude CLI Command
 
 ```bash
+systemd-run --user --scope -q -p MemoryMax=12G -p MemorySwapMax=0 -p TasksMax=256 -- \
 claude -p "Review PR #123 at https://github.com/owner/repo/pull/123. \
   Use the code-reviewer agent. \
+  <workspace recipe + hard limits from _workspace_instructions()> \
   Write the review to /path/to/reviews/owner-repo-pr-123.md \
   AND write structured JSON to /path/to/reviews/owner-repo-pr-123.json" \
   --allowedTools "Bash(git*),Bash(gh*),Read,Glob,Grep,Write,Task" \
@@ -1525,9 +1558,12 @@ claude -p "Review PR #123 at https://github.com/owner/repo/pull/123. \
 ```
 
 **Flags**:
+- `systemd-run --user --scope`: resource-capped cgroup around the whole run (omitted when the startup probe finds systemd-run unusable)
 - `-p`: Prompt with review instructions requesting both `.md` and `.json` output files
-- `--allowedTools`: Grants read-only git/gh access + file tools
+- `--allowedTools`: advisory only — `--dangerously-skip-permissions` bypasses it; the enforced guardrails are the cgroup ceilings, the wall-clock timeout, and process-group kill semantics
 - `--dangerously-skip-permissions`: Bypass permission prompts for automated execution
+
+The subprocess is spawned with `start_new_session=True` and its stdout/stderr redirected to the per-run log file (see the guardrails section above).
 
 #### Review States
 
@@ -1765,6 +1801,7 @@ Verdict mode:
 | Within all limits, `allowAutoApprove` off | *(nothing)* | `suppressed` |
 | Review failed, content unusable, or PR not `OPEN` | *(nothing)* | `skipped` |
 | `post_verdict` returned non-200 or raised | *(attempted)* | `error` |
+| `post_verdict` hit the GitHub API rate limit (429) | *(attempted)* | `deferred` — retried later |
 
 Comment mode:
 
@@ -1773,6 +1810,7 @@ Comment mode:
 | Review completed (any issue counts, clean included) | `COMMENT` | `posted` |
 | Review failed, content unusable, or PR not `OPEN` | *(nothing)* | `skipped` |
 | `post_verdict` returned non-200 or raised | *(attempted)* | `error` |
+| `post_verdict` hit the GitHub API rate limit (429) | *(attempted)* | `deferred` — retried later |
 
 Comment mode never suppresses: thresholds and `allowAutoApprove` are irrelevant, and the reason records the issue tallies (`comment mode — review findings posted as comment (N critical, …)`). Both modes are gated by the global master `enabled` switch — while it is off, armed cards in either mode post nothing and per-PR overrides are inert.
 
@@ -1790,7 +1828,17 @@ Note there is no per-issue resolved/dismissed state anywhere in the system, so "
 
 #### Completion Watcher
 
-`check_review_status` only runs when the frontend polls `GET /api/reviews`, so with no browser tab open a finished review was previously neither persisted nor verdicted until someone reopened the app. `auto_verdict_watcher_loop` (`backend/services/auto_verdict_watcher.py`) polls `check_review_status` for every key in `active_reviews` every 10 seconds. It starts as a daemon thread from `app.py` alongside the existing startup cache-refresh threads, guarded on `WERKZEUG_RUN_MAIN` so Flask's reloader cannot double-start it in debug mode. This also fixes the pre-existing persistence gap for reviews that finish after the tab closes.
+`check_review_status` only runs when the frontend polls `GET /api/reviews`, so with no browser tab open a finished review was previously neither persisted nor verdicted until someone reopened the app. `auto_verdict_watcher_loop` (`backend/services/auto_verdict_watcher.py`) polls `check_review_status` for every key in `active_reviews` every 10 seconds. It starts as a daemon thread from `app.py` alongside the existing startup cache-refresh threads, guarded on `WERKZEUG_RUN_MAIN` so Flask's reloader cannot double-start it in debug mode. This also fixes the pre-existing persistence gap for reviews that finish after the tab closes. Each cycle also calls `retry_deferred_verdicts()` (see below).
+
+#### Rate-Limit Deferral and Retry
+
+A verdict post lands at the worst possible moment for the shared GraphQL/REST quota — right after a review agent spent many minutes consuming it — so a drained rate limit must not permanently lose the verdict (the expensive review already succeeded; only the cheap final post failed). The failure is detected end to end:
+
+- `run_gh_command` raises a dedicated `RateLimitError` (a `RuntimeError` subclass, so existing callers are unaffected) whenever gh's stderr reports a primary or secondary rate limit, with **no local sleep-retry** — the quota window is up to an hour, so backing off in-process would only block the calling thread.
+- `post_verdict` maps a rate-limited head-SHA fetch or review POST to `({"error": …, "rate_limited": true}, 429)` instead of a generic 500. (Manual verdict posts surface the same 429 to the UI.)
+- `maybe_post_auto_verdict` records outcome `deferred` (instead of terminal `error`), keeping the decided event, reason, tallies, and criteria snapshot on the `auto_verdicts` row, and logs a `verdict_not_posted` event with reason `rate_limited`.
+
+`retry_deferred_verdicts()` (in `auto_verdict_service.py`, driven by the 10s auto-verdict watcher cycle) sweeps rows with outcome `deferred`: the first retry comes 5 minutes after deferral, doubling per rate-limited attempt up to 1 hour, tracked in an in-memory schedule (`_retry_schedule`) — a restart just means one immediate retry, which the rate limit itself throttles if still active. Before posting, the sweep re-checks that the card is still armed and the PR is still `OPEN` (finalizing `skipped` otherwise), recomposes the body from the stored review content, and reuses the decision recorded at defer time. Success finalizes `posted` and logs `verdict_posted` on the run; a non-429 failure finalizes `error`; a row older than 24 hours expires as `error` (`rate-limit retry window expired`). The armed card shows a `🤖 rate limited — will retry` badge while deferred.
 
 #### Auto Follow-Up Reviews
 
@@ -1799,7 +1847,7 @@ With `autoFollowupReview` on (resolved per card: the card's criteria override wi
 1. No review is currently running for the PR (`active_reviews` check, before any gh call).
 2. The PR has at least one saved review — auto-started reviews are always follow-ups; a first review stays a human action.
 3. The latest review recorded a `head_commit_sha`. An unknown baseline is skipped rather than guessed, because triggering without one could re-review a PR with no new commits.
-4. One `fetch_pr_state_and_sha` call reports the PR is `OPEN` and its head SHA differs from the recorded one — the exact signal behind the "new commits" badge.
+4. The PR appears in the repo's batched open-PR head-SHA map with a SHA that differs from the recorded one — the exact signal behind the "new commits" badge. The scan makes **one** `fetch_open_prs_head_shas` call per repo per cycle (a single `gh pr list --json number,headRefOid`), fetched lazily only when a candidate survives the gh-free checks above; the previous per-armed-PR `fetch_pr_state_and_sha` polling burned dozens of GraphQL calls per minute against the shared rate limit. A PR absent from the map is not open; a failed fetch (`None`) means *unknown* and skips the repo for the cycle rather than treating every armed PR as closed.
 5. That head SHA has not already been attempted (in-memory `_attempted_shas` map, so a failed spawn is not retried every cycle; a restart may retry once).
 
 The review is started through `review_service.begin_review` — the same function `POST /api/reviews` uses — with `is_followup=True` and the card's armed reviewer agent (`auto_verdict_reviewer`), so previous-review lookup, prompt composition, and `active_reviews` registration are identical to a manually started follow-up. Loop safety needs no persistent state beyond the reviews table: a finished review (completed *or* failed) records the then-current head SHA, which clears the trigger condition itself.
@@ -1909,7 +1957,8 @@ Both vocabularies are closed sets. Recorders never invent a value.
 | `reason` | Meaning |
 |----------|---------|
 | `no_output` | Exited 0 without writing either output file (see "Attempt Outcome and Retries") |
-| `nonzero_exit` | CLI exited non-zero; `detail` carries the stderr tail |
+| `nonzero_exit` | CLI exited non-zero; `detail` carries the tail of the run's log file |
+| `timeout` | The attempt ran past `review_timeout_minutes`; its whole process group was killed and the retry policy applies |
 | `spawn_failed` | The subprocess could not be started at all |
 | `attempts_exhausted` | Set on the `gave_up` event |
 | `cancelled` | User-initiated termination |
@@ -1918,6 +1967,7 @@ Both vocabularies are closed sets. Recorders never invent a value.
 | `auto_suppressed` | Criteria were met but auto-approve is off, so nothing was posted |
 | `auto_skipped` | The review was not eligible (PR closed, no usable content, non-completed status) |
 | `post_failed` | A verdict was chosen but GitHub rejected the post |
+| `rate_limited` | A verdict post was deferred because the GitHub API rate limit was exhausted; not terminal — the retry sweep may still post it, recording a later `verdict_posted` on the same run |
 
 #### Verdict events
 
@@ -1946,7 +1996,7 @@ verdict from a hand-posted one.
 vocabulary above is enforced in one place.
 
 **Every recorder swallows its own exceptions.** This mirrors
-`post_review_started_comment()`: observing a review must never be able to break
+`pr_status_comments.py`: observing a review must never be able to break
 the review it observes. A failed write is logged at WARNING and the review
 continues.
 
@@ -2227,9 +2277,11 @@ maps over `useAutomationStore.reviewers` instead of local constants.
 | `scope` | `"off"` | `off` \| `authors` (only listed authors) \| `all` new PRs |
 | `authors` | `[]` | GitHub logins, used when scope is `authors` |
 | `repoAllowlist` | `[]` | `owner/repo` list; empty = nothing processed |
-| `maxConcurrentAutoReviews` | `2` | cap on running auto-started reviews |
+| `maxConcurrentAutoReviews` | `2` | budget for auto-started spawns, counted against **all** running reviews (manual included). Enforced inside `begin_review()` for every auto path — dispatch worker, follow-up watcher, reconciliation requeue — so no caller can pile past it; the stale-review watcher's cancel-and-replace bypasses it (1-for-1, never raises concurrency). Over-budget requests return 429 with `over_budget: true` and are retried by their caller's next cycle |
 | `requireCiPass` | `true` | CI must be completed and passing before dispatch |
+| `requireBaseBranch` | `"main"` | the PR must target this branch for merge to dispatch; a PR on another base waits (stacked PRs dispatch after retargeting). Empty string = any base |
 | `maxBehindBase` | `10` | max commits the PR branch may be behind its base head |
+| `dispatchTimeoutHours` | `0` | rows still `pending` (waiting on gates) after this many hours are `skipped` with "dispatch window expired"; `0` = wait forever |
 | `maxPipelineSize` | `1000` | max pending pipeline rows; new candidates are refused at the cap |
 | `ignorePatterns` | `[]` | globs stripped before classification (index files) |
 | `defaultRule` | default reviewer, verdict off | applies when no rule matches |
@@ -2299,15 +2351,18 @@ order) with a matching pattern:
 
 **Dispatch worker** (`backend/services/automation_dispatch_worker.py`, daemon
 started unconditionally from `app.py`, 60s interval; the loop's own
-`scope == 'off'` check is the live kill switch). Each cycle it evaluates up to
+`scope == 'off'` check is the live kill switch; each cycle also runs
+`sweep_stale_workspaces()` first — see Review Workspace & Runaway-Process
+Guardrails). Each cycle it evaluates up to
 `EVAL_LIMIT` (20) pending rows but starts reviews only within a budget of
-`maxConcurrentAutoReviews − running auto-started reviews` — evaluating more rows
+`maxConcurrentAutoReviews − running reviews (all of them)` — evaluating more rows
 than the budget means a PR stuck waiting on its conditions never starves ready
 PRs queued behind it within one cycle, and `get_pending` orders by `updated_at`
 (least recently evaluated first, bumped on every evaluation), so across cycles
 the pipeline round-robins: any number of perpetual waiters cannot starve rows
 behind the `EVAL_LIMIT` window. Per row: re-check repo allowlisted (else
-`skipped`) → PR metadata from `synced_prs` (fallback `fetch_full_pr`) → live
+`skipped`) → dispatch window (`skipped` when `dispatchTimeoutHours` is set and
+the row is older) → PR metadata from `synced_prs` (fallback `fetch_full_pr`) → live
 state/draft/CI from a **per-cycle batched fetch** (`fetch_open_prs_queue_data`:
 ONE `gh pr list` per repo per cycle covers every evaluated row — per-row
 `gh pr view` polling burned ~half the shared GraphQL rate limit; a PR absent
@@ -2321,24 +2376,31 @@ non-draft waiting PR is visible on the board) → **dispatch condition gates** �
 `begin_review(reviewer_type=rule.reviewerKey, auto_started=True)` and, only after
 a 201, arm per-PR auto-verdict with the rule's `autoVerdict`/`autoVerdictMode`
 via `set_auto_verdict`. `begin_review` 409 (a review already running) →
-`skipped`; other failures increment `attempts` and retry next cycle, `failed`
-after 3. Follow-up reviews stay owned by the existing auto-review watcher once
-the card is armed.
+`skipped`; 429 (another path raced the worker past the budget) → the row stays
+pending for the next cycle, attempts untouched; other failures increment
+`attempts` and retry next cycle, `failed` after 3. Follow-up reviews stay owned
+by the existing auto-review watcher once the card is armed (on a 429 the
+watcher forgets the attempted SHA so the follow-up retries next cycle).
 
 **Dispatch condition gates**: a review starts only when the live PR data is
 readable (a failed batch fetch blocks rather than dispatching blind — and is
 never confused with "no open PRs", which would mass-skip the pipeline)
 and the PR is not a draft — both checked in `_process_one` before board
-placement — then, in `_dispatch_blocker`, CI is completed and passing
+placement — then, in `_dispatch_blocker`: the PR targets the required base
+branch (`requireBaseBranch`, default `main`; a stacked PR *waits* rather than
+skips, since it is typically retargeted to main once its parent merges — an
+unknown base also waits rather than dispatching blind; empty string disables
+the gate), CI is completed and passing
 (`get_ci_status` == pending/failure blocks; a PR with **no checks at all**
 passes, so CI-less repos are never held up; gate disabled via
 `requireCiPass: false`), and the branch is at most `maxBehindBase` commits behind
 its base head (via `fetch_pr_behind_by`, the `gh api …/compare/{base}...{head}`
 `behind_by` count; a compare failure blocks without consuming attempts). A
 blocked row stays `pending` with `detail = "waiting: <reason>"` **for as long as
-the PR stays open** — there is no dispatch timeout; CI turning green, a rebase,
-or marking ready triggers the review naturally, and a closed/merged PR is
-`skipped` on its next evaluation. Each clean waiting evaluation resets the
+the PR stays open** — unless `dispatchTimeoutHours` is set, in which case a row
+older than that is `skipped` with "dispatch window expired"; CI turning green,
+a rebase, retargeting to main, or marking ready triggers the review naturally,
+and a closed/merged PR is `skipped` on its next evaluation. Each clean waiting evaluation resets the
 row's `attempts` (via `reset_attempts`), so transient errors spread over a long
 wait can never accumulate into a permanent `failed`.
 
@@ -4082,9 +4144,13 @@ and validated server-side; see those feature sections for their shapes.
 | `review_sample_limit` | integer | 250 | Maximum PRs to sample for review statistics and lifecycle metrics |
 | `review_section_names` | object | `{"critical": "Critical Issues", "major": "Major Concerns", "minor": "Minor Issues"}` | Custom display names for review sections |
 | `reviews_dir` | string | `~/code-reviews` | Directory where Claude code reviews (`.md`/`.json`) are written. Supports `~` and `$VAR` expansion so it stays machine-agnostic. Falls back to `~/code-reviews` if omitted. |
-| `post_review_started_comment` | boolean | true | Post review lifecycle comments to the PR: the "review underway" comment when a code review starts, and the "review stopped — new commits" comment when the stale-review watcher cancels a running review. Set to `false` to suppress both. |
+| `post_review_started_comment` | boolean | true | Master switch for all PR status comments (the name is historical): review started/retry/gave-up, stale-stop, orphan-requeued, verdict suppressed/deferred/error/skipped, and the automation enrolled/waiting/expired/failed/unidentified comments, plus the supersede-deletes. Set to `false` to suppress everything. See "PR Status Comments". |
 | `review_max_attempts` | integer | 3 | Total review attempts (including the first) before a review is recorded as failed. Clamped to 1–5; `1` disables retries. |
 | `review_retry_delay_seconds` | number | 30 | Backoff before each retry attempt. Gives a transient API or GitHub outage time to clear. |
+| `review_timeout_minutes` | number | 60 | Wall-clock limit per review attempt. A run past the limit has its whole process group killed and counts as a failed attempt under the retry policy. `0` disables. |
+| `review_memory_max` | string | `"12G"` | `MemoryMax` for the systemd user scope wrapped around each review subprocess (swap pinned to 0). Empty string disables the memory cap. Ignored when `systemd-run --user` is unusable (a startup probe checks; a warning is logged). |
+| `review_tasks_max` | integer | 256 | `TasksMax` for the review scope — hard cap on processes/threads a review can spawn (the Aug 31 incident was ~1,700 git processes from one run). `0` disables. |
+| `review_workspace` | object | see below | Throwaway per-PR git workspaces for review runs. `root` (string, `~/.cache/gh-pr-explorer/review-workspaces`) — where workspaces live; `~`/`$VAR` expanded. `fetch_depth` (int, 50) — shallow-fetch depth in the prescribed recipe. `fetch_timeout_seconds` (int, 600) — `timeout` wrapped around the recipe's fetch. `sweep_after_hours` (int, 24) — sweeper deletes leftover workspace dirs older than this that no running review owns. |
 | `review_log_retention_days` | integer | 90 | How long review lifecycle events are kept. Purged once on startup; `0` disables purging. |
 | `past_reviews_dir` | string | `<reviews_dir>/past-reviews` | Legacy reviews directory used only by the one-time `migrate_data.py` import. Supports `~`/`$VAR` expansion. |
 | `pr_sync` | object | see below | PR List Sync worker settings. Optional block; every key has an internal default. `enabled` (bool, true) — master switch; `false` reverts the PR list to live fetching. `poll_interval_seconds` (int, 120) — worker cycle interval. `history_days` (int, 180) — how far back closed/merged PRs are synced and kept. `max_synced_repos` (int, 10) — most-recently-visited repos kept in sync; the rest fall back to the live path. `exclude_repos` (list, `[]`) — `"owner/name"` strings never synced. |
@@ -4105,6 +4171,15 @@ and validated server-side; see those feature sections for their shapes.
   "reviews_dir": "~/code-reviews",
   "review_max_attempts": 3,
   "review_retry_delay_seconds": 30,
+  "review_timeout_minutes": 60,
+  "review_memory_max": "12G",
+  "review_tasks_max": 256,
+  "review_workspace": {
+    "root": "~/.cache/gh-pr-explorer/review-workspaces",
+    "fetch_depth": 50,
+    "fetch_timeout_seconds": 600,
+    "sweep_after_hours": 24
+  },
   "review_log_retention_days": 90,
   "post_review_started_comment": true,
   "review_section_names": {
@@ -4396,8 +4471,13 @@ when **both** conditions hold:
 - the process exited 0, and
 - `review_produced_output()` finds either the `.md` or the `.json` file on disk
 
+An attempt still running past `review_timeout_minutes` is also a failure: its
+whole process group is killed and a `failed` event with reason `timeout` is
+recorded before the retry decision.
+
 A failed attempt is retried up to `review_max_attempts` times in total, with a
-`review_retry_delay_seconds` backoff between attempts:
+`review_retry_delay_seconds` backoff between attempts (each new attempt resets
+the wall-clock deadline):
 
 | State | Meaning |
 |-------|---------|
@@ -4417,9 +4497,11 @@ Design notes:
   deadline; the next poll (the auto-verdict watcher ticks every 10s) spawns the
   next attempt. Sleeping inside `check_review_status()` would stall every other
   review's poll and hold `reviews_lock` for the duration.
-- **Retries do not re-announce the review.** `post_review_started_comment()` is
-  called once from `begin_review()`, not per attempt, so a retried review does
-  not spam the PR conversation.
+- **Retries announce without spamming.** Each attempt posts a status comment
+  (retry scheduled, then a new "in progress" for the respawn), but the
+  supersede-delete in `pr_status_comments.py` keeps the PR at one standing
+  status comment. Comments are queued during the locked poll and posted after
+  `reviews_lock` is released, so gh latency never stalls other reviews' polls.
 - **A spawn failure is terminal.** If `start_review_process()` cannot start the
   CLI at all (missing binary), the review is recorded as failed immediately
   rather than burning the remaining attempts on an unfixable error.

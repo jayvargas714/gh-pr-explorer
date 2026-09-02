@@ -13,9 +13,17 @@ loop never raises.
 
 import json
 import logging
+import re
 import time
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_wait(text):
+    """Wait reasons with only digit differences are the same state — a PR going
+    from '12 commits behind base' to '13 commits behind base' must not repost."""
+    return re.sub(r"\d+", "N", text or "")
 
 WATCH_INTERVAL_SECONDS = 60
 MAX_ATTEMPTS = 3
@@ -24,14 +32,22 @@ MAX_ATTEMPTS = 3
 EVAL_LIMIT = 20
 
 
-def _count_running_auto_reviews():
-    from backend.extensions import active_reviews, reviews_lock
-
-    with reviews_lock:
-        return sum(
-            1 for entry in active_reviews.values()
-            if entry.get("status") == "running" and entry.get("auto_started")
-        )
+def _dispatch_window_expired(row, config):
+    """True when dispatchTimeoutHours is set and this row has waited past it."""
+    timeout_hours = config.get("dispatchTimeoutHours", 0)
+    if not timeout_hours:
+        return False
+    created = row.get("created_at")
+    if not created:
+        return False
+    try:
+        created_dt = datetime.fromisoformat(str(created))
+    except ValueError:
+        return False
+    if created_dt.tzinfo is None:
+        created_dt = created_dt.replace(tzinfo=timezone.utc)
+    age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600
+    return age_hours > timeout_hours
 
 
 def _ensure_queued_in_auto_lane(pr, repo_full, pr_number):
@@ -78,13 +94,26 @@ def _get_pr_metadata(repo_full, pr_number):
 def _dispatch_blocker(config, queue_data, pr, owner, repo, pr_number):
     """The reason this PR cannot be reviewed yet, or None when all conditions hold.
 
-    Conditions: CI completed and passing (when required; a PR with no checks at
-    all passes) and the branch at most maxBehindBase commits behind its base
+    Conditions: the PR targets the required base branch (when configured),
+    CI completed and passing (when required; a PR with no checks at all
+    passes), and the branch at most maxBehindBase commits behind its base
     head. State/draft gating happens earlier in _process_one, before the PR is
     placed on the board.
+
+    The base gate waits rather than skips: a stacked PR is typically retargeted
+    to main once its parent merges, and the pending row picks it up then.
     """
     from backend.services.github_service import fetch_pr_behind_by
     from backend.services.pr_service import get_ci_status
+
+    required_base = (config.get("requireBaseBranch") or "").strip()
+    if required_base:
+        pr_base = pr.get("baseRefName")
+        if not pr_base:
+            # Unknown base: don't dispatch blind against the requirement.
+            return "base branch unknown"
+        if pr_base != required_base:
+            return f"base branch is {pr_base}, not {required_base}"
 
     if config.get("requireCiPass", True):
         ci = get_ci_status(queue_data.get("statusCheckRollup"))
@@ -123,6 +152,13 @@ def _process_one(row, config, batch_cache):
     from backend.database import get_automation_dispatches_db, get_queue_db, get_reviews_db
     from backend.services.automation_service import classify_files
     from backend.services.github_service import fetch_pr_files
+    from backend.services.pr_status_comments import (
+        post_automation_enrolled_comment,
+        post_automation_failed_comment,
+        post_automation_unidentified_comment,
+        post_automation_waiting_comment,
+        post_automation_window_expired_comment,
+    )
     from backend.services.review_service import begin_review
 
     dispatches = get_automation_dispatches_db()
@@ -134,21 +170,33 @@ def _process_one(row, config, batch_cache):
         dispatches.set_status(row["id"], "skipped", detail="repo no longer allowlisted")
         return False
 
+    owner_repo = repo_full.split("/", 1)
+    if len(owner_repo) != 2:
+        dispatches.set_status(row["id"], "failed", detail=f"malformed repo: {repo_full}")
+        return False
+    owner, repo = owner_repo
+
+    if _dispatch_window_expired(row, config):
+        dispatches.set_status(
+            row["id"], "skipped",
+            detail=f"dispatch window expired ({config['dispatchTimeoutHours']}h)",
+        )
+        logger.info(f"Automation: {repo_full}#{pr_number} skipped — dispatch window expired")
+        post_automation_window_expired_comment(
+            owner, repo, pr_number, timeout_hours=config["dispatchTimeoutHours"])
+        return False
+
     def _retry_or_fail(detail):
         attempts = dispatches.increment_attempts(row["id"])
         if attempts >= MAX_ATTEMPTS:
             dispatches.set_status(row["id"], "failed", detail=detail)
             logger.error(f"Automation: giving up on {repo_full}#{pr_number} after "
                          f"{attempts} attempts: {detail}")
+            post_automation_failed_comment(
+                owner, repo, pr_number, attempts=attempts, detail=detail)
         else:
             logger.warning(f"Automation: attempt {attempts} failed for "
                            f"{repo_full}#{pr_number}, will retry: {detail}")
-
-    owner_repo = repo_full.split("/", 1)
-    if len(owner_repo) != 2:
-        dispatches.set_status(row["id"], "failed", detail=f"malformed repo: {repo_full}")
-        return False
-    owner, repo = owner_repo
 
     try:
         pr = _get_pr_metadata(repo_full, pr_number)
@@ -159,7 +207,13 @@ def _process_one(row, config, batch_cache):
     def _wait(reason):
         """Keep the row pending (rows wait as long as the PR stays open), and
         clear the attempt counter: a clean waiting evaluation proves the row is
-        healthy, so transient errors over a long wait can't add up to failed."""
+        healthy, so transient errors over a long wait can't add up to failed.
+
+        Announces the wait on the PR only when the blocking reason actually
+        changed (digit-insensitively), so a PR parked on the same gate for
+        hours is commented once, not every cycle."""
+        if _normalize_wait(f"waiting: {reason}") != _normalize_wait(row.get("detail")):
+            post_automation_waiting_comment(owner, repo, pr_number, reason=reason)
         dispatches.set_status(row["id"], "pending", detail=f"waiting: {reason}")
         if row.get("attempts"):
             dispatches.reset_attempts(row["id"])
@@ -176,6 +230,13 @@ def _process_one(row, config, batch_cache):
         # Absent from a successful open-PR listing: closed or merged.
         dispatches.set_status(row["id"], "skipped", detail="PR is not open (closed or merged)")
         return False
+
+    # A row the worker has never touched (fresh from the sync worker or a
+    # manual enroll — backfilled and requeued rows carry a detail) gets its
+    # enrollment announced once the PR is confirmed open. Bulk backfills mark
+    # their rows so a seeding run can't blast comments onto every open PR.
+    if row.get("detail") is None and not row.get("attempts"):
+        post_automation_enrolled_comment(owner, repo, pr_number)
 
     # Drafts wait off the board: they stay pending (so the ready transition is
     # caught) but are not queued or placed in the Auto lane until non-draft.
@@ -217,6 +278,10 @@ def _process_one(row, config, batch_cache):
                               detail="files span multiple rules or mix rule and unmatched files")
         logger.info(f"Automation: {repo_full}#{pr_number} unidentified "
                     f"(rules={result['matched_rules']}, unmatched={result['unmatched_count']})")
+        post_automation_unidentified_comment(
+            owner, repo, pr_number,
+            matched_rules=result["matched_rules"],
+            unmatched_count=result["unmatched_count"])
         return False
 
     rule = result["rule"]
@@ -244,6 +309,11 @@ def _process_one(row, config, batch_cache):
         dispatches.set_status(row["id"], "skipped", outcome_json=outcome_json,
                               reviewer_key=reviewer_key,
                               detail="review already in progress")
+    elif status == 429:
+        # begin_review's own budget gate refused (another path raced us past
+        # the budget between our count and the spawn). Not a failure: the row
+        # stays pending for the next cycle.
+        _wait("concurrency budget full")
     else:
         _retry_or_fail(f"begin_review failed ({status}): {payload.get('error')}")
     return False
@@ -253,12 +323,15 @@ def process_pending_dispatches():
     """One pass over pending dispatch rows, within the concurrency budget."""
     from backend.database import get_automation_dispatches_db
     from backend.services.automation_config import get_config
+    from backend.services.review_service import count_running_reviews
 
     config = get_config()
     if config["scope"] == "off":
         return
 
-    budget = config["maxConcurrentAutoReviews"] - _count_running_auto_reviews()
+    # All running reviews count against the budget — manual ones included —
+    # so total review concurrency stays bounded, not just the auto slice.
+    budget = config["maxConcurrentAutoReviews"] - count_running_reviews()
     if budget <= 0:
         return
 
@@ -279,9 +352,14 @@ def process_pending_dispatches():
 
 def automation_dispatch_worker_loop(interval=WATCH_INTERVAL_SECONDS):
     """Poll pending dispatches until the process exits."""
+    from backend.services.review_service import sweep_stale_workspaces
+
     logger.info(f"Automation dispatch worker started (interval={interval}s)")
     while True:
         try:
+            # Piggybacked here (rather than a thread of its own) because this
+            # loop runs unconditionally; the sweep itself never raises.
+            sweep_stale_workspaces()
             process_pending_dispatches()
         except Exception as e:
             logger.error(f"Automation dispatch worker iteration failed: {e}")

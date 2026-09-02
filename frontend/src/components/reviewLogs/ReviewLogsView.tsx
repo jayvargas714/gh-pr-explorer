@@ -28,6 +28,7 @@ const EVENT_LABELS: Record<string, string> = {
 const REASON_LABELS: Record<string, string> = {
   no_output: 'exited 0 with no review written',
   nonzero_exit: 'CLI exited non-zero',
+  timeout: 'killed: ran past the time limit',
   spawn_failed: 'could not start the CLI',
   attempts_exhausted: 'all attempts used',
   cancelled: 'cancelled by user',
@@ -36,6 +37,7 @@ const REASON_LABELS: Record<string, string> = {
   auto_suppressed: 'suppressed by criteria',
   auto_skipped: 'not eligible',
   post_failed: 'GitHub rejected the post',
+  rate_limited: 'GitHub rate limit hit — will retry',
 }
 
 type BadgeVariant = 'success' | 'error' | 'warning' | 'info' | 'neutral'

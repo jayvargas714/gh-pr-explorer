@@ -439,3 +439,90 @@ def test_events_are_skipped_when_no_run_id_is_recorded(monkeypatch, saved, tmp_p
 
     assert review["status"] == "failed"
     assert recorded == []
+
+
+# --- PR status comments for the retry lifecycle --------------------------------
+
+@pytest.fixture
+def comments(monkeypatch):
+    """Record every lifecycle status comment check_review_status would post."""
+    calls = []
+
+    def _recorder(kind):
+        def _post(owner, repo, pr_number, **kwargs):
+            calls.append({"kind": kind, "pr": pr_number, **kwargs})
+            return True
+        return _post
+
+    for kind in ("retry_scheduled", "gave_up", "started"):
+        monkeypatch.setattr(
+            review_service, f"post_review_{kind}_comment", _recorder(kind)
+        )
+    return calls
+
+
+def test_failed_attempt_comments_the_scheduled_retry(tmp_path, monkeypatch, saved, comments):
+    set_retry_policy(monkeypatch, max_attempts=3, delay=30)
+    register(tmp_path / "review.md", FakeProcess(exit_code=1))
+
+    poll()
+
+    assert [c["kind"] for c in comments] == ["retry_scheduled"]
+    comment = comments[0]
+    assert comment["attempt"] == 1
+    assert comment["max_attempts"] == 3
+    assert comment["delay_seconds"] == 30
+    assert comment["reason"] == "nonzero_exit"
+
+
+def test_exhausted_attempts_comment_the_give_up(tmp_path, monkeypatch, saved, comments):
+    set_retry_policy(monkeypatch, max_attempts=1, delay=0)
+    register(tmp_path / "review.md", FakeProcess(exit_code=1))
+
+    poll()
+
+    assert [c["kind"] for c in comments] == ["gave_up"]
+    comment = comments[0]
+    assert comment["attempt"] == 1
+    assert comment["max_attempts"] == 1
+    assert comment["reason"] == "nonzero_exit"
+    assert saved[0]["status"] == "failed"
+
+
+def test_respawn_comments_the_new_attempt_with_sha(tmp_path, monkeypatch, saved, comments):
+    set_retry_policy(monkeypatch, max_attempts=3, delay=0)
+    entry = register(tmp_path / "review.md", FakeProcess(exit_code=1))
+    entry["spawn"]["head_sha"] = "abcdef1234567890"
+    monkeypatch.setattr(
+        review_service, "start_review_process",
+        lambda **kwargs: (FakeProcess(exit_code=None), str(tmp_path / "retry.md"), False),
+    )
+
+    poll()          # attempt 1 fails, retry armed (delay 0)
+    comments.clear()
+    poll()          # respawn fires
+
+    assert [c["kind"] for c in comments] == ["started"]
+    comment = comments[0]
+    assert comment["attempt"] == 2
+    assert comment["max_attempts"] == 3
+    assert comment["head_sha"] == "abcdef1234567890"
+
+
+def test_failed_respawn_comments_the_give_up(tmp_path, monkeypatch, saved, comments):
+    set_retry_policy(monkeypatch, max_attempts=3, delay=0)
+    register(tmp_path / "review.md", FakeProcess(exit_code=1))
+    monkeypatch.setattr(
+        review_service, "start_review_process",
+        lambda **kwargs: (None, "CLI not found", False),
+    )
+
+    poll()          # attempt 1 fails, retry armed (delay 0)
+    comments.clear()
+    poll()          # respawn fails for good
+
+    assert [c["kind"] for c in comments] == ["gave_up"]
+    comment = comments[0]
+    assert comment["spawn_failed"] is True
+    assert comment["attempt"] == 2
+    assert "CLI not found" in comment["detail"]

@@ -10,11 +10,14 @@ the PR again either.
 reconcile_orphaned_reviews() runs once at startup, before the watcher threads:
 each orphaned run is closed with a `cancelled` event (reason "orphaned") so
 the Review Logs tab tells the truth, any leftover subprocess is terminated,
-and the review is restarted — auto-dispatched PRs by requeueing their dispatch
-row (the worker re-dispatches with routing, arming, and the concurrency
-budget), manual runs directly via begin_review with the recorded spawn facts.
-Runs whose PR already has a newer completed review (e.g. the follow-up watcher
-recovered it) or whose PR is no longer open are closed without a restart.
+and the review is restarted — every auto-started orphan goes back through the
+automation pipeline (its dispatch row requeued, or a pending row created), so
+the dispatch worker paces the restarts under the concurrency budget instead
+of this sweep spawning them all at once; only manual runs restart directly
+via begin_review. A requeued follow-up comes back as a fresh review — an
+accepted trade for keeping restart bursts bounded. Runs whose PR already has
+a newer completed review (e.g. the follow-up watcher recovered it) or whose
+PR is no longer open are closed without a restart.
 """
 
 import logging
@@ -26,13 +29,29 @@ logger = logging.getLogger(__name__)
 
 
 def _kill_if_alive(pid):
-    """Best-effort SIGTERM for a leftover CLI process from the previous run."""
+    """Best-effort SIGTERM for a leftover CLI process from the previous run.
+
+    Reviews spawn as session leaders (pgid == pid), so signal the whole group —
+    a lone os.kill leaves the CLI's git descendants running, which is how the
+    Aug 31 storm survived. Falls back to the single PID for pre-upgrade orphans
+    that never led a group.
+    """
     if not pid:
         return
     try:
-        os.kill(int(pid), signal.SIGTERM)
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return
+    try:
+        os.killpg(pid, signal.SIGTERM)
+        logger.info(f"Terminated leftover review process group (PGID {pid})")
+        return
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        os.kill(pid, signal.SIGTERM)
         logger.info(f"Terminated leftover review process (PID {pid})")
-    except (ProcessLookupError, PermissionError, ValueError, OSError):
+    except (ProcessLookupError, PermissionError, OSError):
         pass
 
 
@@ -72,6 +91,7 @@ def reconcile_orphaned_reviews():
         get_review_events_db,
         get_reviews_db,
     )
+    from backend.services.pr_status_comments import post_review_orphaned_requeued_comment
     from backend.services.review_event_log import REASON_ORPHANED, record_cancelled
 
     summary = {"orphans": 0, "requeued": 0, "restarted": 0,
@@ -122,14 +142,28 @@ def reconcile_orphaned_reviews():
                 logger.info(f"Orphaned run on {key}: PR is {pr_state} — closed only")
                 continue
 
-            dispatch_row = dispatches.get_by_pr(repo_full, pr_number)
-            if dispatch_row and dispatch_row["status"] == "dispatched":
-                # The pipeline owns this PR: requeue so the worker re-dispatches
-                # with routing, verdict arming, and the concurrency budget.
-                dispatches.requeue(dispatch_row["id"],
-                                   detail="requeued after restart (orphaned review)")
+            if run.get("auto_started"):
+                # Every auto orphan goes back through the pipeline so the
+                # dispatch worker re-dispatches it with routing, verdict
+                # arming, and — critically — pacing under the concurrency
+                # budget. Restarting auto orphans here spawned unbounded
+                # bursts (6 reviews in 11 seconds after one restart).
+                dispatch_row = dispatches.get_by_pr(repo_full, pr_number)
+                if dispatch_row:
+                    dispatches.requeue(dispatch_row["id"],
+                                       detail="requeued after restart (orphaned review)")
+                else:
+                    # Mark the fresh row too, so the dispatch worker's
+                    # first-evaluation guard doesn't re-announce an enrollment
+                    # on top of the requeued comment below.
+                    dispatches.record_candidate(repo_full, pr_number)
+                    new_row = dispatches.get_by_pr(repo_full, pr_number)
+                    if new_row:
+                        dispatches.requeue(new_row["id"],
+                                           detail="requeued after restart (orphaned review)")
                 summary["requeued"] += 1
-                logger.info(f"Orphaned run on {key}: dispatch row requeued")
+                logger.info(f"Orphaned run on {key}: requeued for paced re-dispatch")
+                post_review_orphaned_requeued_comment(owner, repo, pr_number)
                 continue
 
             from backend.services.review_service import begin_review
@@ -139,7 +173,8 @@ def reconcile_orphaned_reviews():
                 reviews_db,
                 is_followup=bool(run.get("is_followup")),
                 reviewer_type=run.get("reviewer_agent") or "default",
-                auto_started=bool(run.get("auto_started")),
+                auto_started=False,
+                comment_note="restarted after a service restart interrupted the previous run",
             )
             if status == 201:
                 summary["restarted"] += 1

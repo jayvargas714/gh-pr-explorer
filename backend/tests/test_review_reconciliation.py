@@ -105,6 +105,35 @@ def test_orphaned_manual_run_is_restarted_directly(h):
     assert summary["restarted"] == 1
 
 
+def test_orphaned_auto_run_without_dispatch_row_gets_a_pending_row(h):
+    """An auto orphan the pipeline never tracked (e.g. a watcher follow-up)
+    still goes back through the dispatch worker, never a direct restart —
+    direct restarts here spawned unbounded bursts after a service crash."""
+    orphan(h, 17, "run-17", auto_started=True, is_followup=True)
+
+    summary = recon.reconcile_orphaned_reviews()
+
+    row = h.dispatches.get_by_pr(REPO, 17)
+    assert row is not None
+    assert row["status"] == "pending"
+    assert h.restarted == []
+    assert summary["requeued"] == 1
+
+
+def test_orphaned_auto_run_with_terminal_dispatch_row_is_requeued(h):
+    orphan(h, 18, "run-18", auto_started=True)
+    h.dispatches.record_candidate(REPO, 18)
+    h.dispatches.set_status(h.dispatches.get_by_pr(REPO, 18)["id"], "skipped",
+                            detail="review already in progress")
+
+    summary = recon.reconcile_orphaned_reviews()
+
+    row = h.dispatches.get_by_pr(REPO, 18)
+    assert row["status"] == "pending"
+    assert h.restarted == []
+    assert summary["requeued"] == 1
+
+
 def test_orphan_with_newer_completed_review_is_not_restarted(h):
     orphan(h, 9, "run-3")
     # A follow-up watcher already recovered this PR after the restart.
@@ -159,3 +188,45 @@ def test_reconciliation_never_raises(h, monkeypatch):
                         lambda *a: (_ for _ in ()).throw(RuntimeError("gh down")))
 
     recon.reconcile_orphaned_reviews()  # must not raise
+
+
+# --- PR status comments -------------------------------------------------------
+
+@pytest.fixture
+def requeued_comments(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "backend.services.pr_status_comments.post_review_orphaned_requeued_comment",
+        lambda owner, repo, pr_number: calls.append(f"{owner}/{repo}/{pr_number}"),
+    )
+    return calls
+
+
+def test_requeued_orphan_is_announced_on_the_pr(h, requeued_comments):
+    orphan(h, 7, "run-1", auto_started=True)
+    h.dispatches.record_candidate(REPO, 7)
+
+    recon.reconcile_orphaned_reviews()
+
+    assert requeued_comments == [f"{REPO}/7"]
+
+
+def test_fresh_requeue_row_is_marked_so_enrollment_stays_silent(h, requeued_comments):
+    """The dispatch worker announces enrollment for detail-less rows; a row
+    created by reconciliation must carry the requeue detail instead."""
+    orphan(h, 17, "run-17", auto_started=True)
+
+    recon.reconcile_orphaned_reviews()
+
+    row = h.dispatches.get_by_pr(REPO, 17)
+    assert "restart" in (row["detail"] or "")
+    assert requeued_comments == [f"{REPO}/17"]
+
+
+def test_manual_restart_carries_the_restart_note(h, requeued_comments):
+    orphan(h, 8, "run-2")
+
+    recon.reconcile_orphaned_reviews()
+
+    assert "service restart" in h.restarted[0]["comment_note"]
+    assert requeued_comments == []
