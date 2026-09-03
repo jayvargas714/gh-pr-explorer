@@ -19,6 +19,7 @@ from backend.config import (
     get_reviews_dir,
 )
 from backend.services.github_service import fetch_pr_head_sha, fetch_pr_state
+from backend.services.pipeline_snapshot import mark_dirty as mark_pipeline_dirty
 from backend.services.pr_status_comments import (
     delete_status_comments,
     post_review_gave_up_comment,
@@ -500,6 +501,7 @@ def save_review_to_db(key, review, status, reviews_db):
                 auto_started=review.get("auto_started", False)
             )
             logger.info(f"Saved review to database for {key}")
+            mark_pipeline_dirty()
             return review_id
     except Exception as e:
         logger.error(f"Failed to save review to database for {key}: {e}")

@@ -11,7 +11,7 @@ from typing import List, Dict, Any, Optional
 
 from backend.database import (
     get_queue_db, get_reviews_db, get_audits_db, get_auto_verdicts_db,
-    get_automation_dispatches_db,
+    get_automation_dispatches_db, get_auto_verdict_arming_db,
 )
 from backend.services.github_service import fetch_pr_queue_data
 from backend.services.pr_service import get_ci_status, get_current_reviewers, get_review_status
@@ -45,22 +45,7 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db, auto_verd
     has_new_commits = False
     last_reviewed_sha: Optional[str] = None
     current_sha: Optional[str] = None
-    review_score: Optional[float] = None
-    has_review = False
-    review_id: Optional[int] = None
-    inline_comments_posted = False
-    major_concerns_posted = False
-    minor_issues_posted = False
-    critical_posted_count = None
-    critical_found_count = None
-    major_posted_count = None
-    major_found_count = None
-    minor_posted_count = None
-    minor_found_count = None
-    critical_issue_titles = None
-    major_issue_titles = None
-    minor_issue_titles = None
-    is_followup = False
+    review_summary: Optional[Dict[str, Any]] = None
     review_decision: Optional[str] = None
     ci_status: Optional[str] = None
     status_check_rollup: Optional[List[Dict[str, Any]]] = None
@@ -98,21 +83,9 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db, auto_verd
         pr_auto_verdicts = auto_verdicts_db.get_for_pr(item["repo"], item["pr_number"])
         rev_log = build_rev_log(pr_reviews, pr_audits, pr_auto_verdicts)
         auto_verdict_last = _format_auto_verdict(pr_auto_verdicts[0]) if pr_auto_verdicts else None
+        review_summary = summarize_reviews(pr_reviews)
         latest_review = pr_reviews[0] if pr_reviews else None
         if latest_review:
-            has_review = True
-            review_score = latest_review.get("score")
-            review_id = latest_review.get("id")
-            inline_comments_posted = latest_review.get("inline_comments_posted", False)
-            major_concerns_posted = latest_review.get("major_concerns_posted", False)
-            minor_issues_posted = latest_review.get("minor_issues_posted", False)
-            critical_posted_count = latest_review.get("critical_posted_count")
-            critical_found_count = latest_review.get("critical_found_count")
-            major_posted_count = latest_review.get("major_posted_count")
-            major_found_count = latest_review.get("major_found_count")
-            minor_posted_count = latest_review.get("minor_posted_count")
-            minor_found_count = latest_review.get("minor_found_count")
-            is_followup = bool(latest_review.get("is_followup", False))
             stored_sha = latest_review.get("head_commit_sha")
             if stored_sha:
                 last_reviewed_sha = stored_sha
@@ -125,12 +98,10 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db, auto_verd
                 # signal still surfaces — losing the badge entirely defeats the
                 # whole point of the indicator.
                 has_new_commits = True
-
-            critical_issue_titles, major_issue_titles, minor_issue_titles = \
-                _extract_issue_titles(latest_review.get("content_json"))
     else:
         pr_state = item.get("pr_state")
 
+    rs = review_summary or {}
     return {
         "id": item["id"],
         "number": item["pr_number"],
@@ -146,23 +117,26 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db, auto_verd
         "hasNewCommits": has_new_commits,
         "lastReviewedSha": last_reviewed_sha,
         "currentSha": current_sha,
-        "hasReview": has_review,
-        "reviewScore": review_score,
-        "reviewId": review_id,
-        "inlineCommentsPosted": inline_comments_posted,
-        "majorConcernsPosted": major_concerns_posted,
-        "minorIssuesPosted": minor_issues_posted,
-        "criticalPostedCount": critical_posted_count,
-        "criticalFoundCount": critical_found_count,
-        "majorPostedCount": major_posted_count,
-        "majorFoundCount": major_found_count,
-        "minorPostedCount": minor_posted_count,
-        "minorFoundCount": minor_found_count,
-        "criticalIssueTitles": critical_issue_titles,
-        "majorIssueTitles": major_issue_titles,
-        "minorIssueTitles": minor_issue_titles,
-        "isFollowup": is_followup,
-        "autoVerdict": format_auto_verdict_state(item, auto_verdict_last),
+        "hasReview": review_summary is not None,
+        "reviewScore": rs.get("score"),
+        "reviewId": rs.get("reviewId"),
+        "inlineCommentsPosted": rs.get("inlineCommentsPosted", False),
+        "majorConcernsPosted": rs.get("majorConcernsPosted", False),
+        "minorIssuesPosted": rs.get("minorIssuesPosted", False),
+        "criticalPostedCount": rs.get("critical", {}).get("posted"),
+        "criticalFoundCount": rs.get("critical", {}).get("found"),
+        "majorPostedCount": rs.get("major", {}).get("posted"),
+        "majorFoundCount": rs.get("major", {}).get("found"),
+        "minorPostedCount": rs.get("minor", {}).get("posted"),
+        "minorFoundCount": rs.get("minor", {}).get("found"),
+        "criticalIssueTitles": rs.get("critical", {}).get("titles"),
+        "majorIssueTitles": rs.get("major", {}).get("titles"),
+        "minorIssueTitles": rs.get("minor", {}).get("titles"),
+        "isFollowup": rs.get("isFollowup", False),
+        "autoVerdict": format_auto_verdict_state(
+            get_auto_verdict_arming_db().get(item["repo"], item["pr_number"]) or {},
+            auto_verdict_last,
+        ),
         "automation": format_automation_state(
             get_automation_dispatches_db().get_by_pr(item["repo"], item["pr_number"])
         ),
@@ -172,6 +146,34 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db, auto_verd
         "isDraft": is_draft,
         "currentReviewers": current_reviewers,
         "revLog": rev_log,
+    }
+
+
+def summarize_reviews(pr_reviews: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Summarize the newest review of a PR (rows newest first) for card and
+    pipeline payloads: score, follow-up flag, posted flags and per-severity
+    posted/found counts + issue titles. None when the PR has no review."""
+    if not pr_reviews:
+        return None
+    latest = pr_reviews[0]
+    critical_titles, major_titles, minor_titles = _extract_issue_titles(latest.get("content_json"))
+    titles = {"critical": critical_titles, "major": major_titles, "minor": minor_titles}
+    return {
+        "reviewId": latest.get("id"),
+        "score": latest.get("score"),
+        "isFollowup": bool(latest.get("is_followup", False)),
+        "createdAt": latest.get("review_timestamp"),
+        "inlineCommentsPosted": bool(latest.get("inline_comments_posted", False)),
+        "majorConcernsPosted": bool(latest.get("major_concerns_posted", False)),
+        "minorIssuesPosted": bool(latest.get("minor_issues_posted", False)),
+        **{
+            sev: {
+                "posted": latest.get(f"{sev}_posted_count"),
+                "found": latest.get(f"{sev}_found_count"),
+                "titles": titles[sev],
+            }
+            for sev in ("critical", "major", "minor")
+        },
     }
 
 
@@ -203,7 +205,7 @@ def format_automation_state(row: Optional[Dict[str, Any]]) -> Optional[Dict[str,
 
 
 def format_auto_verdict_state(item: Dict[str, Any], last: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Shape a queue row's auto-verdict arming state for the card payload."""
+    """Shape an auto_verdict_arming row ({} when the PR was never armed) for the card payload."""
     override = None
     raw = item.get("auto_verdict_criteria")
     if raw:

@@ -1,16 +1,16 @@
 """Auto verdicts: evaluate a completed review against thresholds and post the verdict.
 
-A PR is "armed" via merge_queue.auto_verdict_enabled, in one of two modes
-(merge_queue.auto_verdict_mode). In verdict mode, the issue counts in a completed
+A PR is "armed" via auto_verdict_arming.auto_verdict_enabled, in one of two modes
+(auto_verdict_arming.auto_verdict_mode). In verdict mode, the issue counts in a completed
 review's content_json are compared against the criteria; exceeding any threshold
 posts REQUEST_CHANGES, staying within all of them posts APPROVE (or nothing, when
 auto-approve is disabled). In comment mode, thresholds are ignored and the review
 findings are always posted as a COMMENT — the self-review path, since GitHub
 rejects both APPROVE and REQUEST_CHANGES on your own PR.
 
-Criteria are the global config, optionally replaced per PR by the card's stored
-override (merge_queue.auto_verdict_criteria); the master 'enabled' switch is
-always global.
+Criteria are the global config, optionally replaced per PR by the stored
+override (auto_verdict_arming.auto_verdict_criteria); the master 'enabled' switch
+is always global.
 """
 
 import json
@@ -215,20 +215,19 @@ def maybe_post_auto_verdict(repo: str, pr_number: int, review_id: int) -> Option
     Returns:
         The recorded decision dict, or None when no auto verdict applies.
     """
-    from backend.database import get_auto_verdicts_db, get_queue_db, get_reviews_db
+    from backend.database import get_auto_verdicts_db, get_auto_verdict_arming_db, get_reviews_db
 
     # The master switch is global and not overridable per PR.
     criteria = get_criteria()
     if not criteria.get("enabled"):
         return None
 
-    queue_db = get_queue_db()
-    queue_item = queue_db.get_queue_item(pr_number, repo)
-    if not queue_item or not queue_item.get("auto_verdict_enabled"):
+    arming = get_auto_verdict_arming_db().get(repo, pr_number)
+    if not arming or not arming.get("auto_verdict_enabled"):
         return None
 
-    criteria = apply_override(criteria, queue_item)
-    mode = queue_item.get("auto_verdict_mode") or "verdict"
+    criteria = apply_override(criteria, arming)
+    mode = arming.get("auto_verdict_mode") or "verdict"
 
     owner, _, repo_name = repo.partition("/")
     if not owner or not repo_name:
@@ -333,7 +332,7 @@ def retry_deferred_verdicts(now: Optional[float] = None) -> None:
     stored review, and posts. A row deferred before a restart has no schedule
     entry and is retried on the first sweep.
     """
-    from backend.database import get_auto_verdicts_db, get_queue_db, get_reviews_db
+    from backend.database import get_auto_verdicts_db, get_auto_verdict_arming_db, get_reviews_db
 
     auto_db = get_auto_verdicts_db()
     deferred = auto_db.get_deferred()
@@ -370,8 +369,8 @@ def retry_deferred_verdicts(now: Optional[float] = None) -> None:
         if now < next_attempt:
             continue
 
-        queue_item = get_queue_db().get_queue_item(pr_number, repo)
-        if not queue_item or not queue_item.get("auto_verdict_enabled"):
+        arming = get_auto_verdict_arming_db().get(repo, pr_number)
+        if not arming or not arming.get("auto_verdict_enabled"):
             record("skipped", event=event, tallies=tallies,
                    reason="card disarmed while verdict was deferred")
             continue

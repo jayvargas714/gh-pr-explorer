@@ -162,7 +162,7 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
   // needs to see the badge.
   const getAutomationBadge = () => (
     <AutomationPipelineControl
-      repoFull={item.repo}
+      repo={item.repo}
       prNumber={item.number}
       automation={item.automation}
       prState={item.prState ?? undefined}
@@ -326,7 +326,12 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
             </>
           )}
           <QueueReviewButton item={item} onRefresh={onRefresh} />
-          <AutoVerdictToggle item={item} onRefresh={onRefresh} />
+          <AutoVerdictToggle
+            repo={item.repo}
+            prNumber={item.number}
+            autoVerdict={item.autoVerdict}
+            onRefresh={onRefresh}
+          />
           <AuditButton
             owner={item.repo.split('/')[0] ?? ''}
             repo={item.repo.split('/')[1] ?? ''}

@@ -1,5 +1,5 @@
 import { api } from './client'
-import { AutomationConfig, AutomationDispatchRow, ReviewerInfo } from './types'
+import { AutomationConfig, AutomationDispatchRow, PipelineRow, ReviewerInfo } from './types'
 
 /** Get the full automation config (stored values merged over the defaults). */
 export async function getAutomationConfig(): Promise<{ config: AutomationConfig }> {
@@ -13,22 +13,19 @@ export async function saveAutomationConfig(
   return api.put('/automation/config', { config })
 }
 
-/** List automation pipeline rows, most recently updated first. */
-export async function listAutomationDispatches(
-  statuses?: string[],
-  limit = 200
-): Promise<{ dispatches: AutomationDispatchRow[] }> {
-  const params = new URLSearchParams()
-  if (statuses?.length) params.set('status', statuses.join(','))
-  params.set('limit', String(limit))
-  return api.get(`/automation/dispatches?${params}`)
+/** Enroll/opt-out responses: the dispatch row plus the rebuilt pipeline row,
+ * so the client can patch the pipeline view in place. */
+export interface DispatchMutationResponse {
+  dispatch: AutomationDispatchRow
+  row?: PipelineRow
+  message: string
 }
 
 /** Manually add a PR to the automation pipeline (revives skipped/failed rows). */
 export async function enrollAutomationDispatch(
   repoFull: string,
   prNumber: number
-): Promise<{ dispatch: AutomationDispatchRow; message: string }> {
+): Promise<DispatchMutationResponse> {
   return api.post(`/automation/dispatches/${repoFull}/${prNumber}/enroll`, {})
 }
 
@@ -36,7 +33,7 @@ export async function enrollAutomationDispatch(
 export async function optOutAutomationDispatch(
   repoFull: string,
   prNumber: number
-): Promise<{ dispatch: AutomationDispatchRow; message: string }> {
+): Promise<DispatchMutationResponse> {
   return api.post(`/automation/dispatches/${repoFull}/${prNumber}/optout`, {})
 }
 

@@ -480,6 +480,43 @@ class Database:
                     except sqlite3.OperationalError:
                         pass
 
+            # Per-PR auto-verdict arming, decoupled from the merge queue. Column
+            # names match the (now unused) merge_queue.auto_verdict_* columns so
+            # the row dict is consumed by the same helpers.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS auto_verdict_arming (
+                    repo TEXT NOT NULL,
+                    pr_number INTEGER NOT NULL,
+                    auto_verdict_enabled INTEGER NOT NULL DEFAULT 0,
+                    auto_verdict_reviewer TEXT,
+                    auto_verdict_mode TEXT,
+                    auto_verdict_criteria TEXT,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (repo, pr_number)
+                )
+            """)
+
+            # Migration (once): copy arming state off merge_queue rows.
+            cursor.execute(
+                "SELECT 1 FROM migrations WHERE name = 'copy_arming_from_merge_queue'"
+            )
+            if cursor.fetchone() is None:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO auto_verdict_arming
+                        (repo, pr_number, auto_verdict_enabled, auto_verdict_reviewer,
+                         auto_verdict_mode, auto_verdict_criteria)
+                    SELECT repo, pr_number, auto_verdict_enabled, auto_verdict_reviewer,
+                           auto_verdict_mode, auto_verdict_criteria
+                    FROM merge_queue
+                    WHERE auto_verdict_enabled = 1 OR auto_verdict_criteria IS NOT NULL
+                """)
+                if cursor.rowcount:
+                    logger.info(f"Copied {cursor.rowcount} arming rows from merge_queue "
+                                "to auto_verdict_arming")
+                cursor.execute(
+                    "INSERT OR IGNORE INTO migrations (name) VALUES ('copy_arming_from_merge_queue')"
+                )
+
             # Migration: Add is_pinned column to swimlane_assignments for existing databases
             cursor.execute("PRAGMA table_info(swimlane_assignments)")
             swl_assign_columns = {row[1] for row in cursor.fetchall()}

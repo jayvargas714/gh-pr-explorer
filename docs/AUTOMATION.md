@@ -1,17 +1,18 @@
 # Automation — Operator's Guide
 
-A short guide to the Automation tab and the full auto-review pipeline. For the
+A short guide to the Automation tab, the Pipeline overlay and the full auto-review pipeline. For the
 engineering design, see the "Automation (Full Auto Review Pipeline)" section of
 `DESIGN.md`.
 
 ## What it does
 
 When automation is on, every **newly arriving** PR in a repo you've allowlisted
-is picked up automatically: its changed files decide which reviewer runs, the PR
-is added to the merge queue inside a permanent **Auto** swimlane, the review
-starts on its own, and (if the matching rule says so) an auto verdict or comment
-is posted when the review completes. PRs the rules can't classify are parked in
-the Auto lane with a `❓ Unidentified` badge for you to route by hand.
+is picked up automatically: its changed files decide which reviewer runs, the
+review starts on its own, and (if the matching rule says so) an auto verdict or
+comment is posted when the review completes. Every pipelined PR is tracked in the
+**Pipeline** overlay (the 🤖 header button) — the merge queue and swimlane board
+stay yours: automation never adds cards there. PRs the rules can't classify show
+up in the Pipeline as `❓ Unidentified` for you to route by hand.
 
 PRs that were already open before you enabled automation can be enrolled once
 with the backfill script (see below). Enrolled PRs stay in the pipeline for as
@@ -32,7 +33,7 @@ python scripts/seed_automation_config.py
 
 Then in the UI (skip step 3 if you seeded):
 
-1. Open the **Automation** tab (sixth tab, or the 🤖 header button). The
+1. Open the **Automation** tab (sixth tab, or ⚙ inside the 🤖 Pipeline overlay). The
    summary strip at the top always shows the **active (saved)** configuration —
    what the pipeline is running with right now.
 2. **Reviewer Registry** — check the reviewers you need exist. The three
@@ -81,17 +82,15 @@ conditions hold, re-checked continuously:
 | CI completed and passing | *Require CI to complete and pass* (default on). A PR with **no CI checks at all** is not held up |
 | Branch fresh enough | *Max commits behind base* (default 10) — how far the PR branch may lag its base branch head |
 
-While waiting, a **non-draft** PR sits in the Auto lane with a `⏳ Auto waiting`
-badge whose tooltip names the blocking reason (e.g. `waiting: CI pending`).
-**Drafts wait off the board** — they don't appear on the swimlane until marked
-ready; watch them in the Automation tab's **Pipeline** table instead. Anything
-that fixes the condition — CI going green, a rebase, marking the PR ready —
-triggers the review automatically on the next cycle.
+While waiting, the PR's Pipeline row shows stage `⏳ waiting` with the blocking
+reason (e.g. `CI pending`); the same `⏳ Auto waiting` badge appears on its PR-list
+card. Anything that fixes the condition — CI going green, a rebase, marking the PR
+ready — triggers the review automatically on the next cycle.
 
 There is no waiting deadline: an open PR stays in the pipeline until its
-conditions hold or it's closed/merged. The **Pipeline** table at the top of the
-Automation tab shows every PR the pipeline is holding (status, reason, last
-check), so you can always see PRs progressing toward dispatch.
+conditions hold or it's closed/merged. The **Pipeline** overlay shows every PR
+the pipeline is holding (stage, reason, rounds, latest review, arming), so you
+can always see PRs progressing toward dispatch.
 
 To keep the pipeline from growing without bound, *Max pipeline size* (default
 1000) caps how many PRs may wait at once — at the cap, newly arriving PRs are
@@ -122,19 +121,24 @@ You have full per-PR control over pipeline membership:
   skipped/failed one), `🤖−` removes a waiting PR (manual mode). A removed PR
   shows `🤖 Auto skipped · manual opt-out` and stays out — the backfill script
   won't re-add it — until you press `🤖+` again.
-- **In the Pipeline table** the same actions appear as **Remove** (on waiting
-  rows) and **Re-enroll** (on skipped/failed rows).
+- **In the Pipeline overlay** the same toggle sits on every row, and the bulk
+  action bar applies **Opt out / Re-enroll / Arm / Disarm / Watch on board** to
+  every selected row at once.
 
 PRs already auto-reviewed (`🤖 Auto`) or unidentified can't be re-added — a PR
 is auto-dispatched at most once; use the normal Review button for another pass.
 
 ## What you'll see
 
-- **Auto lane** on the swimlane board — permanent (no delete/rename), tagged
-  `🤖 auto`. Every auto-processed PR lands there; you can still drag cards out.
-- **Pipeline table** (top of the Automation tab) — every PR the pipeline is
-  holding or has handled, filterable by status, with Remove/Re-enroll actions.
-  This is where parked drafts are visible.
+- **Pipeline overlay** (🤖 header button) — a table of every PR the pipeline is
+  holding or has handled: stage and why, review rounds (hover for the full rev
+  log), latest score/verdict, arming, CI and review state, with search, stage
+  and badge filters, sorting, an expandable detail panel per row (rev log,
+  verdict composer, review picker, timeline, notes, criteria override) and bulk
+  actions. It opens instantly from a cached snapshot and refreshes in the
+  background; the header shows how old the pipeline data and the PR data are.
+  "Watch on board" adds a PR to your swimlane board's default lane when you
+  want to keep an eye on it; nothing lands on the board otherwise.
 - **Pipeline badge on every surface** — the same automation badge (waiting /
   auto / skipped / failed / unidentified) now shows on main PR list cards too,
   not just queue and swimlane cards, so you can tell at a glance whether any
@@ -185,11 +189,11 @@ and never post.
 the allowlist (exact `owner/repo`); for author scope, the PR author's login is
 listed; the PR is open; the PR was created **after** you enabled automation (or
 run the backfill script for older PRs); and the pipeline isn't at *Max pipeline
-size* (check the Pipeline table). Also note only repos covered by the background
+size* (check the Pipeline overlay). Also note only repos covered by the background
 PR sync are watched (a repo starts syncing once it's been viewed in the app).
 
 *"It's stuck on ⏳ Auto waiting"* — hover the badge (or find the row in the
-Pipeline table): the reason names the blocking condition (draft, CI
+Pipeline overlay): the reason names the blocking condition (draft, CI
 pending/failing, too far behind base). Fix that and the review starts on its
 own; or start it manually with the Review button.
 

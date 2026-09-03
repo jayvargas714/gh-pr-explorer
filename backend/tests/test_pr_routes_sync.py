@@ -172,20 +172,20 @@ def test_refresh_transient_503(client, store):
 
 
 def test_pr_list_carries_auto_verdict_arming(client, store, monkeypatch, tmp_path):
-    """PR list rows carry the merge-queue arming state so the PR list can show
+    """PR list rows carry the per-PR arming state so the PR list can show
     the armed checkmark, not just the pipeline badge."""
     import backend.routes.pr_routes as pr_routes
-    from backend.database.merge_queue import MergeQueueDB
-    queue_db = MergeQueueDB(Database(tmp_path / "queue.db"))
-    monkeypatch.setattr(pr_routes, "get_queue_db", lambda: queue_db)
+    from backend.database.auto_verdict_arming import AutoVerdictArmingDB
+    arming_db = AutoVerdictArmingDB(Database(tmp_path / "arming.db"))
+    monkeypatch.setattr(pr_routes, "get_auto_verdict_arming_db", lambda: arming_db)
 
     store.register_repo("acme/widgets")
     store.mark_backfill_done("acme/widgets")
     store.update_last_synced("acme/widgets")
     store.upsert_pr("acme/widgets", _pr(1))
     store.upsert_pr("acme/widgets", _pr(2))
-    queue_db.add_to_queue(1, "acme/widgets")
-    queue_db.set_auto_verdict(1, "acme/widgets", True, "ed", mode="comment")
+    arming_db.set_arming("acme/widgets", 1, True, "ed", mode="comment")
+    arming_db.set_arming("acme/widgets", 2, False, "ed", mode="comment")  # disarmed: None
 
     with patch("backend.routes.pr_routes.run_gh_command"):
         resp = client.get("/api/repos/acme/widgets/prs?state=open")

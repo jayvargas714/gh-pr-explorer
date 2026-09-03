@@ -9,8 +9,6 @@ logger = logging.getLogger(__name__)
 VALID_COLORS = {"success", "warning", "error", "info", "primary", "accent", "violet", "slate"}
 DEFAULT_LANE_NAME = "Unassigned"
 DEFAULT_LANE_COLOR = "info"
-AUTO_LANE_NAME = "Auto"
-AUTO_LANE_COLOR = "violet"
 
 
 class SwimlanesDB:
@@ -69,31 +67,38 @@ class SwimlanesDB:
             )
             return dict(cursor.fetchone())
 
-    def ensure_auto_lane(self) -> Dict[str, Any]:
-        """Guarantee the protected automation lane exists. Idempotent.
+    def retire_auto_lane(self) -> int:
+        """Startup migration: remove every protected (automation) lane together
+        with the merge_queue rows automation parked in it — ON DELETE CASCADE
+        clears their assignments and notes. Idempotent; a DB with no protected
+        lane is untouched. Returns the number of cards removed.
 
-        The automation pipeline finds this lane by is_protected, so there is
-        exactly one; it can never be deleted or renamed.
+        Arming lives in auto_verdict_arming, so it survives this.
         """
+        removed = 0
         with self.db.connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT * FROM swimlanes WHERE is_protected = 1 ORDER BY position ASC LIMIT 1"
-            )
-            row = cursor.fetchone()
-            if row:
-                return dict(row)
-
-            cursor.execute("SELECT COALESCE(MAX(position), 0) + 1 AS next_pos FROM swimlanes")
-            next_pos = cursor.fetchone()["next_pos"]
-            cursor.execute(
-                "INSERT INTO swimlanes (name, color, position, is_default, is_protected) "
-                "VALUES (?, ?, ?, 0, 1)",
-                (AUTO_LANE_NAME, AUTO_LANE_COLOR, next_pos),
-            )
-            logger.info("Seeded protected swimlane '%s'", AUTO_LANE_NAME)
-            cursor.execute("SELECT * FROM swimlanes WHERE id = ?", (cursor.lastrowid,))
-            return dict(cursor.fetchone())
+            cursor.execute("SELECT id, name FROM swimlanes WHERE is_protected = 1")
+            lanes = [dict(r) for r in cursor.fetchall()]
+            for lane in lanes:
+                cursor.execute(
+                    "DELETE FROM merge_queue WHERE id IN ("
+                    "  SELECT queue_item_id FROM swimlane_assignments WHERE swimlane_id = ?)",
+                    (lane["id"],),
+                )
+                cards = cursor.rowcount
+                removed += cards
+                cursor.execute("DELETE FROM swimlanes WHERE id = ?", (lane["id"],))
+                logger.info("Retired protected swimlane '%s' (%d cards removed)",
+                            lane["name"], cards)
+            if lanes:
+                self._reorder_lane_positions(cursor)
+                cursor.execute(
+                    "UPDATE merge_queue SET position = ("
+                    "  SELECT COUNT(*) FROM merge_queue AS mq2 WHERE mq2.position <= merge_queue.position"
+                    ")"
+                )
+        return removed
 
     def create_lane(self, name: str, color: str) -> Dict[str, Any]:
         if color not in VALID_COLORS:
@@ -130,8 +135,6 @@ class SwimlanesDB:
             existing = cursor.fetchone()
             if not existing:
                 raise ValueError("Lane not found")
-            if name is not None and existing["is_protected"] and name != existing["name"]:
-                raise ValueError("Cannot rename a protected lane")
 
             sets, params = [], []
             if name is not None:
@@ -159,9 +162,6 @@ class SwimlanesDB:
             target = cursor.fetchone()
             if not target:
                 raise ValueError("Lane not found")
-
-            if target["is_protected"]:
-                raise ValueError("Cannot delete a protected lane")
 
             cursor.execute("SELECT COUNT(*) AS n FROM swimlanes")
             if cursor.fetchone()["n"] <= 1:

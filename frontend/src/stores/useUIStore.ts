@@ -25,6 +25,10 @@ interface UIState {
   setShowSwimlaneBoard: (show: boolean) => void
   toggleSwimlaneBoard: () => void
 
+  showPipeline: boolean
+  setShowPipeline: (show: boolean) => void
+  togglePipeline: () => void
+
   // Global loading/error
   globalLoading: boolean
   setGlobalLoading: (loading: boolean) => void
@@ -63,6 +67,10 @@ export const useUIStore = create<UIState>((set) => ({
   showSwimlaneBoard: false,
   setShowSwimlaneBoard: (show) => set({ showSwimlaneBoard: show }),
   toggleSwimlaneBoard: () => set((state) => ({ showSwimlaneBoard: !state.showSwimlaneBoard })),
+
+  showPipeline: false,
+  setShowPipeline: (show) => set({ showPipeline: show }),
+  togglePipeline: () => set((state) => ({ showPipeline: !state.showPipeline })),
 
   // Global loading/error
   globalLoading: false,

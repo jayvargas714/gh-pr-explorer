@@ -17,7 +17,6 @@ def _format_lane(lane):
         "color": lane["color"],
         "position": lane["position"],
         "isDefault": bool(lane["is_default"]),
-        "isProtected": bool(lane.get("is_protected")),
         "createdAt": lane.get("created_at"),
     }
 
@@ -37,7 +36,6 @@ def get_board():
 
         # Heal any drift before serving the board.
         swimlanes_db.ensure_default_lane()
-        swimlanes_db.ensure_auto_lane()
         swimlanes_db.reconcile_assignments()
 
         lanes = swimlanes_db.list_lanes()

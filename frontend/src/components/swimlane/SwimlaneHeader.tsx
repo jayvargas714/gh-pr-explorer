@@ -59,6 +59,8 @@ export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
   const setSearchQuery = useSwimlaneStore((s) => s.setSearchQuery)
   const badgeFilters = useSwimlaneStore((s) => s.badgeFilters)
   const badgeFilterMode = useSwimlaneStore((s) => s.badgeFilterMode)
+  const toggleBadgeFilter = useSwimlaneStore((s) => s.toggleBadgeFilter)
+  const setBadgeFilterMode = useSwimlaneStore((s) => s.setBadgeFilterMode)
   const clearBadgeFilters = useSwimlaneStore((s) => s.clearBadgeFilters)
   const autoModeFilter = useSwimlaneStore((s) => s.autoModeFilter)
   const setAutoModeFilter = useSwimlaneStore((s) => s.setAutoModeFilter)
@@ -131,7 +133,13 @@ export function SwimlaneHeader({ onClose, onRefresh }: SwimlaneHeaderProps) {
             ×
           </button>
         )}
-        <BadgeFilterPopover />
+        <BadgeFilterPopover
+          badgeFilters={badgeFilters}
+          mode={badgeFilterMode}
+          onToggle={toggleBadgeFilter}
+          onSetMode={setBadgeFilterMode}
+          onClear={clearBadgeFilters}
+        />
         <AutoModeToggle value={autoModeFilter} onChange={setAutoModeFilter} />
         {filterActive && (
           <button

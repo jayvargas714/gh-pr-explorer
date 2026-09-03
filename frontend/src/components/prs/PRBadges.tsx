@@ -126,7 +126,7 @@ export function PRBadges({ pr, divergence, repoFull }: PRBadgesProps) {
     repoFull ? (
       <AutomationPipelineControl
         key="auto-pipeline"
-        repoFull={repoFull}
+        repo={repoFull}
         prNumber={pr.number}
         automation={pr.automation}
         prState={pr.state}

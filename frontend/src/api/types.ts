@@ -483,7 +483,7 @@ export interface AutomationConfig {
   rules: AutomationRule[]
 }
 
-/** One automation pipeline row (from GET /api/automation/dispatches). */
+/** One automation_dispatches row (echoed by the enroll/optout endpoints). */
 export interface AutomationDispatchRow {
   repo: string
   prNumber: number
@@ -493,23 +493,6 @@ export interface AutomationDispatchRow {
   attempts: number
   createdAt: string
   updatedAt: string
-  // Live review picture: running now / newest recorded review + verdict /
-  // arming. Null when the PR has never been reviewed, isn't armed, and no
-  // review is running; absent on enroll/optout responses.
-  reviewState?: DispatchReviewState | null
-}
-
-export interface DispatchReviewState {
-  running: boolean
-  lastReviewId: number | null
-  lastReviewStatus: 'completed' | 'failed' | null
-  lastReviewAt: string | null
-  isFollowup: boolean
-  score: number | null
-  verdictEvent: string | null
-  verdictOutcome: string | null
-  armed: boolean
-  autoVerdictMode: string | null
 }
 
 /** How the automation pipeline handled a PR (from automation_dispatches). */
@@ -520,6 +503,87 @@ export interface AutomationDispatchState {
   matchedRules: string[]
   detail: string | null
   updatedAt: string | null
+}
+
+// ============================================================================
+// Pipeline Types (GET /api/automation/pipeline)
+// ============================================================================
+
+export type PipelineStage =
+  | 'waiting' | 'ready' | 'reviewing' | 'reviewed'
+  | 'unidentified' | 'skipped' | 'opted_out' | 'failed' | 'closed'
+
+export interface PipelineDispatch {
+  status: 'pending' | 'dispatched' | 'unidentified' | 'skipped' | 'failed'
+  detail: string | null
+  reviewerKey: string | null
+  ruleName: string | null
+  matchedRules: string[]
+  attempts: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PipelineIssueCounts {
+  posted: number | null
+  found: number | null
+  titles: string[] | null
+}
+
+/** Latest recorded review for a pipelined PR. */
+export interface PipelineReviewSummary {
+  reviewId: number
+  score: number | null
+  isFollowup: boolean
+  createdAt: string
+  inlineCommentsPosted: boolean
+  majorConcernsPosted: boolean
+  minorIssuesPosted: boolean
+  critical: PipelineIssueCounts
+  major: PipelineIssueCounts
+  minor: PipelineIssueCounts
+}
+
+/** One row of the pipeline snapshot: an automation_dispatches row joined with
+ * synced PR data, review history, arming and board membership. */
+export interface PipelineRow {
+  key: string                     // `${repo}#${prNumber}`
+  repo: string                    // owner/name
+  prNumber: number
+  title: string | null
+  author: string | null
+  url: string | null
+  prState: 'OPEN' | 'MERGED' | 'CLOSED' | null
+  isDraft: boolean
+  baseRefName: string | null
+  additions: number | null
+  deletions: number | null
+  prUpdatedAt: string | null      // GitHub updatedAt
+  prSyncedAt: string | null       // synced_prs.fetched_at
+  headSha: string | null          // synced headRefOid; null until the PR re-syncs
+  hasNewCommits: boolean          // headSha known and != the latest review's SHA
+  stage: PipelineStage
+  dispatch: PipelineDispatch
+  automation: AutomationDispatchState | null
+  autoVerdict: AutoVerdictState | null
+  reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null
+  currentReviewers: Reviewer[]
+  ciStatus: 'success' | 'failure' | 'pending' | null
+  statusCheckRollup: StatusCheck[] | null
+  running: boolean
+  review: PipelineReviewSummary | null
+  revLog: RevLogEntry[]           // newest first
+  rounds: number                  // count of review entries in revLog
+  onBoard: boolean                // exists in merge_queue
+  queueItemId: number | null
+  notesCount: number              // 0 when not on board
+}
+
+export interface PipelineSnapshotResponse {
+  version: number
+  generatedAt: string
+  prDataSyncedAt: string | null
+  rows: PipelineRow[]
 }
 
 export interface QueueNote {
@@ -1077,8 +1141,6 @@ export interface Swimlane {
   color: SwimlaneColor
   position: number
   isDefault: boolean
-  // Protected lanes (the automation "Auto" lane) cannot be deleted or renamed.
-  isProtected: boolean
   createdAt: string
 }
 

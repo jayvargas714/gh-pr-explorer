@@ -8,6 +8,7 @@ import pytest
 
 import backend.database as db_pkg
 from backend.database.base import Database
+from backend.database.auto_verdict_arming import AutoVerdictArmingDB
 from backend.database.automation_dispatches import AutomationDispatchesDB
 from backend.database.merge_queue import MergeQueueDB
 from backend.database.swimlanes import SwimlanesDB
@@ -40,12 +41,15 @@ def env(tmp_path, monkeypatch):
     stores = {
         "db": db,
         "dispatches": AutomationDispatchesDB(db),
+        "arming": AutoVerdictArmingDB(db),
+        # Present only so tests can assert the worker never writes to them.
         "queue": MergeQueueDB(db),
         "swimlanes": SwimlanesDB(db),
         "synced": SyncedPRsDB(db),
     }
     stores["swimlanes"].ensure_default_lane()
     monkeypatch.setattr(db_pkg, "get_automation_dispatches_db", lambda: stores["dispatches"])
+    monkeypatch.setattr(db_pkg, "get_auto_verdict_arming_db", lambda: stores["arming"])
     monkeypatch.setattr(db_pkg, "get_queue_db", lambda: stores["queue"])
     monkeypatch.setattr(db_pkg, "get_swimlanes_db", lambda: stores["swimlanes"])
     monkeypatch.setattr(db_pkg, "get_synced_prs_db", lambda: stores["synced"])
@@ -104,12 +108,6 @@ def _gates(state="OPEN", is_draft=False, rollup=CI_SUCCESS, behind=0, batch=...)
         yield mock_behind
 
 
-def _auto_lane_ids(stores):
-    lane = stores["swimlanes"].ensure_auto_lane()
-    return [a["queue_item_id"] for a in stores["swimlanes"].get_assignments()
-            if a["swimlane_id"] == lane["id"]]
-
-
 def _age_row(stores, pr_number, hours):
     with stores["db"].connection() as conn:
         conn.execute(
@@ -138,12 +136,11 @@ def test_matched_rule_dispatches_routed_review_and_arms_verdict(env, monkeypatch
     assert kwargs["reviewer_type"] == "pb"
     assert kwargs["auto_started"] is True
 
-    item = env["queue"].get_queue_item(7, REPO)
-    assert item is not None
-    assert item["auto_verdict_enabled"] == 1
-    assert item["auto_verdict_reviewer"] == "pb"
-    assert item["auto_verdict_mode"] == "comment"
-    assert item["id"] in _auto_lane_ids(env)
+    arming = env["arming"].get(REPO, 7)
+    assert arming is not None
+    assert arming["auto_verdict_enabled"] == 1
+    assert arming["auto_verdict_reviewer"] == "pb"
+    assert arming["auto_verdict_mode"] == "comment"
 
     row = env["dispatches"].get_by_pr(REPO, 7)
     assert row["status"] == "dispatched"
@@ -162,12 +159,11 @@ def test_default_fallthrough_does_not_arm_when_rule_says_off(env, monkeypatch):
         process_pending_dispatches()
 
     assert mock_begin.call_args.kwargs["reviewer_type"] == "default"
-    item = env["queue"].get_queue_item(7, REPO)
-    assert item["auto_verdict_enabled"] == 0
+    assert env["arming"].get(REPO, 7) is None
     assert env["dispatches"].get_by_pr(REPO, 7)["status"] == "dispatched"
 
 
-def test_unidentified_pr_is_queued_and_flagged_but_not_reviewed(env, monkeypatch):
+def test_unidentified_pr_is_flagged_but_not_reviewed(env, monkeypatch):
     _patch_config(monkeypatch)
     env["dispatches"].record_candidate(REPO, 7)
 
@@ -178,9 +174,6 @@ def test_unidentified_pr_is_queued_and_flagged_but_not_reviewed(env, monkeypatch
         process_pending_dispatches()
 
     assert mock_begin.call_count == 0
-    item = env["queue"].get_queue_item(7, REPO)
-    assert item is not None
-    assert item["id"] in _auto_lane_ids(env)
     row = env["dispatches"].get_by_pr(REPO, 7)
     assert row["status"] == "unidentified"
     assert set(json.loads(row["outcome_json"])["matched_rules"]) == {"PB", "ED"}
@@ -252,8 +245,7 @@ def test_begin_review_conflict_marks_skipped_without_arming(env, monkeypatch):
                return_value=({"error": "Review already in progress for this PR"}, 409)):
         process_pending_dispatches()
 
-    item = env["queue"].get_queue_item(7, REPO)
-    assert item["auto_verdict_enabled"] == 0
+    assert env["arming"].get(REPO, 7) is None
     assert env["dispatches"].get_by_pr(REPO, 7)["status"] == "skipped"
 
 
@@ -273,10 +265,10 @@ def test_begin_review_failure_retries(env, monkeypatch):
     assert row["attempts"] == 1
 
 
-def test_pr_already_in_queue_is_reused(env, monkeypatch):
+def test_worker_never_touches_merge_queue_or_swimlanes(env, monkeypatch):
+    """Dispatch writes arming + the ledger only: the operator's watch list and
+    board are never modified by automation."""
     _patch_config(monkeypatch)
-    env["queue"].add_to_queue(pr_number=7, repo=REPO, pr_title="t", pr_author="alice",
-                              pr_url="u", additions=1, deletions=1)
     env["dispatches"].record_candidate(REPO, 7)
 
     with _gates(), \
@@ -286,9 +278,9 @@ def test_pr_already_in_queue_is_reused(env, monkeypatch):
                return_value=({"message": "started"}, 201)):
         process_pending_dispatches()
 
-    item = env["queue"].get_queue_item(7, REPO)
-    assert item["id"] in _auto_lane_ids(env)
     assert env["dispatches"].get_by_pr(REPO, 7)["status"] == "dispatched"
+    assert env["queue"].get_queue() == []
+    assert [lane["name"] for lane in env["swimlanes"].list_lanes()] == ["Unassigned"]
 
 
 # ----- Dispatch conditions (CI / behind-base / draft) -----
@@ -305,9 +297,8 @@ def _run_gated(env, monkeypatch, gate_kwargs, cfg_overrides=None):
     return mock_files, mock_begin
 
 
-def test_draft_pr_waits_off_the_board(env, monkeypatch):
-    """Drafts stay pending but are NOT queued or placed in the Auto lane —
-    the board only shows non-draft pipeline PRs."""
+def test_draft_pr_waits(env, monkeypatch):
+    """Drafts stay pending (not routed) until they leave draft."""
     mock_files, mock_begin = _run_gated(env, monkeypatch, {"is_draft": True})
 
     assert mock_begin.call_count == 0
@@ -315,7 +306,6 @@ def test_draft_pr_waits_off_the_board(env, monkeypatch):
     row = env["dispatches"].get_by_pr(REPO, 7)
     assert row["status"] == "pending"
     assert "draft" in row["detail"]
-    assert env["queue"].get_queue_item(7, REPO) is None
 
 
 def test_ci_pending_and_failure_wait(env, monkeypatch):
@@ -325,9 +315,6 @@ def test_ci_pending_and_failure_wait(env, monkeypatch):
         row = env["dispatches"].get_by_pr(REPO, 7)
         assert row["status"] == "pending"
         assert expected in row["detail"]
-    # Non-draft waiting PRs ARE visible: queued and placed in the Auto lane.
-    item = env["queue"].get_queue_item(7, REPO)
-    assert item["id"] in _auto_lane_ids(env)
 
 
 def test_no_ci_checks_counts_as_satisfied(env, monkeypatch):

@@ -227,6 +227,30 @@ class ReviewsDB:
             """, (repo, pr_number))
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_reviews_for_prs(
+        self, repo_pr_pairs: List[Tuple[str, int]]
+    ) -> Dict[Tuple[str, int], List[Dict[str, Any]]]:
+        """Batch lookup: every review per (repo, pr_number), newest first.
+        Never-reviewed pairs are absent from the result."""
+        result: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
+        if not repo_pr_pairs:
+            return result
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            # Chunked: each pair costs two SQL variables and SQLite caps them.
+            for i in range(0, len(repo_pr_pairs), 400):
+                chunk = repo_pr_pairs[i:i + 400]
+                placeholders = " OR ".join(["(repo = ? AND pr_number = ?)"] * len(chunk))
+                params = [v for pair in chunk for v in pair]
+                cursor.execute(
+                    f"SELECT * FROM reviews WHERE {placeholders} "
+                    "ORDER BY review_timestamp DESC, id DESC",
+                    params,
+                )
+                for row in cursor.fetchall():
+                    result.setdefault((row["repo"], row["pr_number"]), []).append(dict(row))
+        return result
+
     def get_latest_for_prs(
         self, repo_pr_pairs: List[Tuple[str, int]]
     ) -> Dict[Tuple[str, int], Dict[str, Any]]:

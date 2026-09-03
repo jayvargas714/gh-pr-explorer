@@ -9,8 +9,10 @@ from backend.extensions import logger
 from backend.filters.pr_filter_builder import PRFilterParams, PRFilterBuilder
 from backend.routes import error_response
 from backend.database import (
-    get_automation_dispatches_db, get_queue_db, get_timeline_cache_db, get_synced_prs_db,
+    get_automation_dispatches_db, get_auto_verdict_arming_db, get_timeline_cache_db,
+    get_synced_prs_db,
 )
+from backend.services.auto_verdict_config import validate_override
 from backend.services.github_service import (
     run_gh_command, parse_json_output, TransientGitHubError,
     PR_LIST_JSON_FIELDS as PR_JSON_FIELDS, fetch_full_pr,
@@ -19,9 +21,12 @@ from backend.services.pr_local_filter import (
     filter_prs_locally, needs_github_search, sort_prs_locally, states_for,
 )
 from backend.services.pr_service import get_review_status, get_ci_status, get_current_reviewers
+from backend.services.review_service import valid_reviewer_types
 from backend.services.timeline_service import get_timeline
 
 pr_bp = Blueprint("pr", __name__)
+
+VALID_AUTO_VERDICT_MODES = ("verdict", "comment")
 
 # Map computed reviewStatus back to uppercase reviewDecision for frontend badges
 _STATUS_TO_DECISION = {
@@ -62,13 +67,13 @@ def _get_pr_by_number(owner, repo, pr_number):
 def _attach_automation(prs, repo_full):
     """Stamp each PR with its automation pipeline row (or None), the same
     `automation` shape queue cards carry, so the pipeline badge renders on the
-    main PR list too — plus `autoVerdict` (merge-queue arming, or None) so the
+    main PR list too — plus `autoVerdict` (per-PR arming, or None) so the
     armed checkmark renders there as well. Never fails the list."""
+    pairs = [(repo_full, pr["number"]) for pr in prs if pr.get("number")]
     try:
         from backend.services.queue_enrichment import format_automation_state
 
         dispatches = get_automation_dispatches_db()
-        pairs = [(repo_full, pr["number"]) for pr in prs if pr.get("number")]
         rows = {}
         # Chunked: each pair costs two SQL variables and SQLite caps them.
         for i in range(0, len(pairs), 400):
@@ -80,18 +85,14 @@ def _attach_automation(prs, repo_full):
         for pr in prs:
             pr.setdefault("automation", None)
     try:
-        armed_rows = {
-            q["pr_number"]: q
-            for q in get_queue_db().get_queue()
-            if q["repo"] == repo_full and q.get("auto_verdict_enabled")
-        }
+        arming_rows = get_auto_verdict_arming_db().get_for_prs(pairs)
         for pr in prs:
-            q = armed_rows.get(pr.get("number"))
+            a = arming_rows.get((repo_full, pr.get("number")))
             pr["autoVerdict"] = ({
                 "enabled": True,
-                "reviewerType": q.get("auto_verdict_reviewer") or "default",
-                "mode": q.get("auto_verdict_mode") or "verdict",
-            } if q else None)
+                "reviewerType": a.get("auto_verdict_reviewer") or "default",
+                "mode": a.get("auto_verdict_mode") or "verdict",
+            } if a and a.get("auto_verdict_enabled") else None)
     except Exception as e:
         logger.warning(f"Could not attach auto-verdict arming for {repo_full}: {e}")
         for pr in prs:
@@ -252,6 +253,68 @@ def refresh_pr(owner, repo, pr_number):
     row = store.get_prs_by_numbers(repo_full, [pr_number]).get(pr_number, pr)
     processed = _postprocess_and_filter([row], PRFilterParams(), repo_full)
     return jsonify({"pr": processed[0] if processed else row})
+
+
+@pr_bp.route("/api/prs/<owner>/<repo>/<int:pr_number>/auto-verdict", methods=["PUT"])
+def set_pr_auto_verdict(owner, repo, pr_number):
+    """Arm or disarm auto verdicts for a PR. No queue membership required."""
+    repo_full = f"{owner}/{repo}"
+    try:
+        data = request.get_json()
+        if data is None or "enabled" not in data:
+            return jsonify({"error": "Missing 'enabled' in request body"}), 400
+
+        reviewer_type = data.get("reviewerType") or "default"
+        if reviewer_type not in valid_reviewer_types():
+            return jsonify({"error": f"Invalid reviewerType: {reviewer_type}"}), 400
+
+        mode = data.get("mode") or "verdict"
+        if mode not in VALID_AUTO_VERDICT_MODES:
+            return jsonify({"error": f"Invalid mode: {mode}"}), 400
+
+        enabled = bool(data["enabled"])
+        get_auto_verdict_arming_db().set_arming(repo_full, pr_number, enabled, reviewer_type, mode)
+
+        logger.info(f"Auto verdict {'armed' if enabled else 'disarmed'} for {repo_full}#{pr_number} "
+                    f"(reviewer={reviewer_type}, mode={mode})")
+        return jsonify({
+            "autoVerdict": {"enabled": enabled, "reviewerType": reviewer_type, "mode": mode},
+            "message": "Auto verdict updated",
+        })
+
+    except Exception as e:
+        return error_response("Internal server error", 500,
+                              f"Error updating auto verdict for {repo_full}#{pr_number}: {e}")
+
+
+@pr_bp.route("/api/prs/<owner>/<repo>/<int:pr_number>/auto-verdict/criteria", methods=["PUT"])
+def set_pr_auto_verdict_criteria(owner, repo, pr_number):
+    """Set or clear a PR's auto-verdict criteria override."""
+    repo_full = f"{owner}/{repo}"
+    try:
+        data = request.get_json()
+        if data is None or "criteria" not in data:
+            return jsonify({"error": "Missing 'criteria' in request body"}), 400
+
+        criteria = data["criteria"]
+        if criteria is not None:
+            try:
+                criteria = validate_override(criteria)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+
+        get_auto_verdict_arming_db().set_criteria(repo_full, pr_number, criteria)
+
+        logger.info(f"Auto verdict criteria override {'set' if criteria else 'cleared'} "
+                    f"for {repo_full}#{pr_number}")
+        return jsonify({
+            "criteriaOverride": criteria,
+            "message": "Auto verdict criteria updated",
+        })
+
+    except Exception as e:
+        return error_response("Internal server error", 500,
+                              f"Error updating auto verdict criteria for {repo_full}#{pr_number}: {e}")
 
 
 @pr_bp.route("/api/repos/<owner>/<repo>/prs/divergence", methods=["POST"])

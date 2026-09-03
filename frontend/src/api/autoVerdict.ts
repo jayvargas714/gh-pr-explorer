@@ -23,7 +23,8 @@ export async function saveAutoVerdictConfig(
 }
 
 /**
- * Arm or disarm auto verdicts for a queued PR
+ * Arm or disarm auto verdicts for a PR. `repo` is `owner/name`; arming is
+ * per-PR and no longer requires merge-queue membership.
  */
 export async function setCardAutoVerdict(
   prNumber: number,
@@ -33,22 +34,20 @@ export async function setCardAutoVerdict(
   autoVerdict: { enabled: boolean; reviewerType: AutoVerdictReviewer; mode: AutoVerdictMode }
   message: string
 }> {
-  return api.put(
-    `/merge-queue/${prNumber}/auto-verdict?repo=${encodeURIComponent(repo)}`,
-    { enabled: options.enabled, reviewerType: options.reviewerType, mode: options.mode }
-  )
+  return api.put(`/prs/${repo}/${prNumber}/auto-verdict`, {
+    enabled: options.enabled,
+    reviewerType: options.reviewerType,
+    mode: options.mode,
+  })
 }
 
 /**
- * Set (or clear, with null) a queued PR's auto-verdict criteria override
+ * Set (or clear, with null) a PR's auto-verdict criteria override
  */
 export async function setCardAutoVerdictCriteria(
   prNumber: number,
   repo: string,
   criteria: AutoVerdictCriteriaOverride | null
 ): Promise<{ criteriaOverride: AutoVerdictCriteriaOverride | null; message: string }> {
-  return api.put(
-    `/merge-queue/${prNumber}/auto-verdict/criteria?repo=${encodeURIComponent(repo)}`,
-    { criteria }
-  )
+  return api.put(`/prs/${repo}/${prNumber}/auto-verdict/criteria`, { criteria })
 }

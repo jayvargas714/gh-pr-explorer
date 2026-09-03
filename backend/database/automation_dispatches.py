@@ -27,7 +27,10 @@ class AutomationDispatchesDB:
                 "INSERT OR IGNORE INTO automation_dispatches (repo, pr_number) VALUES (?, ?)",
                 (repo, pr_number),
             )
-            return cursor.rowcount > 0
+            inserted = cursor.rowcount > 0
+        if inserted:
+            _mark_pipeline_dirty()
+        return inserted
 
     def get_pending(self, limit: int) -> List[Dict[str, Any]]:
         """Pending rows, least recently evaluated first.
@@ -52,8 +55,9 @@ class AutomationDispatchesDB:
             return cursor.fetchone()["n"]
 
     def list_dispatches(self, statuses: Optional[List[str]] = None,
-                        limit: int = 200) -> List[Dict[str, Any]]:
-        """Rows for the pipeline view, most recently updated first."""
+                        limit: Optional[int] = 200) -> List[Dict[str, Any]]:
+        """Rows for the pipeline view, most recently updated first. limit=None
+        returns every row (the snapshot builder wants the whole ledger)."""
         query = "SELECT * FROM automation_dispatches"
         params: List[Any] = []
         if statuses:
@@ -62,8 +66,10 @@ class AutomationDispatchesDB:
                     raise ValueError(f"Invalid dispatch status: {status}")
             query += f" WHERE status IN ({','.join('?' * len(statuses))})"
             params.extend(statuses)
-        query += " ORDER BY updated_at DESC, id DESC LIMIT ?"
-        params.append(limit)
+        query += " ORDER BY updated_at DESC, id DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(query, params)
@@ -115,6 +121,7 @@ class AutomationDispatchesDB:
                 """,
                 (status, outcome_json, reviewer_key, detail, dispatch_id),
             )
+        _mark_pipeline_dirty()
 
     def requeue(self, dispatch_id: int, detail: Optional[str] = None) -> None:
         """Put a terminal row back into the pipeline: pending, attempts cleared,
@@ -127,6 +134,7 @@ class AutomationDispatchesDB:
                 "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (detail, dispatch_id),
             )
+        _mark_pipeline_dirty()
 
     def reset_attempts(self, dispatch_id: int) -> None:
         """Clear the attempt counter after a clean evaluation, so transient
@@ -137,6 +145,7 @@ class AutomationDispatchesDB:
                 "UPDATE automation_dispatches SET attempts = 0 WHERE id = ?",
                 (dispatch_id,),
             )
+        _mark_pipeline_dirty()
 
     def increment_attempts(self, dispatch_id: int) -> int:
         """Bump the attempt counter; returns the new count."""
@@ -151,4 +160,11 @@ class AutomationDispatchesDB:
                 "SELECT attempts FROM automation_dispatches WHERE id = ?", (dispatch_id,)
             )
             row = cursor.fetchone()
-            return row["attempts"] if row else 0
+        _mark_pipeline_dirty()
+        return row["attempts"] if row else 0
+
+
+def _mark_pipeline_dirty():
+    # Imported lazily: services depend on the database package, not the reverse.
+    from backend.services.pipeline_snapshot import mark_dirty
+    mark_dirty()

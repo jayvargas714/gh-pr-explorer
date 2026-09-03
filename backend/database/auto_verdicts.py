@@ -3,7 +3,7 @@
 import json
 import logging
 import sqlite3
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,7 @@ class AutoVerdictsDB:
                     INSERT INTO auto_verdicts (repo, pr_number, review_id, outcome, head_commit_sha)
                     VALUES (?, ?, ?, 'pending', ?)
                 """, (repo, pr_number, review_id, head_commit_sha))
+            _mark_pipeline_dirty()
             return True
         except sqlite3.IntegrityError as e:
             # Distinguish a lost race (the UNIQUE review_id) from a genuine
@@ -86,6 +87,7 @@ class AutoVerdictsDB:
                 json.dumps(criteria) if criteria is not None else None,
                 error_detail, review_id,
             ))
+        _mark_pipeline_dirty()
         logger.info(f"Auto verdict for review {review_id}: outcome={outcome} event={event} — {reason}")
 
     def get_deferred(self) -> List[Dict[str, Any]]:
@@ -143,3 +145,33 @@ class AutoVerdictsDB:
                 ORDER BY created_at DESC, id DESC
             """, (repo, pr_number))
             return [dict(row) for row in cursor.fetchall()]
+
+    def get_for_prs(
+        self, repo_pr_pairs: List[Tuple[str, int]]
+    ) -> Dict[Tuple[str, int], List[Dict[str, Any]]]:
+        """Batch lookup: every auto verdict per (repo, pr_number), newest first.
+        Pairs with no verdict are absent from the result."""
+        result: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
+        if not repo_pr_pairs:
+            return result
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            # Chunked: each pair costs two SQL variables and SQLite caps them.
+            for i in range(0, len(repo_pr_pairs), 400):
+                chunk = repo_pr_pairs[i:i + 400]
+                placeholders = " OR ".join(["(repo = ? AND pr_number = ?)"] * len(chunk))
+                params = [v for pair in chunk for v in pair]
+                cursor.execute(
+                    f"SELECT * FROM auto_verdicts WHERE {placeholders} "
+                    "ORDER BY created_at DESC, id DESC",
+                    params,
+                )
+                for row in cursor.fetchall():
+                    result.setdefault((row["repo"], row["pr_number"]), []).append(dict(row))
+        return result
+
+
+def _mark_pipeline_dirty():
+    # Imported lazily: services depend on the database package, not the reverse.
+    from backend.services.pipeline_snapshot import mark_dirty
+    mark_dirty()

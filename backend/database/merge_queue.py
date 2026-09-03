@@ -1,6 +1,5 @@
 """MergeQueueDB - Database operations for merge queue."""
 
-import json
 import sqlite3
 import logging
 from datetime import datetime
@@ -74,6 +73,7 @@ class MergeQueueDB:
             logger.warning("Failed to auto-assign queue item %s to default swimlane: %s",
                            row["id"], e)
 
+        _mark_pipeline_dirty()
         return row
 
     def update_pr_state(self, pr_number: int, repo: str, pr_state: str):
@@ -85,54 +85,6 @@ class MergeQueueDB:
                 SET pr_state = ?, state_updated_at = ?
                 WHERE pr_number = ? AND repo = ?
             """, (pr_state, datetime.now(), pr_number, repo))
-
-    def set_auto_verdict(
-        self,
-        pr_number: int,
-        repo: str,
-        enabled: bool,
-        reviewer_type: Optional[str] = None,
-        mode: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """Arm or disarm auto verdicts for a queued PR. Returns the updated row."""
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE merge_queue
-                SET auto_verdict_enabled = ?, auto_verdict_reviewer = ?, auto_verdict_mode = ?
-                WHERE pr_number = ? AND repo = ?
-            """, (1 if enabled else 0, reviewer_type, mode, pr_number, repo))
-            if cursor.rowcount == 0:
-                return None
-            cursor.execute(
-                "SELECT * FROM merge_queue WHERE pr_number = ? AND repo = ?",
-                (pr_number, repo)
-            )
-            row = cursor.fetchone()
-            return dict(row) if row else None
-
-    def set_auto_verdict_criteria(
-        self,
-        pr_number: int,
-        repo: str,
-        criteria: Optional[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
-        """Set or clear (None) a queued PR's criteria override. Returns the updated row."""
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE merge_queue
-                SET auto_verdict_criteria = ?
-                WHERE pr_number = ? AND repo = ?
-            """, (json.dumps(criteria) if criteria is not None else None, pr_number, repo))
-            if cursor.rowcount == 0:
-                return None
-            cursor.execute(
-                "SELECT * FROM merge_queue WHERE pr_number = ? AND repo = ?",
-                (pr_number, repo)
-            )
-            row = cursor.fetchone()
-            return dict(row) if row else None
 
     def remove_from_queue(self, pr_number: int, repo: Optional[str] = None) -> bool:
         """Remove a PR from the merge queue. Returns True if removed."""
@@ -155,7 +107,9 @@ class MergeQueueDB:
             if deleted:
                 self._reorder_positions(cursor)
 
-            return deleted
+        if deleted:
+            _mark_pipeline_dirty()
+        return deleted
 
     def _reorder_positions(self, cursor: sqlite3.Cursor):
         """Reorder position values to be sequential starting from 1."""
@@ -187,6 +141,7 @@ class MergeQueueDB:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM merge_queue")
+        _mark_pipeline_dirty()
 
     def is_in_queue(self, pr_number: int, repo: str) -> bool:
         """Check if a PR is in the merge queue."""
@@ -257,6 +212,15 @@ class MergeQueueDB:
             cursor.execute("DELETE FROM queue_notes WHERE id = ?", (note_id,))
             return cursor.rowcount > 0
 
+    def get_notes_counts(self) -> Dict[int, int]:
+        """Note counts for every queue item that has notes, keyed by queue_item_id."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT queue_item_id, COUNT(*) AS count FROM queue_notes GROUP BY queue_item_id"
+            )
+            return {row["queue_item_id"]: row["count"] for row in cursor.fetchall()}
+
     def get_notes_count(self, queue_item_id: int) -> int:
         """Get the count of notes for a queue item."""
         with self.db.connection() as conn:
@@ -266,3 +230,9 @@ class MergeQueueDB:
                 (queue_item_id,)
             )
             return cursor.fetchone()["count"]
+
+
+def _mark_pipeline_dirty():
+    # Imported lazily: services depend on the database package, not the reverse.
+    from backend.services.pipeline_snapshot import mark_dirty
+    mark_dirty()

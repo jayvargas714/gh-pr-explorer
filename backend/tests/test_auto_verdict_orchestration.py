@@ -12,7 +12,7 @@ import pytest
 
 from backend.database.auto_verdicts import AutoVerdictsDB
 from backend.database.base import Database
-from backend.database.merge_queue import MergeQueueDB
+from backend.database.auto_verdict_arming import AutoVerdictArmingDB
 from backend.database.reviews import ReviewsDB
 from backend.services import auto_verdict_service as svc
 
@@ -47,7 +47,7 @@ class Harness:
     def __init__(self, db):
         self.db = db
         self.auto = AutoVerdictsDB(db)
-        self.queue = MergeQueueDB(db)
+        self.arming = AutoVerdictArmingDB(db)
         self.reviews = ReviewsDB(db)
         self.posted = []
         self.post_result = ({"message": "ok"}, 200)
@@ -63,7 +63,7 @@ def harness(monkeypatch):
     h = Harness(db)
 
     monkeypatch.setattr("backend.database.get_auto_verdicts_db", lambda: h.auto)
-    monkeypatch.setattr("backend.database.get_queue_db", lambda: h.queue)
+    monkeypatch.setattr("backend.database.get_auto_verdict_arming_db", lambda: h.arming)
     monkeypatch.setattr("backend.database.get_reviews_db", lambda: h.reviews)
     monkeypatch.setattr(svc, "post_verdict", h.post_verdict)
     monkeypatch.setattr(svc, "fetch_pr_state_and_sha", lambda *a: ("OPEN", "sha123"))
@@ -81,11 +81,9 @@ def _criteria(monkeypatch, **overrides):
 
 
 def _arm(h, enabled=True, author="someone-else", mode=None, criteria_override=None):
-    h.queue.add_to_queue(pr_number=PR, repo=REPO, pr_title="t", pr_author=author,
-                         pr_url="u", additions=1, deletions=1)
-    h.queue.set_auto_verdict(PR, REPO, enabled, "default", mode=mode)
+    h.arming.set_arming(REPO, PR, enabled, "default", mode=mode)
     if criteria_override is not None:
-        h.queue.set_auto_verdict_criteria(PR, REPO, criteria_override)
+        h.arming.set_criteria(REPO, PR, criteria_override)
 
 
 def _review(h, critical=0, major=0, minor=0, status="completed", author="someone-else"):
@@ -161,7 +159,7 @@ def test_master_switch_off_is_left_alone(harness, monkeypatch):
     assert harness.posted == []
 
 
-def test_pr_not_in_queue_is_left_alone(harness, monkeypatch):
+def test_never_armed_pr_is_left_alone(harness, monkeypatch):
     _criteria(monkeypatch)
     rid = _review(harness, critical=3)
 
@@ -494,7 +492,7 @@ def test_retry_skips_a_pr_that_closed_while_deferred(harness, monkeypatch):
 
 def test_retry_skips_a_card_disarmed_while_deferred(harness, monkeypatch):
     rid, _ = _defer(harness, monkeypatch)
-    harness.queue.set_auto_verdict(PR, REPO, False, "default")
+    harness.arming.set_arming(REPO, PR, False, "default")
 
     import time
     svc.retry_deferred_verdicts(now=time.time() + svc.RETRY_INITIAL_BACKOFF_SECONDS + 1)

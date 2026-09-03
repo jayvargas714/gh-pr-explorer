@@ -4,129 +4,57 @@ from flask import Blueprint, jsonify, request
 
 from backend.database import (
     get_automation_dispatches_db,
-    get_auto_verdicts_db,
-    get_queue_db,
     get_reviewers_db,
-    get_reviews_db,
     get_synced_prs_db,
 )
-from backend.database.automation_dispatches import VALID_STATUSES
 from backend.extensions import logger
 from backend.routes import error_response
-from backend.services import automation_config
+from backend.services import automation_config, pipeline_snapshot
+from backend.services.github_service import TransientGitHubError, fetch_full_pr
 
 automation_bp = Blueprint("automation", __name__)
 
 
-@automation_bp.route("/api/automation/dispatches", methods=["GET"])
-def list_automation_dispatches():
-    """The pipeline view: dispatch rows, most recently updated first.
+@automation_bp.route("/api/automation/pipeline", methods=["GET"])
+def get_pipeline():
+    """The pipeline view, served from the in-memory snapshot (never gh).
 
-    Query params: status (comma-separated subset of the dispatch statuses,
-    default all) and limit (default 200).
+    Query params: includeClosed=0|1 (default 0: rows whose PR is merged/closed
+    are filtered out) and version=N — when N is the current snapshot version
+    the response is just {"unchanged": true, "version": N}.
     """
-    status_param = (request.args.get("status") or "").strip()
-    statuses = [s.strip() for s in status_param.split(",") if s.strip()] or None
-    if statuses:
-        unknown = [s for s in statuses if s not in VALID_STATUSES]
-        if unknown:
-            return jsonify({"error": f"Unknown status: {', '.join(unknown)}"}), 400
-    limit = request.args.get("limit", default=200, type=int)
-
+    include_closed = request.args.get("includeClosed", "0") in ("1", "true")
+    version = request.args.get("version", type=int)
     try:
-        rows = get_automation_dispatches_db().list_dispatches(statuses=statuses, limit=limit)
+        return jsonify(pipeline_snapshot.snapshot.payload(include_closed, known_version=version))
     except Exception as e:
-        return error_response("Internal server error", 500, f"Error listing automation dispatches: {e}")
-
-    rows = _hide_closed_prs(rows)
-    payloads = [_dispatch_payload(row) for row in rows]
-    _attach_review_states(payloads)
-    return jsonify({"dispatches": payloads})
+        return error_response("Internal server error", 500, f"Error building pipeline snapshot: {e}")
 
 
-def _hide_closed_prs(rows):
-    """Drop rows whose PR is merged/closed (per the synced-PR store): the
-    ledger keeps them — dispatch-at-most-once — but the pipeline view only
-    shows PRs that still exist to act on. PRs the store doesn't know stay
-    visible; on any failure the unfiltered rows are shown."""
+@automation_bp.route("/api/automation/pipeline/<owner>/<repo>/<int:pr_number>/refresh",
+                     methods=["POST"])
+def refresh_pipeline_row(owner, repo, pr_number):
+    """Live-fetch one pipelined PR into the synced store and return its rebuilt row."""
+    repo_full = f"{owner}/{repo}"
+    if get_automation_dispatches_db().get_by_pr(repo_full, pr_number) is None:
+        return jsonify({"error": "PR is not in the pipeline"}), 404
     try:
-        store = get_synced_prs_db()
-        by_repo = {}
-        for r in rows:
-            by_repo.setdefault(r["repo"], []).append(r["pr_number"])
-        gone = set()
-        for repo, numbers in by_repo.items():
-            for num, state in store.get_states_by_numbers(repo, numbers).items():
-                if (state or "").upper() in ("MERGED", "CLOSED"):
-                    gone.add((repo, num))
-        return [r for r in rows if (r["repo"], r["pr_number"]) not in gone]
-    except Exception as e:
-        logger.warning(f"Could not filter closed PRs from the pipeline view: {e}")
-        return rows
+        pr = fetch_full_pr(owner, repo, pr_number)
+    except TransientGitHubError as e:
+        logger.warning(f"Pipeline refresh: upstream error for {repo_full}#{pr_number}: {e}")
+        return jsonify({
+            "error": "GitHub is having a moment (upstream 5xx). Try again in a few seconds.",
+            "transient": True,
+        }), 503
+    except RuntimeError as e:
+        if "Not Found" in str(e) or "404" in str(e):
+            return jsonify({"error": "PR not found"}), 404
+        return error_response("Internal server error", 500,
+                              f"Pipeline refresh failed for {repo_full}#{pr_number}: {e}")
 
-
-def _attach_review_states(payloads):
-    """Stamp each pipeline row with its live review picture — a review running
-    right now (in-memory registry, same source as the Running-now strip), the
-    newest recorded review with its posted verdict, and whether the card is
-    armed for auto verdicts. A row with none of those carries None. Never
-    fails the listing."""
-    try:
-        from backend.extensions import active_reviews, reviews_lock
-        from backend.services.review_service import check_review_status
-
-        reviews_db = get_reviews_db()
-
-        # Reap finished subprocesses the same way GET /api/reviews does, so a
-        # review that just exited doesn't linger as "running" here.
-        running = set()
-        with reviews_lock:
-            keys = list(active_reviews.keys())
-        for key in keys:
-            check_review_status(key, active_reviews, reviews_lock, reviews_db)
-            with reviews_lock:
-                review = active_reviews.get(key)
-            if review and review.get("status") == "running":
-                parts = key.split("/")
-                if len(parts) >= 3:
-                    running.add((f"{parts[0]}/{parts[1]}", int(parts[2])))
-
-        pairs = [(p["repo"], p["prNumber"]) for p in payloads]
-        latest = reviews_db.get_latest_for_prs(pairs)
-        verdicts = get_auto_verdicts_db().get_latest_for_review_ids(
-            [rev["id"] for rev in latest.values()]
-        )
-        queue_rows = {
-            (q["repo"], q["pr_number"]): q for q in get_queue_db().get_queue()
-        }
-
-        for p in payloads:
-            pair = (p["repo"], p["prNumber"])
-            rev = latest.get(pair)
-            q = queue_rows.get(pair)
-            armed = bool(q and q.get("auto_verdict_enabled"))
-            is_running = pair in running
-            if rev is None and not armed and not is_running:
-                p["reviewState"] = None
-                continue
-            verdict = verdicts.get(rev["id"]) if rev else None
-            p["reviewState"] = {
-                "running": is_running,
-                "lastReviewId": rev["id"] if rev else None,
-                "lastReviewStatus": rev["status"] if rev else None,
-                "lastReviewAt": rev["review_timestamp"] if rev else None,
-                "isFollowup": bool(rev["is_followup"]) if rev else False,
-                "score": rev["score"] if rev else None,
-                "verdictEvent": verdict["event"] if verdict else None,
-                "verdictOutcome": verdict["outcome"] if verdict else None,
-                "armed": armed,
-                "autoVerdictMode": (q or {}).get("auto_verdict_mode"),
-            }
-    except Exception as e:
-        logger.warning(f"Could not attach review states to the pipeline view: {e}")
-        for p in payloads:
-            p.setdefault("reviewState", None)
-    return payloads
+    get_synced_prs_db().upsert_pr(repo_full, pr)
+    pipeline_snapshot.mark_dirty()
+    return jsonify({"row": pipeline_snapshot.build_row_for(repo_full, pr_number)})
 
 
 def _dispatch_payload(row):
@@ -155,7 +83,9 @@ def enroll_automation_dispatch(owner, repo, pr_number):
     row = dispatches.get_by_pr(repo_full, pr_number)
 
     if row and row["status"] == "pending":
-        return jsonify({"dispatch": _dispatch_payload(row), "message": "Already in the pipeline"})
+        return jsonify({"dispatch": _dispatch_payload(row),
+                        "row": pipeline_snapshot.build_row_for(repo_full, pr_number),
+                        "message": "Already in the pipeline"})
     if row and row["status"] in ("dispatched", "unidentified"):
         return jsonify({"error": f"PR was already {row['status']} — a PR is auto-dispatched at most once"}), 409
 
@@ -172,6 +102,7 @@ def enroll_automation_dispatch(owner, repo, pr_number):
     fresh = dispatches.get_by_pr(repo_full, pr_number)
     logger_msg = "enrolled" if status == 201 else "re-enrolled"
     return jsonify({"dispatch": _dispatch_payload(fresh),
+                    "row": pipeline_snapshot.build_row_for(repo_full, pr_number),
                     "message": f"PR {logger_msg} in the automation pipeline"}), status
 
 
@@ -194,6 +125,7 @@ def optout_automation_dispatch(owner, repo, pr_number):
     dispatches.set_status(row["id"], "skipped", detail="manual opt-out")
     fresh = dispatches.get_by_pr(repo_full, pr_number)
     return jsonify({"dispatch": _dispatch_payload(fresh),
+                    "row": pipeline_snapshot.build_row_for(repo_full, pr_number),
                     "message": "PR removed from the automation pipeline"})
 
 

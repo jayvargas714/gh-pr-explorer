@@ -8,6 +8,7 @@ from backend.database.reviews import ReviewsDB
 from backend.database.review_events import ReviewEventsDB
 from backend.database.audits import AuditsDB
 from backend.database.auto_verdicts import AutoVerdictsDB
+from backend.database.auto_verdict_arming import AutoVerdictArmingDB
 from backend.database.merge_queue import MergeQueueDB
 from backend.database.swimlanes import SwimlanesDB
 from backend.database.settings import SettingsDB
@@ -33,6 +34,7 @@ _reviews_db: Optional[ReviewsDB] = None
 _review_events_db: Optional[ReviewEventsDB] = None
 _audits_db: Optional[AuditsDB] = None
 _auto_verdicts_db: Optional[AutoVerdictsDB] = None
+_auto_verdict_arming_db: Optional[AutoVerdictArmingDB] = None
 _queue_db: Optional[MergeQueueDB] = None
 _swimlanes_db: Optional[SwimlanesDB] = None
 _settings_db: Optional[SettingsDB] = None
@@ -96,6 +98,16 @@ def get_auto_verdicts_db() -> AutoVerdictsDB:
             if _auto_verdicts_db is None:
                 _auto_verdicts_db = AutoVerdictsDB(db)
     return _auto_verdicts_db
+
+
+def get_auto_verdict_arming_db() -> AutoVerdictArmingDB:
+    global _auto_verdict_arming_db
+    if _auto_verdict_arming_db is None:
+        db = get_database()
+        with _db_lock:
+            if _auto_verdict_arming_db is None:
+                _auto_verdict_arming_db = AutoVerdictArmingDB(db)
+    return _auto_verdict_arming_db
 
 
 def get_queue_db() -> MergeQueueDB:
@@ -240,6 +252,7 @@ def get_automation_dispatches_db() -> AutomationDispatchesDB:
 
 __all__ = [
     "Database", "ReviewsDB", "ReviewEventsDB", "AuditsDB", "AutoVerdictsDB", "MergeQueueDB", "SwimlanesDB", "SettingsDB",
+    "AutoVerdictArmingDB", "get_auto_verdict_arming_db",
     "SyncedPRsDB", "get_synced_prs_db",
     "ReviewersDB", "get_reviewers_db",
     "AutomationDispatchesDB", "get_automation_dispatches_db",

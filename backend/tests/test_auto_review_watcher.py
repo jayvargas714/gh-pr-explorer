@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from backend.database.base import Database
-from backend.database.merge_queue import MergeQueueDB
+from backend.database.auto_verdict_arming import AutoVerdictArmingDB
 from backend.database.reviews import ReviewsDB
 from backend.services import auto_review_watcher as watcher
 
@@ -25,7 +25,7 @@ class Harness:
 
     def __init__(self, db):
         self.db = db
-        self.queue = MergeQueueDB(db)
+        self.arming = AutoVerdictArmingDB(db)
         self.reviews = ReviewsDB(db)
         self.started = []
         self.begin_result = ({"message": "Review started"}, 201)
@@ -48,7 +48,7 @@ def harness(monkeypatch):
     db = Database(Path(tempfile.mkdtemp()) / "auto_review_watcher.db")
     h = Harness(db)
 
-    monkeypatch.setattr("backend.database.get_queue_db", lambda: h.queue)
+    monkeypatch.setattr("backend.database.get_auto_verdict_arming_db", lambda: h.arming)
     monkeypatch.setattr("backend.database.get_reviews_db", lambda: h.reviews)
     monkeypatch.setattr(
         "backend.services.github_service.fetch_open_prs_head_shas", h.fetch_open_prs_head_shas
@@ -64,14 +64,13 @@ def harness(monkeypatch):
 
 
 def _arm(h, enabled=True, reviewer="default"):
-    h.queue.add_to_queue(pr_number=PR, repo=REPO, pr_title="t", pr_author="a",
-                         pr_url="u", additions=1, deletions=1)
-    h.queue.set_auto_verdict(PR, REPO, enabled, reviewer)
+    h.arming.set_arming(REPO, PR, enabled, reviewer)
 
 
 def _review(h, head_commit_sha=OLD_SHA, status="completed"):
     return h.reviews.save_review(
-        pr_number=PR, repo=REPO, status=status,
+        pr_number=PR, repo=REPO, status=status, pr_url="https://github.com/owner/repo/pull/42",
+        pr_title="t", pr_author="a",
         content_json="{}", head_commit_sha=head_commit_sha,
     )
 
@@ -88,6 +87,9 @@ def test_new_commits_start_a_followup_with_the_armed_reviewer(harness):
     assert start["is_followup"] is True
     assert start["auto_started"] is True
     assert start["reviewer_type"] == "ed"
+    # PR metadata comes from the review being followed up, not a queue row.
+    assert start["pr_title"] == "t"
+    assert start["pr_author"] == "a"
 
 
 def test_disabled_setting_scans_nothing(harness, monkeypatch):
@@ -181,7 +183,7 @@ def test_per_pr_override_enables_followup_when_global_is_off(harness, monkeypatc
         lambda: {"autoFollowupReview": False},
     )
     _arm(harness)
-    harness.queue.set_auto_verdict_criteria(PR, REPO, {
+    harness.arming.set_criteria(REPO, PR, {
         "maxCritical": 0, "maxMajor": 0, "maxMinor": 99,
         "allowAutoApprove": False, "autoFollowupReview": True,
     })
@@ -194,7 +196,7 @@ def test_per_pr_override_enables_followup_when_global_is_off(harness, monkeypatc
 
 def test_per_pr_override_disables_followup_when_global_is_on(harness):
     _arm(harness)
-    harness.queue.set_auto_verdict_criteria(PR, REPO, {
+    harness.arming.set_criteria(REPO, PR, {
         "maxCritical": 0, "maxMajor": 0, "maxMinor": 99,
         "allowAutoApprove": False, "autoFollowupReview": False,
     })
@@ -223,9 +225,7 @@ def test_one_batch_fetch_covers_every_armed_pr_in_a_repo(harness):
     other_pr = PR + 1
     _arm(harness)
     _review(harness)
-    harness.queue.add_to_queue(pr_number=other_pr, repo=REPO, pr_title="t2",
-                               pr_author="a", pr_url="u", additions=1, deletions=1)
-    harness.queue.set_auto_verdict(other_pr, REPO, True, "default")
+    harness.arming.set_arming(REPO, other_pr, True, "default")
     harness.reviews.save_review(pr_number=other_pr, repo=REPO, status="completed",
                                 content_json="{}", head_commit_sha=OLD_SHA)
     harness.open_shas = {PR: NEW_SHA, other_pr: NEW_SHA}

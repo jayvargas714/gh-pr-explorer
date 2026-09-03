@@ -198,9 +198,10 @@ The database module provides SQLite-based persistence for reviews and merge queu
 | `ReviewEventsDB` | Appends and queries review lifecycle events (start/completion/failure/retry) for the Review Logs tab |
 | `AuditsDB` | Handles PB↔ED audit storage, retrieval, and search operations (parallel to `ReviewsDB`) |
 | `MergeQueueDB` | Manages merge queue persistence and ordering |
-| `SwimlanesDB` | Manages swimlane definitions and per-card lane assignments (including pin state and the protected Auto lane) for the Kanban view of the merge queue |
+| `SwimlanesDB` | Manages swimlane definitions and per-card lane assignments (including pin state) for the Kanban view of the merge queue |
 | `ReviewersDB` | Configurable reviewer registry (key → label, Claude agent name, prompt context); seeds and locks the three builtins |
 | `AutomationDispatchesDB` | Durable ledger of automation pipeline decisions; `UNIQUE(repo, pr_number)` is the auto-dispatch idempotence guard |
+| `AutoVerdictArmingDB` | Per-PR auto-verdict arming (armed flag, reviewer, mode, criteria override) keyed by `(repo, pr_number)`, independent of merge-queue membership |
 | `DevStatsDB` | Caches developer statistics with 4-hour TTL for improved performance |
 | `LifecycleCacheDB` | Caches PR lifecycle and review timing data with 2-hour TTL |
 | `WorkflowCacheDB` | Caches workflow runs data with configurable TTL (default 1 hour) for stale-while-revalidate serving |
@@ -296,8 +297,8 @@ CREATE TABLE merge_queue (
     deletions INTEGER DEFAULT 0,
     position INTEGER NOT NULL,
     added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    auto_verdict_enabled INTEGER NOT NULL DEFAULT 0,  -- armed for auto verdicts
-    auto_verdict_reviewer TEXT,                       -- 'default' | 'pb' | 'ed'
+    auto_verdict_enabled INTEGER NOT NULL DEFAULT 0,  -- LEGACY, unused: arming lives in auto_verdict_arming
+    auto_verdict_reviewer TEXT,                       -- LEGACY, unused
     UNIQUE(pr_number, repo)
 );
 
@@ -436,7 +437,7 @@ CREATE TABLE IF NOT EXISTS swimlanes (
     color TEXT NOT NULL,            -- one of: success, warning, error, info, primary, accent, violet, slate
     position INTEGER NOT NULL,
     is_default INTEGER DEFAULT 0,   -- exactly one row may have is_default=1
-    is_protected INTEGER NOT NULL DEFAULT 0,  -- protected lanes (the Auto lane) refuse delete/rename
+    is_protected INTEGER NOT NULL DEFAULT 0,  -- LEGACY, unused since the Auto lane was retired
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_swimlanes_position ON swimlanes(position);
@@ -1308,7 +1309,6 @@ A Trello-style alternative view of the merge queue. Cards displayed inside swiml
 | `color` | One of 8 palette keys: `success`, `warning`, `error`, `info`, `primary`, `accent`, `violet`, `slate`. Each maps to a Matrix UI CSS custom property |
 | `position` | 1-based ordering across lanes |
 | `isDefault` | Exactly one lane is the default; new merge queue items land here |
-| `isProtected` | Protected lanes (the automation "Auto" lane) cannot be deleted or renamed; recolor and reorder stay allowed |
 
 #### UI Components
 
@@ -1359,7 +1359,7 @@ swimlanes (id, name, color, position, is_default, is_protected, created_at)
 swimlane_assignments (id, queue_item_id UNIQUE, swimlane_id, position_in_lane, updated_at)
 ```
 
-`swimlane_assignments.queue_item_id` cascades from `merge_queue(id)`. `swimlane_assignments.swimlane_id` is `ON DELETE SET NULL`, with `delete_lane()` re-homing orphans to the default. On startup, `create_app()` invokes `ensure_default_lane()` and `reconcile_assignments()` to handle drift and bootstrap the feature on existing databases; `get_board` additionally invokes `ensure_auto_lane()` so the protected Auto lane self-heals (see the Automation feature section).
+`swimlane_assignments.queue_item_id` cascades from `merge_queue(id)`. `swimlane_assignments.swimlane_id` is `ON DELETE SET NULL`, with `delete_lane()` re-homing orphans to the default. On startup, `create_app()` invokes `retire_auto_lane()` (one-time cleanup of the former automation "Auto" lane — its automation-placed cards are removed from the queue and the lane deleted; a no-op once gone), then `ensure_default_lane()` and `reconcile_assignments()` to handle drift and bootstrap the feature on existing databases. Automation never adds cards to the board; pipelined PRs reach it only through the Pipeline overlay's "Watch on board" action, which is a plain merge-queue add.
 
 #### Filtering
 
@@ -1781,11 +1781,11 @@ Thresholds are **inclusive upper bounds**: `maxMajor: 1` allows one major and tr
 
 #### Per-PR Criteria Overrides
 
-The global config is the default; any queued PR can carry its own **criteria override** — a complete snapshot of the five overridable fields (`maxCritical`, `maxMajor`, `maxMinor`, `allowAutoApprove`, `autoFollowupReview`) stored as JSON in `merge_queue.auto_verdict_criteria`. The rules:
+The global config is the default; any PR can carry its own **criteria override** — a complete snapshot of the five overridable fields (`maxCritical`, `maxMajor`, `maxMinor`, `allowAutoApprove`, `autoFollowupReview`) stored as JSON in `auto_verdict_arming.auto_verdict_criteria`. The rules:
 
 - **Whole-config, not per-field.** A PR either follows the global config or has its own full snapshot; there is no partial inheritance. Later changes to the global defaults do not affect overridden PRs.
 - **The master `enabled` switch is never overridable.** `OVERRIDE_KEYS` in `auto_verdict_config.py` deliberately excludes it, `validate_override` strips it, and `apply_override` never copies it — so "the master switch is off" always means nothing posts, board-wide.
-- **Merging is one pure function.** `apply_override(criteria, queue_item)` returns the effective criteria; the evaluator and the follow-up watcher both go through it. A malformed stored override is logged and ignored (global config applies).
+- **Merging is one pure function.** `apply_override(criteria, arming_row)` returns the effective criteria; the evaluator and the follow-up watcher both go through it. A malformed stored override is logged and ignored (global config applies).
 - **History stays honest.** `auto_verdicts.criteria_json` snapshots the *effective* criteria at decision time, so an overridden decision records the override that drove it.
 - The follow-up watcher (`scan_and_start_followups`) resolves `autoFollowupReview` per card, so an override can switch auto follow-ups on or off for one PR independently of the global setting.
 
@@ -1842,7 +1842,7 @@ A verdict post lands at the worst possible moment for the shared GraphQL/REST qu
 
 #### Auto Follow-Up Reviews
 
-With `autoFollowupReview` on (resolved per card: the card's criteria override wins over the global flag when one is set), the loop closes completely for armed cards: review → auto verdict → author pushes fixes → follow-up review → auto verdict again. `auto_review_watcher_loop` (`backend/services/auto_review_watcher.py`) is a second daemon thread (60-second interval, same `WERKZEUG_RUN_MAIN` guard) whose `scan_and_start_followups` pass walks every `merge_queue` row with `auto_verdict_enabled` and starts a follow-up review when **all** of the following hold:
+With `autoFollowupReview` on (resolved per card: the card's criteria override wins over the global flag when one is set), the loop closes completely for armed cards: review → auto verdict → author pushes fixes → follow-up review → auto verdict again. `auto_review_watcher_loop` (`backend/services/auto_review_watcher.py`) is a second daemon thread (60-second interval, same `WERKZEUG_RUN_MAIN` guard) whose `scan_and_start_followups` pass walks every armed row in `auto_verdict_arming` (`AutoVerdictArmingDB.get_armed()`) and starts a follow-up review when **all** of the following hold:
 
 1. No review is currently running for the PR (`active_reviews` check, before any gh call).
 2. The PR has at least one saved review — auto-started reviews are always follow-ups; a first review stays a human action.
@@ -1866,14 +1866,22 @@ auto_verdicts (
 )
 ```
 
-Plus four columns on `merge_queue` (added via tracked `ALTER TABLE` migrations in `base.py`), which is the single record behind both the queue panel and the swimlane board:
+Arming is its own per-PR table, independent of merge-queue membership (so pipelined PRs that are not on the board are armed and followed up exactly like board cards):
 
 ```sql
-auto_verdict_enabled  INTEGER NOT NULL DEFAULT 0
-auto_verdict_reviewer TEXT      -- 'default' | 'pb' | 'ed'
-auto_verdict_mode     TEXT      -- 'verdict' | 'comment'; NULL reads as 'verdict'
-auto_verdict_criteria TEXT      -- per-PR criteria override (JSON); NULL = use global
+CREATE TABLE auto_verdict_arming (
+    repo TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    auto_verdict_enabled  INTEGER NOT NULL DEFAULT 0,
+    auto_verdict_reviewer TEXT,      -- reviewer key from the registry
+    auto_verdict_mode     TEXT,      -- 'verdict' | 'comment'; NULL reads as 'verdict'
+    auto_verdict_criteria TEXT,      -- per-PR criteria override (JSON); NULL = use global
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (repo, pr_number)
+);
 ```
+
+The four same-named columns still present on `merge_queue` are legacy: the tracked migration `copy_arming_from_merge_queue` copied every armed/overridden queue row into this table once, and nothing reads them any more. `AutoVerdictArmingDB` (`get`, `get_armed`, `get_for_prs`, `set_arming`, `set_criteria`, `clear`) is the only accessor; disarming keeps the row so a criteria override survives.
 
 `criteria_json` snapshots the thresholds at decision time, so changing the criteria later does not rewrite the history of why a past verdict fired.
 
@@ -2249,11 +2257,14 @@ least-recently-visited repos beyond the cap fall back to the live path),
 
 ### Automation (Full Auto Review Pipeline)
 
-**Purpose**: A master **Automation tab** (sixth main tab, 🤖 in the header jumps to
-it) consolidating all auto-mode configuration, plus a full-automation pipeline:
-newly arriving PRs are detected by the PR sync worker, routed to a reviewer by
-configurable file-pattern rules, placed in a permanent protected **Auto** swimlane,
-and reviewed automatically — with per-rule auto-verdict/auto-comment behavior.
+**Purpose**: A master **Automation tab** (sixth main tab) consolidating all
+auto-mode configuration, a full-screen **Pipeline** overlay (the header 🤖 button
+opens it — see the Pipeline Management section) for tracking and managing every
+pipelined PR, plus a full-automation pipeline: newly arriving PRs are detected by
+the PR sync worker, routed to a reviewer by configurable file-pattern rules, and
+reviewed automatically — with per-rule auto-verdict/auto-comment behavior.
+Automation never writes to the merge queue or swimlanes: those stay the
+operator's hand-curated watch list.
 Nothing is hardcoded (reviewers, patterns, repos): the tool stays generic for other
 repos and reviewer sets.
 
@@ -2367,15 +2378,12 @@ state/draft/CI from a **per-cycle batched fetch** (`fetch_open_prs_queue_data`:
 ONE `gh pr list` per repo per cycle covers every evaluated row — per-row
 `gh pr view` polling burned ~half the shared GraphQL rate limit; a PR absent
 from the open listing is closed/merged → `skipped`; a failed batch or **draft**
-→ wait *without* board placement, so drafts never appear on the swimlane while
-parked) → add to merge queue if absent
-and `assign_card_to_lane` into the Auto lane (before the remaining gates, so a
-non-draft waiting PR is visible on the board) → **dispatch condition gates** → `fetch_pr_files`
+→ wait) → **dispatch condition gates** → `fetch_pr_files`
 (REST files endpoint with `--paginate`; `gh pr view --json files` truncates at
 100) → classify → for unidentified, persist and stop (no review); otherwise
 `begin_review(reviewer_type=rule.reviewerKey, auto_started=True)` and, only after
 a 201, arm per-PR auto-verdict with the rule's `autoVerdict`/`autoVerdictMode`
-via `set_auto_verdict`. `begin_review` 409 (a review already running) →
+via `AutoVerdictArmingDB.set_arming` (no merge-queue row is created). `begin_review` 409 (a review already running) →
 `skipped`; 429 (another path raced the worker past the budget) → the row stays
 pending for the next cycle, attempts untouched; other failures increment
 `attempts` and retry next cycle, `failed` after 3. Follow-up reviews stay owned
@@ -2385,8 +2393,8 @@ watcher forgets the attempted SHA so the follow-up retries next cycle).
 **Dispatch condition gates**: a review starts only when the live PR data is
 readable (a failed batch fetch blocks rather than dispatching blind — and is
 never confused with "no open PRs", which would mass-skip the pipeline)
-and the PR is not a draft — both checked in `_process_one` before board
-placement — then, in `_dispatch_blocker`: the PR targets the required base
+and the PR is not a draft — both checked in `_process_one` — then, in
+`_dispatch_blocker`: the PR targets the required base
 branch (`requireBaseBranch`, default `main`; a stacked PR *waits* rather than
 skips, since it is typically retargeted to main once its parent merges — an
 unknown base also waits rather than dispatching blind; empty string disables
@@ -2408,12 +2416,13 @@ wait can never accumulate into a permanent `failed`.
 | `unidentified` | `skipped` | `failed`. The row also stores `outcome_json`
 (classification result), `reviewer_key`, `detail`, `attempts`.
 
-**Protected Auto lane**: `swimlanes.is_protected` column; `ensure_auto_lane()`
-seeds one violet "Auto" lane (self-heals from `get_board`). `delete_lane` and
-rename refuse protected lanes (recolor allowed); the frontend hides the delete
-button and rename affordance and shows a `🤖 auto` tag. `assign_card_to_lane`
-places a card at the bottom of a lane idempotently (used by the dispatcher so
-auto cards land in Auto instead of the default lane).
+**No board placement**: the dispatcher used to add every evaluated PR to the
+merge queue and park it in a protected "Auto" swimlane (that is where arming
+lived). Arming now has its own table, so automation touches neither
+`merge_queue` nor `swimlanes`; the lane was removed by the one-time
+`retire_auto_lane()` startup cleanup and `swimlanes.is_protected` is a legacy
+column. Pipelined PRs are tracked in the Pipeline overlay instead, and reach
+the board only when the operator clicks "Watch on board" there.
 
 **Card surface**: enriched queue items carry `automation:
 {status, reviewerKey, ruleName, matchedRules, detail, updatedAt} | null`
@@ -2426,7 +2435,7 @@ also stamps each PR-list row with `autoVerdict: {enabled, reviewerType, mode}
 failure-safe; null when not armed), which `PRBadges` renders as a `🤖 ✓ Armed`
 info badge (💬 in comment mode, tooltip names reviewer + follow-up behavior) —
 the PR-list counterpart of the queue/swimlane cards' `AutoVerdictToggle`
-(cards waiting in the pipeline are unarmed by design until dispatch). Both card kinds render
+(cards waiting in the pipeline are unarmed by design until dispatch). Pipeline rows render the same badge/control set (see Pipeline Management). Both card kinds render
 the shared `AutomationPipelineControl` (badge + `🤖+`/`🤖−` add/remove toggle
 hitting the enroll/optout endpoints with optimistic local state; the toggle
 shows add for un-enrolled open PRs and skipped/failed rows, remove for pending
@@ -2447,18 +2456,7 @@ button/picker and AutoVerdictToggle on the card.
 `ActiveConfigSummary` — a read-only ●&nbsp;ACTIVE/○&nbsp;OFF strip of the SAVED
 config (scope + authors, allowlisted repos, rule→reviewer routing map, dispatch
 conditions, concurrency), distinct from the unsaved draft below — followed by
-the sections: `PipelineSection` (read-only pipeline table via
-`GET /api/automation/dispatches`: every row the pipeline is holding or has
-handled — repo#PR link, status badge, waiting/skip detail, a Review column
-(`ReviewStateCell` rendering the row's `reviewState`: `▶ running now`, or
-`✓ reviewed [(follow-up)] · score/10 · verdict · armed — re-reviews on new
-commits` / `not armed — no follow-ups`, `✗ review failed`, or `—`; tooltip
-carries the last-review timestamp), reviewer, last update — with a status
-filter, refresh, and client-side pagination (default 10 rows/page with a
-10/25/50/100 selector, ‹/› arrows + "Page X of Y · N PRs", page resets on
-filter change and clamps when a refresh shrinks the list); merged/closed PRs
-are hidden server-side (see the endpoint), and this is where parked drafts are
-visible, since they stay off the board), `ScopeSection` (off/authors/all cards,
+the sections: `ScopeSection` (off/authors/all cards,
 author + repo chip lists, concurrency, max pipeline size), `RoutingRulesSection`
 (ordered rules with ↑/↓, pattern chips,
 reviewer select, per-rule verdict toggle + mode, ignore patterns, pinned default
@@ -2467,8 +2465,78 @@ locked), and `AutoVerdictCriteriaSection` — the global auto-verdict criteria f
 relocated from the old header modal (storage and API unchanged; the shared form
 lives in `AutoVerdictCriteriaForm`, still used by the per-PR override modal).
 State: `useAutomationStore` (config + reviewers, loaded at app start). The header
-🤖 button now navigates to the tab and shows `on` when auto verdicts are enabled
-or automation scope ≠ off.
+🤖 button opens the Pipeline overlay (whose ⚙ action jumps to this tab) and shows
+`on` when auto verdicts are enabled or automation scope ≠ off. The pipeline table
+that used to live in this tab moved to the overlay.
+
+### Pipeline Management (Pipeline overlay)
+
+**Purpose**: the operator's control room for every PR the automation pipeline is
+holding or has handled — where each PR is in the pipeline and why, how many review
+rounds it has been through, what the latest review said, whether it is armed, and
+the controls to enroll/opt-out, arm/disarm, re-review, post verdicts and pull a PR
+onto the swimlane board to watch it. It replaces the former protected "Auto"
+swimlane (see Automation) and the pipeline table that used to sit in the
+Automation tab.
+
+**Entry**: the header 🤖 button toggles `PipelineModal`, a full-screen slide-in
+overlay sharing `SwimlaneModal`'s shell (Framer spring, ESC, scroll lock). Its
+header carries a ⚙ action that closes the overlay and opens the Automation tab.
+
+**Data**: one endpoint, `GET /api/automation/pipeline`, served from an in-memory
+**snapshot** built entirely from local tables — `automation_dispatches` ⨝
+`synced_prs` (title, author, state, draft, base branch, review decision +
+reviewers, CI rollup, +/−, `updatedAt`) ⨝ `auto_verdict_arming` ⨝ reviews /
+audits / auto_verdicts (rev log via `build_rev_log`, latest review summary via the
+`summarize_reviews` helper shared with board enrichment) ⨝ the in-memory
+`active_reviews` registry (running now) ⨝ `merge_queue` (`onBoard`,
+`queueItemId`, notes count). **Zero `gh` calls per load.** Each row carries a
+derived `stage`:
+
+| Stage | Meaning |
+|-------|---------|
+| `waiting` | pending row blocked on a dispatch gate (`detail` = `waiting: …`) |
+| `ready` | pending row with no blocker, waiting on the concurrency budget |
+| `reviewing` | a review is running right now |
+| `reviewed` | dispatched; latest review + verdict shown |
+| `unidentified` | files span rules — route by hand |
+| `opted_out` | skipped with detail `manual opt-out` |
+| `skipped` / `failed` | terminal, reason in `detail` |
+| `closed` | PR merged/closed (hidden unless `includeClosed=1`) |
+
+**Snapshot & freshness** (`backend/services/pipeline_snapshot.py`):
+`PipelineSnapshot` holds `rows`, a monotonic `version`, `generatedAt` and
+`prDataSyncedAt` (the PR sync worker's most recent completed cycle for the repos in the snapshot). A daemon thread
+rebuilds every 10 s, or immediately after any writer calls `mark_dirty()`
+(dispatch status changes, arming changes, review saves, verdict records,
+enroll/opt-out, row refresh, queue add/remove). Clients poll with `?version=N`
+and get `{unchanged: true}` when nothing moved, so idle polling is free.
+GitHub freshness is the PR sync worker's cadence; a per-row refresh
+(`POST …/pipeline/<owner>/<repo>/<pr>/refresh`) re-hydrates one PR with a single
+`gh pr view` and returns the rebuilt row.
+
+**Frontend** (`frontend/src/components/pipeline/`, state in `usePipelineStore`):
+
+| Component | Responsibility |
+|-----------|----------------|
+| `PipelineModal` | Overlay shell; `load()` on open, 10 s visibility-aware poll while open |
+| `PipelineHeader` | Counts strip (`N · waiting a · reviewing b · reviewed c · attention d`), freshness (`Updated 8s ago · PR data 3m ago`, `refreshing…`), search, stage chips, badge-filter popover (chip vocabulary shared with the swimlane board), repo + reviewer selects, `rounds ≥`, include-closed toggle, ⚙, refresh, close |
+| `PipelineTable` / `PipelineRow` | Sortable columns: ☐ · PR · Stage (icon + reason) · Rounds (`RevLogBadge` hover) · Auto (`AutoVerdictToggle`) · CI · Review (decision + `ReviewersBadge`) · Issues · Updated · actions (`AutomationPipelineControl`, watch/remove board, refresh row, expand) |
+| `PipelineRowDetail` | One expanded row at a time: rev-log list, latest review + score → viewer, verdict composer, review picker, audit, timeline, description, notes (when on board), criteria override, dispatch detail (rule, matched rules, attempts, classification) |
+| `BulkActionBar` | On any selection: Opt out · Re-enroll · Arm · Disarm · Watch on board, run per row with done/failed progress |
+
+The store keeps its rows for the page lifetime, so reopening the overlay renders
+instantly and refreshes silently; the loading spinner appears only on the very
+first load. Actions apply optimistically and patch the row from the response
+(enroll/opt-out/refresh return the rebuilt `row`), guarded by the same
+pause/epoch pattern as the swimlane store so a stale poll cannot undo them.
+Filtering, sorting and pagination are client-side over the full payload; the
+pure helpers live in `pipelineFilters.ts` (`stagePresentation`,
+`rowPassesFilters`, `compareRows`, `summarize`).
+
+`AutoVerdictToggle` and `AutomationPipelineControl` are keyed by
+`(repo, prNumber)` and hit the PR-scoped auto-verdict routes, so the identical
+control renders on PR-list rows, board cards and pipeline rows.
 
 ---
 
@@ -3185,12 +3253,9 @@ back to their defaults. Also accepts POST. The payload may be sent either wrappe
 }
 ```
 
-**PUT** `/api/merge-queue/<pr_number>/auto-verdict`
+**PUT** `/api/prs/<owner>/<repo>/<pr_number>/auto-verdict`
 
-Arms or disarms auto verdicts for a queued PR.
-
-**Query Parameters**:
-- `repo` (required): Repository in `owner/repo` format
+Arms or disarms auto verdicts for a PR. Membership in the merge queue is not required — the same route serves PR-list rows, board cards and Pipeline rows.
 
 **Request Body**:
 ```json
@@ -3203,7 +3268,7 @@ Arms or disarms auto verdicts for a queued PR.
 
 `reviewerType` is one of `default`, `pb`, `ed` (defaults to `default`); anything else
 returns 400. `mode` is `verdict` or `comment` (defaults to `verdict`); anything else
-returns 400. A PR that is not in the merge queue returns 404.
+returns 400.
 
 **Response**:
 ```json
@@ -3213,13 +3278,10 @@ returns 400. A PR that is not in the merge queue returns 404.
 }
 ```
 
-**PUT** `/api/merge-queue/<pr_number>/auto-verdict/criteria`
+**PUT** `/api/prs/<owner>/<repo>/<pr_number>/auto-verdict/criteria`
 
-Sets or clears a queued PR's criteria override (see [Auto Verdicts — Per-PR
+Sets or clears a PR's criteria override (see [Auto Verdicts — Per-PR
 Criteria Overrides](#per-pr-criteria-overrides)).
-
-**Query Parameters**:
-- `repo` (required): Repository in `owner/repo` format
 
 **Request Body** — a full override snapshot, or `null` to clear:
 ```json
@@ -3236,7 +3298,7 @@ Criteria Overrides](#per-pr-criteria-overrides)).
 
 The override is validated like the global config (integer thresholds ≥ 0, else 400)
 but never contains `enabled` — the master switch is not per-PR and an `enabled` key
-in the payload is dropped. A PR that is not in the merge queue returns 404.
+in the payload is dropped.
 
 **Response**:
 ```json
@@ -3283,39 +3345,51 @@ Returns `{"config": {...}}` — stored `automation_config` merged over the defau
 **PUT** `/api/automation/config` — body `{"config": {...}}` (or the bare object).
 Validates and persists; 400 with a message on bad scope/mode/rule/reviewer key.
 
-**GET** `/api/automation/dispatches`
+**GET** `/api/automation/pipeline`
 
-The pipeline view: `automation_dispatches` rows, most recently updated first.
-Rows whose PR is merged/closed per the synced-PR store are hidden (the ledger
-keeps them — dispatch-at-most-once — but the view only shows PRs that still
-exist to act on; PRs the store doesn't know stay visible, and a filter failure
-shows the unfiltered rows). Each row also carries `reviewState` — the live
-review picture (running-now from the in-memory registry after the same
-`check_review_status` reap `GET /api/reviews` does, newest recorded review +
-its posted verdict from `auto_verdicts`, and merge-queue arming), batched SQL
-only, `null` when the PR was never reviewed, isn't armed, and nothing is
-running; the enroll/optout responses below don't carry it. Failure-safe: an
-enrichment error stamps `reviewState: null` rather than failing the listing.
+The Pipeline overlay's data: every `automation_dispatches` row joined with the
+synced PR record, arming, reviews/audits/verdicts and the running-review
+registry, served from the in-memory snapshot (see Pipeline Management). Never
+calls `gh`.
 
 **Query Parameters**:
-- `status` — comma-separated subset of `pending,dispatched,unidentified,skipped,failed`
-  (default all; unknown values → 400)
-- `limit` — max rows (default 200; applied before the closed-PR filter)
+- `version` — the client's current snapshot version; when it matches, the
+  response is `{"unchanged": true, "version": N}` with no rows
+- `includeClosed` — `1` to include rows whose PR is merged/closed (default `0`)
 
 **Response**:
 ```json
 {
-  "dispatches": [
-    {"repo": "owner/repo", "prNumber": 42, "status": "dispatched",
-     "detail": null, "reviewerKey": "default", "attempts": 0,
-     "createdAt": "2026-08-30 09:00:00", "updatedAt": "2026-08-31 10:30:00",
-     "reviewState": {"running": false, "lastReviewId": 1499,
-       "lastReviewStatus": "completed", "lastReviewAt": "2026-08-31 23:00:49",
-       "isFollowup": false, "score": 6.5, "verdictEvent": "REQUEST_CHANGES",
-       "verdictOutcome": "posted", "armed": true, "autoVerdictMode": "verdict"}}
+  "version": 43, "generatedAt": "2026-09-03T10:30:00Z", "prDataSyncedAt": "2026-09-03T10:27:12Z",
+  "rows": [
+    {"key": "owner/repo#42", "repo": "owner/repo", "prNumber": 42, "title": "...", "author": "...",
+     "url": "...", "prState": "OPEN", "isDraft": false, "baseRefName": "main",
+     "additions": 10, "deletions": 2, "prUpdatedAt": "...", "prSyncedAt": "...",
+     "stage": "reviewed",
+     "dispatch": {"status": "dispatched", "detail": null, "reviewerKey": "default",
+                  "ruleName": null, "matchedRules": [], "attempts": 0,
+                  "createdAt": "...", "updatedAt": "..."},
+     "automation": {"status": "dispatched", "reviewerKey": "default", "ruleName": null,
+                    "matchedRules": [], "detail": null, "updatedAt": "..."},
+     "autoVerdict": {"enabled": true, "reviewerType": "default", "mode": "verdict",
+                     "criteriaOverride": null, "last": null},
+     "reviewDecision": "APPROVED", "currentReviewers": [], "ciStatus": "success",
+     "statusCheckRollup": [], "running": false,
+     "review": {"reviewId": 1499, "score": 6.5, "isFollowup": false, "createdAt": "...",
+                "inlineCommentsPosted": true, "majorConcernsPosted": false, "minorIssuesPosted": false,
+                "critical": {"posted": 0, "found": 0, "titles": []},
+                "major": {"posted": 1, "found": 1, "titles": ["..."]},
+                "minor": {"posted": 0, "found": 2, "titles": ["...", "..."]}},
+     "revLog": [], "rounds": 1, "onBoard": false, "queueItemId": null, "notesCount": 0}
   ]
 }
 ```
+
+**POST** `/api/automation/pipeline/<owner>/<repo>/<pr_number>/refresh`
+
+Re-hydrates one PR into `synced_prs` with a single `gh pr view`, marks the
+snapshot dirty and returns `{"row": {...}}` for that PR. 404 when the PR has no
+pipeline row.
 
 **POST** `/api/automation/dispatches/<owner>/<repo>/<pr_number>/enroll`
 
@@ -3323,14 +3397,15 @@ Manually add the PR to the pipeline. Inserts a `pending` row (201), revives a
 `skipped`/`failed` row with detail "manually re-enrolled" (200), no-ops on an
 already-pending row (200). 409 when the row is `dispatched`/`unidentified`
 (dispatch-at-most-once) or the pipeline is at `maxPipelineSize`. Returns
-`{"dispatch": {...}, "message": "..."}`.
+`{"dispatch": {...}, "row": {...}, "message": "..."}` (`row` is the rebuilt
+pipeline row).
 
 **POST** `/api/automation/dispatches/<owner>/<repo>/<pr_number>/optout`
 
 Remove a waiting PR from the pipeline (manual mode): flips a `pending` row to
 `skipped` with detail `manual opt-out`, which the backfill script never
 revives. 404 when the PR has no row, 409 when the row is not pending. Returns
-`{"dispatch": {...}, "message": "..."}`.
+`{"dispatch": {...}, "row": {...}, "message": "..."}`.
 
 ---
 
@@ -4839,6 +4914,7 @@ gh-pr-explorer/
 │   │   ├── timeline_service.py     # PR timeline: normalize + fetch + cache-aware get
 │   │   ├── review_schema.py        # Review JSON schema, validation, JSON<->markdown conversion
 │   │   ├── review_schema_spec.json # Formal JSON Schema file for external tools/agents
+│   │   ├── pipeline_snapshot.py    # In-memory Pipeline overlay snapshot: build_rows, derive_stage, mark_dirty, rebuild loop
 │   │   └── repo_stats_service.py       # Parallel repo stats fetching + LOC analysis
 │   │
 │   ├── filters/                    # Request parameter processing
@@ -4865,7 +4941,7 @@ gh-pr-explorer/
 │       ├── review_routes.py        # /api/reviews CRUD + status + inline-comments + check-new-commits
 │       ├── history_routes.py       # /api/review-history list, detail, PR reviews, stats, check
 │       ├── settings_routes.py      # /api/settings CRUD
-│       ├── automation_routes.py    # /api/reviewers CRUD + /api/automation/config
+│       ├── automation_routes.py    # /api/reviewers CRUD, /api/automation/config, /api/automation/pipeline (+refresh), enroll/optout
 │       ├── cache_routes.py         # /api/clear-cache
 │       └── repo_stats_routes.py        # /api/repos/.../repo-stats, repo-stats/loc
 │   │
@@ -4896,9 +4972,12 @@ gh-pr-explorer/
 │   │   │           ├── StateChangeBody.tsx
 │   │   │           ├── ReviewRequestedBody.tsx
 │   │   │           └── ForcePushBody.tsx
+│   │   │   └── pipeline/           # Pipeline overlay: PipelineModal/Header/Table/Row/RowDetail, BulkActionBar, pipelineFilters.ts
 │   │   ├── stores/                 # Zustand state management
+│   │   │   ├── usePipelineStore.ts # Pipeline overlay rows, filters, selection, version-aware polling
 │   │   │   └── useTimelineStore.ts # Timeline modal state + timelineKey helper
 │   │   ├── styles/                 # CSS styles
+│   │   │   ├── pipeline.css        # Pipeline overlay styles
 │   │   │   └── timeline.css        # Timeline modal styles
 │   │   ├── types/                  # TypeScript types
 │   │   ├── App.tsx                 # Root component

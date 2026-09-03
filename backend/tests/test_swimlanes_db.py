@@ -1,7 +1,8 @@
-"""Tests for SwimlanesDB pin behavior and pin-aware ordering."""
+"""Tests for SwimlanesDB pin behavior, pin-aware ordering and Auto-lane retirement."""
 
 import pytest
 
+from backend.database.auto_verdict_arming import AutoVerdictArmingDB
 from backend.database.base import Database
 from backend.database.swimlanes import SwimlanesDB
 
@@ -149,40 +150,82 @@ def test_move_card_across_lanes_preserves_pin(db, swl):
     assert pinned[a] == 1
 
 
-# ----- Protected Auto lane -----
+# ----- Auto lane retirement -----
 
 
-def test_ensure_auto_lane_seeds_protected_lane(swl):
-    lane = swl.ensure_auto_lane()
-    assert lane["name"] == "Auto"
-    assert lane["is_protected"] == 1
-    assert lane["is_default"] == 0
+def _legacy_auto_lane(db):
+    """Insert the protected lane the way the retired ensure_auto_lane() did."""
+    with db.connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO swimlanes (name, color, position, is_default, is_protected) "
+            "VALUES ('Auto', 'violet', 99, 0, 1)"
+        )
+        return cursor.lastrowid
 
 
-def test_ensure_auto_lane_is_idempotent(swl):
-    first = swl.ensure_auto_lane()
-    second = swl.ensure_auto_lane()
-    assert first["id"] == second["id"]
-    assert sum(1 for lane in swl.list_lanes() if lane["is_protected"]) == 1
+def _queue_ids(db):
+    with db.connection() as conn:
+        return [r["id"] for r in conn.execute("SELECT id FROM merge_queue ORDER BY position").fetchall()]
 
 
-def test_delete_protected_lane_refused(swl):
-    lane = swl.ensure_auto_lane()
-    with pytest.raises(ValueError, match="protected"):
-        swl.delete_lane(lane["id"])
+def test_retire_auto_lane_removes_its_cards_and_the_lane(db, swl):
+    auto = _legacy_auto_lane(db)
+    a = _add_card(db, swl, 1)
+    b = _add_card(db, swl, 2)
+    swl.assign_card_to_lane(a, auto)
+    with db.connection() as conn:
+        conn.execute("INSERT INTO queue_notes (queue_item_id, content) VALUES (?, 'n')", (a,))
+
+    assert swl.retire_auto_lane() == 1
+
+    assert [lane["name"] for lane in swl.list_lanes()] == ["Unassigned"]
+    assert _queue_ids(db) == [b]
+    assert [x["queue_item_id"] for x in swl.get_assignments()] == [b]
+    with db.connection() as conn:
+        assert conn.execute("SELECT COUNT(*) AS n FROM queue_notes").fetchone()["n"] == 0
+        # The surviving card's position is renumbered from 1.
+        assert conn.execute("SELECT position FROM merge_queue").fetchone()["position"] == 1
 
 
-def test_rename_protected_lane_refused_but_recolor_allowed(swl):
-    lane = swl.ensure_auto_lane()
-    with pytest.raises(ValueError, match="protected"):
-        swl.update_lane(lane["id"], name="Renamed")
-    updated = swl.update_lane(lane["id"], color="accent")
-    assert updated["color"] == "accent"
-    assert updated["name"] == "Auto"
+def test_retire_auto_lane_is_idempotent(db, swl):
+    _legacy_auto_lane(db)
+    assert swl.retire_auto_lane() == 0
+    assert swl.retire_auto_lane() == 0
+    assert len(swl.list_lanes()) == 1
+
+
+def test_retire_auto_lane_without_protected_lane_leaves_cards_alone(db, swl):
+    a = _add_card(db, swl, 1)
+    other = swl.create_lane("Reviewing", "warning")
+    assert swl.retire_auto_lane() == 0
+    assert _queue_ids(db) == [a]
+    assert {lane["id"] for lane in swl.list_lanes()} == {swl.get_default_lane()["id"], other["id"]}
+
+
+def test_retire_auto_lane_keeps_arming(db, swl):
+    arming = AutoVerdictArmingDB(db)
+    arming.set_arming("owner/repo", 1, True, "pb", "comment")
+    auto = _legacy_auto_lane(db)
+    a = _add_card(db, swl, 1)
+    swl.assign_card_to_lane(a, auto)
+
+    swl.retire_auto_lane()
+
+    row = arming.get("owner/repo", 1)
+    assert row["auto_verdict_enabled"] == 1
+    assert row["auto_verdict_reviewer"] == "pb"
+
+
+def test_lanes_can_be_renamed_and_deleted_freely(swl):
+    lane = swl.create_lane("Auto", "violet")
+    assert swl.update_lane(lane["id"], name="Renamed")["name"] == "Renamed"
+    swl.delete_lane(lane["id"])
+    assert [x["name"] for x in swl.list_lanes()] == ["Unassigned"]
 
 
 def test_assign_card_to_lane_moves_card_to_bottom(db, swl):
-    auto_lane = swl.ensure_auto_lane()
+    auto_lane = swl.create_lane("Auto", "violet")
     a = _add_card(db, swl, 1)
     b = _add_card(db, swl, 2)
     swl.assign_card_to_lane(a, auto_lane["id"])
@@ -192,7 +235,7 @@ def test_assign_card_to_lane_moves_card_to_bottom(db, swl):
 
 
 def test_assign_card_to_lane_is_idempotent(db, swl):
-    auto_lane = swl.ensure_auto_lane()
+    auto_lane = swl.create_lane("Auto", "violet")
     a = _add_card(db, swl, 1)
     swl.assign_card_to_lane(a, auto_lane["id"])
     swl.assign_card_to_lane(a, auto_lane["id"])

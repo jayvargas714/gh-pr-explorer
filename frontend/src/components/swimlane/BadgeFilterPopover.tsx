@@ -1,9 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import {
-  BadgeFilterKey,
-  BadgeFilterMode,
-  useSwimlaneStore,
-} from '../../stores/useSwimlaneStore'
+import { BadgeFilterKey, BadgeFilterMode } from '../../utils/badgeFilters'
 
 interface ChipDef {
   key: BadgeFilterKey
@@ -72,13 +68,26 @@ const GROUPS: GroupDef[] = [
   },
 ]
 
-export function BadgeFilterPopover() {
-  const badgeFilters = useSwimlaneStore((s) => s.badgeFilters)
-  const mode = useSwimlaneStore((s) => s.badgeFilterMode)
-  const toggle = useSwimlaneStore((s) => s.toggleBadgeFilter)
-  const setMode = useSwimlaneStore((s) => s.setBadgeFilterMode)
-  const clear = useSwimlaneStore((s) => s.clearBadgeFilters)
+interface BadgeFilterPopoverProps {
+  badgeFilters: Set<BadgeFilterKey>
+  mode: BadgeFilterMode
+  onToggle: (key: BadgeFilterKey) => void
+  onSetMode: (mode: BadgeFilterMode) => void
+  onClear: () => void
+  /** Tooltip on the trigger — names what is being filtered ("cards", "rows"). */
+  tooltip?: string
+}
 
+/** Funnel button + chip groups for the shared badge vocabulary. The caller
+ * owns the selection state (swimlane store or pipeline store). */
+export function BadgeFilterPopover({
+  badgeFilters,
+  mode,
+  onToggle: toggle,
+  onSetMode: setMode,
+  onClear: clear,
+  tooltip = 'Filter cards by badge',
+}: BadgeFilterPopoverProps) {
   const [open, setOpen] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -120,7 +129,7 @@ export function BadgeFilterPopover() {
         aria-haspopup="true"
         aria-expanded={open}
         aria-label="Badge filters"
-        data-tooltip="Filter cards by badge"
+        data-tooltip={tooltip}
       >
         <span className="mx-swl-badge-filter__icon" aria-hidden="true">⛛</span>
         <span className="mx-swl-badge-filter__label">Filters</span>

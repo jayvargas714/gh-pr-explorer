@@ -125,40 +125,10 @@ def test_put_automation_config_rejects_unknown_reviewer(client):
     assert c.put("/api/automation/config", json={"config": payload}).status_code == 400
 
 
-def test_list_dispatches_returns_pipeline_rows(client):
-    c, _, dispatches_db = client
-    dispatches_db.record_candidate("owner/repo", 1)
-    dispatches_db.record_candidate("owner/repo", 2)
-    row = dispatches_db.get_by_pr("owner/repo", 2)
-    dispatches_db.set_status(row["id"], "dispatched", reviewer_key="pb")
-
-    resp = c.get("/api/automation/dispatches")
-    assert resp.status_code == 200
-    rows = resp.get_json()["dispatches"]
-    assert len(rows) == 2
-    newest = rows[0]
-    assert newest["repo"] == "owner/repo"
-    assert newest["prNumber"] == 2
-    assert newest["status"] == "dispatched"
-    assert newest["reviewerKey"] == "pb"
-    assert "updatedAt" in newest and "createdAt" in newest
-
-
-def test_list_dispatches_filters_by_status(client):
-    c, _, dispatches_db = client
-    dispatches_db.record_candidate("owner/repo", 1)
-    dispatches_db.record_candidate("owner/repo", 2)
-    row = dispatches_db.get_by_pr("owner/repo", 2)
-    dispatches_db.set_status(row["id"], "dispatched")
-
-    resp = c.get("/api/automation/dispatches?status=pending")
-    rows = resp.get_json()["dispatches"]
-    assert [r["prNumber"] for r in rows] == [1]
-
-
-def test_list_dispatches_rejects_unknown_status(client):
+def test_dispatches_listing_is_gone(client):
+    """Replaced by GET /api/automation/pipeline (see test_pipeline_snapshot.py)."""
     c, _, _ = client
-    assert c.get("/api/automation/dispatches?status=exploded").status_code == 400
+    assert c.get("/api/automation/dispatches").status_code == 404
 
 
 def test_enroll_adds_missing_pr_to_pipeline(client):
@@ -248,97 +218,3 @@ def test_put_automation_config_accepts_custom_reviewer_key(client):
         "rules": [],
     }
     assert c.put("/api/automation/config", json={"config": payload}).status_code == 200
-
-
-def _review_state_fixtures(monkeypatch, tmp_path_name="review_state.db"):
-    """Wire reviews + merge-queue DBs into the automation routes module."""
-    import backend.routes.automation_routes as ar
-    from backend.database.reviews import ReviewsDB
-    from backend.database.merge_queue import MergeQueueDB
-    tmp = Path(tempfile.mkdtemp()) / tmp_path_name
-    db = Database(tmp)
-    reviews_db = ReviewsDB(db)
-    queue_db = MergeQueueDB(db)
-    monkeypatch.setattr(ar, "get_reviews_db", lambda: reviews_db)
-    monkeypatch.setattr(ar, "get_queue_db", lambda: queue_db)
-    return reviews_db, queue_db
-
-
-def test_list_dispatches_carries_review_state(client, monkeypatch):
-    """Dispatched rows say whether a review ran, its verdict, and whether the
-    card is armed — so the pipeline table explains why nothing is running."""
-    c, _, dispatches_db = client
-    reviews_db, queue_db = _review_state_fixtures(monkeypatch)
-
-    dispatches_db.record_candidate("owner/repo", 5)
-    row = dispatches_db.get_by_pr("owner/repo", 5)
-    dispatches_db.set_status(row["id"], "dispatched", reviewer_key="default")
-    rid = reviews_db.save_review(pr_number=5, repo="owner/repo", status="completed",
-                                 score=8.0, is_followup=True)
-    queue_db.add_to_queue(5, "owner/repo", "t", "a", "u", 1, 1)
-    queue_db.set_auto_verdict(5, "owner/repo", True, "default", mode="verdict")
-
-    resp = c.get("/api/automation/dispatches")
-    assert resp.status_code == 200
-    state = resp.get_json()["dispatches"][0]["reviewState"]
-    assert state["running"] is False
-    assert state["lastReviewId"] == rid
-    assert state["lastReviewStatus"] == "completed"
-    assert state["isFollowup"] is True
-    assert state["score"] == 8.0
-    assert state["armed"] is True
-    assert state["autoVerdictMode"] == "verdict"
-
-
-def test_list_dispatches_review_state_running(client, monkeypatch):
-    c, _, dispatches_db = client
-    _review_state_fixtures(monkeypatch, "review_state_running.db")
-    from backend.extensions import active_reviews, reviews_lock
-
-    dispatches_db.record_candidate("owner/repo", 7)
-    row = dispatches_db.get_by_pr("owner/repo", 7)
-    dispatches_db.set_status(row["id"], "dispatched")
-    with reviews_lock:
-        active_reviews["owner/repo/7"] = {"status": "running", "process": None}
-    try:
-        state = c.get("/api/automation/dispatches").get_json()["dispatches"][0]["reviewState"]
-    finally:
-        with reviews_lock:
-            del active_reviews["owner/repo/7"]
-    assert state["running"] is True
-
-
-def test_list_dispatches_review_state_none_when_untouched(client, monkeypatch):
-    """A never-reviewed, unarmed, not-running row carries reviewState: null."""
-    c, _, dispatches_db = client
-    _review_state_fixtures(monkeypatch, "review_state_none.db")
-    dispatches_db.record_candidate("owner/repo", 9)
-    resp = c.get("/api/automation/dispatches")
-    assert resp.get_json()["dispatches"][0]["reviewState"] is None
-
-
-def test_list_dispatches_hides_merged_and_closed_prs(client, monkeypatch):
-    """The ledger keeps rows for merged/closed PRs (dispatch-at-most-once),
-    but the pipeline view only shows PRs that still exist to act on."""
-    import backend.routes.automation_routes as ar
-    from backend.database.synced_prs import SyncedPRsDB
-    c, _, dispatches_db = client
-    _review_state_fixtures(monkeypatch, "closed_filter.db")
-    store = SyncedPRsDB(Database(Path(tempfile.mkdtemp()) / "synced.db"))
-    monkeypatch.setattr(ar, "get_synced_prs_db", lambda: store)
-
-    def _pr(number, state):
-        return {"number": number, "state": state, "isDraft": False,
-                "author": {"login": "a"}, "updatedAt": "2026-08-01T00:00:00Z",
-                "createdAt": "2026-08-01T00:00:00Z", "closedAt": None, "mergedAt": None}
-
-    store.register_repo("owner/repo")
-    store.upsert_pr("owner/repo", _pr(1, "OPEN"))
-    store.upsert_pr("owner/repo", _pr(2, "MERGED"))
-    store.upsert_pr("owner/repo", _pr(3, "CLOSED"))
-    for n in (1, 2, 3, 4):  # 4 is unknown to the store: stays visible
-        dispatches_db.record_candidate("owner/repo", n)
-
-    resp = c.get("/api/automation/dispatches")
-    numbers = sorted(r["prNumber"] for r in resp.get_json()["dispatches"])
-    assert numbers == [1, 4]

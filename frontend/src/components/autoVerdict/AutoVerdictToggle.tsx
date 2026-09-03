@@ -4,15 +4,20 @@ import {
   AutoVerdictCriteriaOverride,
   AutoVerdictMode,
   AutoVerdictReviewer,
-  MergeQueueItem,
+  AutoVerdictState,
 } from '../../api/types'
 import { describeCriteria, useAutoVerdictStore } from '../../stores/useAutoVerdictStore'
 import { useAutomationStore } from '../../stores/useAutomationStore'
 import { useSwimlaneStore } from '../../stores/useSwimlaneStore'
+import { usePipelineStore } from '../../stores/usePipelineStore'
 import { AutoVerdictConfigModal } from './AutoVerdictConfigModal'
 
+/** PR-keyed so the same control renders on queue/board cards and pipeline
+ * rows: arming lives per PR, not per queue item. */
 interface AutoVerdictToggleProps {
-  item: MergeQueueItem
+  repo: string
+  prNumber: number
+  autoVerdict: AutoVerdictState | null | undefined
   onRefresh: () => void
 }
 
@@ -29,14 +34,16 @@ const MODES: { key: AutoVerdictMode; label: string; hint: string }[] = [
   },
 ]
 
-export function AutoVerdictToggle({ item, onRefresh }: AutoVerdictToggleProps) {
-  const serverArmed = item.autoVerdict?.enabled ?? false
-  const serverReviewer = item.autoVerdict?.reviewerType ?? 'default'
-  const serverMode = item.autoVerdict?.mode ?? 'verdict'
-  const serverOverride = item.autoVerdict?.criteriaOverride ?? null
+export function AutoVerdictToggle({ repo, prNumber, autoVerdict, onRefresh }: AutoVerdictToggleProps) {
+  const serverArmed = autoVerdict?.enabled ?? false
+  const serverReviewer = autoVerdict?.reviewerType ?? 'default'
+  const serverMode = autoVerdict?.mode ?? 'verdict'
+  const serverOverride = autoVerdict?.criteriaOverride ?? null
   const config = useAutoVerdictStore((s) => s.config)
   const reviewers = useAutomationStore((s) => s.reviewers)
   const applyAutoVerdictLocal = useSwimlaneStore((s) => s.applyAutoVerdictLocal)
+  const setArmingLocal = usePipelineStore((s) => s.setArmingLocal)
+  const setCriteriaLocal = usePipelineStore((s) => s.setCriteriaLocal)
 
   const [menuOpen, setMenuOpen] = useState(false)
   const [configOpen, setConfigOpen] = useState(false)
@@ -103,31 +110,24 @@ export function AutoVerdictToggle({ item, onRefresh }: AutoVerdictToggleProps) {
     reviewer: AutoVerdictReviewer,
     nextMode: AutoVerdictMode
   ) => {
-    setPending({ enabled, reviewerType: reviewer, mode: nextMode })
-    // Patch the board's own copy too, so the header's auto/manual counts and
-    // the auto-mode filter move with the button. No-op outside the swimlane.
-    applyAutoVerdictLocal(item.number, item.repo, {
-      enabled,
-      reviewerType: reviewer,
-      mode: nextMode,
-    })
+    const next = { enabled, reviewerType: reviewer, mode: nextMode }
+    setPending(next)
+    // Patch the board's and the pipeline's own copies too, so their header
+    // counts and filters move with the button. Each is a no-op when the PR
+    // isn't on that surface.
+    applyAutoVerdictLocal(prNumber, repo, next)
+    setArmingLocal(repo, prNumber, next)
     setBusy(true)
     try {
-      await setCardAutoVerdict(item.number, item.repo, {
-        enabled,
-        reviewerType: reviewer,
-        mode: nextMode,
-      })
+      await setCardAutoVerdict(prNumber, repo, next)
       onRefresh()
     } catch (err) {
       console.error('Failed to update auto verdict:', err)
       // Roll the optimistic state back to what the server still believes.
       setPending(null)
-      applyAutoVerdictLocal(item.number, item.repo, {
-        enabled: serverArmed,
-        reviewerType: serverReviewer,
-        mode: serverMode,
-      })
+      const prev = { enabled: serverArmed, reviewerType: serverReviewer, mode: serverMode }
+      applyAutoVerdictLocal(prNumber, repo, prev)
+      setArmingLocal(repo, prNumber, prev)
     } finally {
       setBusy(false)
     }
@@ -263,11 +263,12 @@ export function AutoVerdictToggle({ item, onRefresh }: AutoVerdictToggleProps) {
         <AutoVerdictConfigModal
           onClose={() => setOverrideOpen(false)}
           perPR={{
-            prNumber: item.number,
-            repo: item.repo,
+            prNumber,
+            repo,
             override,
             onSaved: (saved) => {
               setPendingOverride(saved)
+              setCriteriaLocal(repo, prNumber, saved)
               onRefresh()
             },
           }}

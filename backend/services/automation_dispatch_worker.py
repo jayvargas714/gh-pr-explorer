@@ -2,9 +2,9 @@
 
 The sync worker only *detects* new PRs (cheap set difference) and records
 pending rows in automation_dispatches; this worker does the heavy lifting per
-row: fetch changed files -> classify against the routing rules -> add the PR
-to the merge queue and the protected Auto lane -> start the routed review ->
-arm per-PR auto-verdict per the rule. Keeping dispatch out of the sync cycle
+row: fetch changed files -> classify against the routing rules -> start the
+routed review -> arm per-PR auto-verdict per the rule. The worker never touches
+the merge queue or swimlanes. Keeping dispatch out of the sync cycle
 isolates gh latency/failures and gives natural retry + concurrency limiting.
 
 Modeled on auto_review_watcher.py: deferred imports, per-item try/except, the
@@ -50,32 +50,6 @@ def _dispatch_window_expired(row, config):
     return age_hours > timeout_hours
 
 
-def _ensure_queued_in_auto_lane(pr, repo_full, pr_number):
-    """Add the PR to the merge queue (if absent) and place it in the Auto lane.
-
-    Returns the queue item row.
-    """
-    from backend.database import get_queue_db, get_swimlanes_db
-
-    queue_db = get_queue_db()
-    item = queue_db.get_queue_item(pr_number, repo_full)
-    if item is None:
-        item = queue_db.add_to_queue(
-            pr_number=pr_number,
-            repo=repo_full,
-            pr_title=pr.get("title"),
-            pr_author=(pr.get("author") or {}).get("login"),
-            pr_url=pr.get("url"),
-            additions=pr.get("additions", 0),
-            deletions=pr.get("deletions", 0),
-            pr_state=pr.get("state"),
-        )
-    swimlanes_db = get_swimlanes_db()
-    auto_lane = swimlanes_db.ensure_auto_lane()
-    swimlanes_db.assign_card_to_lane(item["id"], auto_lane["id"])
-    return item
-
-
 def _get_pr_metadata(repo_full, pr_number):
     """PR metadata from the synced store, falling back to a live fetch."""
     from backend.database import get_synced_prs_db
@@ -97,8 +71,7 @@ def _dispatch_blocker(config, queue_data, pr, owner, repo, pr_number):
     Conditions: the PR targets the required base branch (when configured),
     CI completed and passing (when required; a PR with no checks at all
     passes), and the branch at most maxBehindBase commits behind its base
-    head. State/draft gating happens earlier in _process_one, before the PR is
-    placed on the board.
+    head. State/draft gating happens earlier in _process_one.
 
     The base gate waits rather than skips: a stacked PR is typically retargeted
     to main once its parent merges, and the pending row picks it up then.
@@ -149,7 +122,9 @@ def _repo_open_prs(cache, repo_full):
 
 def _process_one(row, config, batch_cache):
     """Handle one pending dispatch row. Returns True when a review was started."""
-    from backend.database import get_automation_dispatches_db, get_queue_db, get_reviews_db
+    from backend.database import (
+        get_automation_dispatches_db, get_auto_verdict_arming_db, get_reviews_db,
+    )
     from backend.services.automation_service import classify_files
     from backend.services.github_service import fetch_pr_files
     from backend.services.pr_status_comments import (
@@ -238,19 +213,10 @@ def _process_one(row, config, batch_cache):
     if row.get("detail") is None and not row.get("attempts"):
         post_automation_enrolled_comment(owner, repo, pr_number)
 
-    # Drafts wait off the board: they stay pending (so the ready transition is
-    # caught) but are not queued or placed in the Auto lane until non-draft.
+    # Drafts stay pending (so the ready transition is caught) but are not
+    # gated or routed until non-draft.
     if queue_data.get("isDraft"):
         _wait("PR is a draft")
-        return False
-
-    # Queue + lane placement happens before the remaining gates so a non-draft
-    # waiting PR is visible on the board (Auto lane, ⏳ badge) while its
-    # conditions settle.
-    try:
-        item = _ensure_queued_in_auto_lane(pr, repo_full, pr_number)
-    except Exception as e:
-        _retry_or_fail(f"queue/lane placement failed: {e}")
         return False
 
     blocker = _dispatch_blocker(config, queue_data, pr, owner, repo, pr_number)
@@ -295,10 +261,10 @@ def _process_one(row, config, batch_cache):
     )
     if status == 201:
         # Arm only after a successful spawn so a failure never leaves an armed
-        # card with no review.
+        # PR with no review.
         if rule.get("autoVerdict"):
-            get_queue_db().set_auto_verdict(
-                pr_number, repo_full, True, reviewer_key, mode=rule.get("autoVerdictMode"),
+            get_auto_verdict_arming_db().set_arming(
+                repo_full, pr_number, True, reviewer_key, mode=rule.get("autoVerdictMode"),
             )
         dispatches.set_status(row["id"], "dispatched", outcome_json=outcome_json,
                               reviewer_key=reviewer_key)

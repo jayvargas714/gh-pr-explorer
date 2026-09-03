@@ -25,18 +25,18 @@ _attempted_shas = {}
 
 
 def scan_and_start_followups():
-    """One pass over the armed queue: start follow-up reviews for new commits."""
-    from backend.database import get_queue_db, get_reviews_db
+    """One pass over the armed PRs: start follow-up reviews for new commits."""
+    from backend.database import get_auto_verdict_arming_db, get_reviews_db
     from backend.extensions import active_reviews, reviews_lock
     from backend.services.auto_verdict_config import apply_override, get_criteria
     from backend.services.github_service import fetch_open_prs_head_shas
     from backend.services.review_service import begin_review
 
-    armed = [item for item in get_queue_db().get_queue() if item.get("auto_verdict_enabled")]
+    armed = get_auto_verdict_arming_db().get_armed()
     if not armed:
         return
 
-    # The flag is per-card effective config: a card's criteria override can
+    # The flag is per-PR effective config: a PR's criteria override can
     # switch follow-ups on or off independently of the global setting.
     global_criteria = get_criteria()
 
@@ -87,12 +87,16 @@ def scan_and_start_followups():
             f"Auto follow-up review: new commits on {key} "
             f"({last_reviewed_sha[:9]} -> {current_sha[:9]}), starting {reviewer_type} review"
         )
+        # The arming row carries no PR metadata; the review being followed up
+        # recorded the same PR's url/title/author.
         payload, status = begin_review(
-            owner, repo, pr_number, item["pr_url"], reviews_db,
+            owner, repo, pr_number,
+            latest_review.get("pr_url") or f"https://github.com/{repo_full}/pull/{pr_number}",
+            reviews_db,
             is_followup=True,
             auto_started=True,
-            pr_title=item.get("pr_title"),
-            pr_author=item.get("pr_author"),
+            pr_title=latest_review.get("pr_title"),
+            pr_author=latest_review.get("pr_author"),
             reviewer_type=reviewer_type,
         )
         if status == 429:

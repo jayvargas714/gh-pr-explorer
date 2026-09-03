@@ -55,6 +55,91 @@ function scoreClass(score: number): string {
   return 'mx-revlog-score--bad'
 }
 
+function renderResult(e: RevLogEntry) {
+  // Auto verdicts carry an outcome (posted/suppressed/skipped/error) rather
+  // than the completed/failed status reviews and audits use.
+  if (e.kind === 'auto_verdict') {
+    return (
+      <span className="mx-revlog-result">
+        <span className={`mx-revlog-verdict mx-revlog-verdict--${e.status}`}>
+          {e.status === 'posted' ? AUTO_EVENT_LABELS[e.event ?? ''] ?? 'posted' : e.status}
+        </span>
+      </span>
+    )
+  }
+  if (e.status !== 'completed') {
+    return (
+      <span className="mx-revlog-status">
+        {e.status}
+        {e.kind === 'review' && e.autoStarted && (
+          <span className="mx-revlog-autostart">🤖 auto</span>
+        )}
+      </span>
+    )
+  }
+  if (e.kind === 'review') {
+    return (
+      <span className="mx-revlog-result">
+        {e.score !== null && e.score !== undefined ? (
+          <span className={`mx-revlog-score ${scoreClass(e.score)}`}>{e.score}/10</span>
+        ) : (
+          <span className="mx-revlog-score mx-revlog-score--neutral">no score</span>
+        )}
+        {e.isFollowup && <span className="mx-revlog-followup">follow-up</span>}
+        {e.autoStarted && <span className="mx-revlog-autostart">🤖 auto</span>}
+        {e.verdictOutcome && (
+          <span className={`mx-revlog-verdict mx-revlog-verdict--${e.verdictOutcome}`}>
+            {e.verdictOutcome === 'posted'
+              ? AUTO_EVENT_LABELS[e.verdictEvent ?? ''] ?? 'posted'
+              : e.verdictOutcome}
+          </span>
+        )}
+      </span>
+    )
+  }
+  return (
+    <span className="mx-revlog-result">
+      {e.findingCount ?? 0} findings
+      <span className={(e.blockingCount ?? 0) > 0 ? 'mx-revlog-blocking' : 'mx-revlog-clean'}>
+        {' · '}{e.blockingCount ?? 0} blocking
+      </span>
+    </span>
+  )
+}
+
+interface RevLogRowProps {
+  entry: RevLogEntry
+  onOpenReview: (id: number) => void
+  onOpenAudit: (id: number) => void
+}
+
+/** One rev-log line (kind tag · result · agent · when). Used by the hover
+ * popup here and by the pipeline row detail's inline rev-log list. */
+export function RevLogRow({ entry: e, onOpenReview, onOpenAudit }: RevLogRowProps) {
+  return (
+    <button
+      type="button"
+      className="mx-revlog-row"
+      title={e.kind === 'auto_verdict' ? e.reason ?? undefined : e.verdictReason ?? undefined}
+      onClick={() => {
+        if (e.kind === 'review') onOpenReview(e.id)
+        else if (e.kind === 'audit') onOpenAudit(e.id)
+        // Auto verdicts open the review they were derived from.
+        else if (e.reviewId) onOpenReview(e.reviewId)
+      }}
+    >
+      <span className={`mx-revlog-tag mx-revlog-tag--${e.kind}`}>{KIND_LABELS[e.kind]}</span>
+      {renderResult(e)}
+      {e.reviewerAgent && AGENT_META[e.reviewerAgent] && (
+        <span className={`mx-revlog-agent mx-revlog-agent--${e.reviewerAgent}`}>
+          {AGENT_META[e.reviewerAgent].label}
+        </span>
+      )}
+      <span className="mx-revlog-when">{formatLocalDateTime(e.timestamp)}</span>
+    </button>
+  )
+}
+
 export function RevLogBadge({ entries, onOpenReview, onOpenAudit }: RevLogBadgeProps) {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 })
@@ -72,58 +157,6 @@ export function RevLogBadge({ entries, onOpenReview, onOpenAudit }: RevLogBadgeP
 
   const hide = () => {
     hideTimer.current = setTimeout(() => setOpen(false), 150)
-  }
-
-  const renderResult = (e: RevLogEntry) => {
-    // Auto verdicts carry an outcome (posted/suppressed/skipped/error) rather
-    // than the completed/failed status reviews and audits use.
-    if (e.kind === 'auto_verdict') {
-      return (
-        <span className="mx-revlog-result">
-          <span className={`mx-revlog-verdict mx-revlog-verdict--${e.status}`}>
-            {e.status === 'posted' ? AUTO_EVENT_LABELS[e.event ?? ''] ?? 'posted' : e.status}
-          </span>
-        </span>
-      )
-    }
-    if (e.status !== 'completed') {
-      return (
-        <span className="mx-revlog-status">
-          {e.status}
-          {e.kind === 'review' && e.autoStarted && (
-            <span className="mx-revlog-autostart">🤖 auto</span>
-          )}
-        </span>
-      )
-    }
-    if (e.kind === 'review') {
-      return (
-        <span className="mx-revlog-result">
-          {e.score !== null && e.score !== undefined ? (
-            <span className={`mx-revlog-score ${scoreClass(e.score)}`}>{e.score}/10</span>
-          ) : (
-            <span className="mx-revlog-score mx-revlog-score--neutral">no score</span>
-          )}
-          {e.isFollowup && <span className="mx-revlog-followup">follow-up</span>}
-          {e.autoStarted && <span className="mx-revlog-autostart">🤖 auto</span>}
-          {e.verdictOutcome && (
-            <span className={`mx-revlog-verdict mx-revlog-verdict--${e.verdictOutcome}`}>
-              {e.verdictOutcome === 'posted'
-                ? AUTO_EVENT_LABELS[e.verdictEvent ?? ''] ?? 'posted'
-                : e.verdictOutcome}
-            </span>
-          )}
-        </span>
-      )
-    }
-    return (
-      <span className="mx-revlog-result">
-        {e.findingCount ?? 0} findings
-        <span className={(e.blockingCount ?? 0) > 0 ? 'mx-revlog-blocking' : 'mx-revlog-clean'}>
-          {' · '}{e.blockingCount ?? 0} blocking
-        </span>
-      </span>
-    )
   }
 
   return (
@@ -144,33 +177,12 @@ export function RevLogBadge({ entries, onOpenReview, onOpenAudit }: RevLogBadgeP
             onMouseLeave={hide}
           >
             {entries.map((e) => (
-              <button
+              <RevLogRow
                 key={`${e.kind}-${e.id}`}
-                type="button"
-                className="mx-revlog-row"
-                title={
-                  e.kind === 'auto_verdict'
-                    ? e.reason ?? undefined
-                    : e.verdictReason ?? undefined
-                }
-                onClick={() => {
-                  if (e.kind === 'review') onOpenReview(e.id)
-                  else if (e.kind === 'audit') onOpenAudit(e.id)
-                  // Auto verdicts open the review they were derived from.
-                  else if (e.reviewId) onOpenReview(e.reviewId)
-                }}
-              >
-                <span className={`mx-revlog-tag mx-revlog-tag--${e.kind}`}>
-                  {KIND_LABELS[e.kind]}
-                </span>
-                {renderResult(e)}
-                {e.reviewerAgent && AGENT_META[e.reviewerAgent] && (
-                  <span className={`mx-revlog-agent mx-revlog-agent--${e.reviewerAgent}`}>
-                    {AGENT_META[e.reviewerAgent].label}
-                  </span>
-                )}
-                <span className="mx-revlog-when">{formatLocalDateTime(e.timestamp)}</span>
-              </button>
+                entry={e}
+                onOpenReview={onOpenReview}
+                onOpenAudit={onOpenAudit}
+              />
             ))}
           </div>,
           document.body

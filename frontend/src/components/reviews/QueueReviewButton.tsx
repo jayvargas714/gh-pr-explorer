@@ -7,8 +7,18 @@ import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
 import type { MergeQueueItem } from '../../api/types'
 
+/** The slice of a queue card the review button needs — pipeline rows build
+ * this same shape from a PipelineRow, so the button is not queue-bound. */
+export type QueueReviewTarget = Pick<
+  MergeQueueItem,
+  | 'repo' | 'number' | 'url' | 'title' | 'author'
+  | 'hasReview' | 'reviewId'
+  | 'inlineCommentsPosted' | 'majorConcernsPosted' | 'minorIssuesPosted'
+  | 'autoVerdict'
+>
+
 interface QueueReviewButtonProps {
-  item: MergeQueueItem
+  item: QueueReviewTarget
   onRefresh: () => void
 }
 

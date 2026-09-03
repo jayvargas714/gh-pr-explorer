@@ -19,7 +19,7 @@ _TRANSIENT_ERRORS = (
 # the filter builder, and the sync worker must all fetch identical shapes.
 PR_LIST_JSON_FIELDS = (
     "number,title,author,state,isDraft,createdAt,updatedAt,closedAt,"
-    "mergedAt,url,body,headRefName,baseRefName,labels,assignees,"
+    "mergedAt,url,body,headRefName,headRefOid,baseRefName,labels,assignees,"
     "reviewRequests,reviewDecision,reviews,"
     "mergeable,additions,deletions,changedFiles,"
     "milestone,statusCheckRollup"

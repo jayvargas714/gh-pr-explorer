@@ -23,9 +23,11 @@ def create_app():
     app = Flask(__name__)
     register_blueprints(app)
 
-    # Seed default swimlane and reconcile any merge_queue rows that predate the feature.
+    # Retire the automation "Auto" lane (and the cards it parked), then seed the
+    # default swimlane and reconcile any merge_queue rows that predate the feature.
     try:
         swimlanes = get_swimlanes_db()
+        swimlanes.retire_auto_lane()
         swimlanes.ensure_default_lane()
         swimlanes.reconcile_assignments()
     except Exception as e:

@@ -10,50 +10,14 @@ import {
   setSwimlaneCardPinned,
 } from '../api/swimlanes'
 import { removeFromQueue } from '../api/queue'
+import {
+  BadgeFilterKey,
+  BadgeFilterMode,
+  subjectMatchesBadges,
+  subjectMatchesQuery,
+} from '../utils/badgeFilters'
 
 type CardsByLane = Record<number, MergeQueueItem[]>
-
-// Badge filter keys grouped by visual dimension. Within a dimension, multiple
-// picks are OR'd (a single card can't be both Open and Merged); across
-// dimensions, the combinator is controlled by `badgeFilterMode`.
-export type BadgeFilterKey =
-  | 'state:open' | 'state:closed' | 'state:merged'
-  | 'draft'
-  | 'review:approved' | 'review:changes_requested' | 'review:review_required'
-  | 'ci:success' | 'ci:failure' | 'ci:pending'
-  | 'has_review' | 'score:good' | 'score:ok' | 'score:bad'
-  | 'new_commits' | 'reviewers_requested' | 'followup'
-  | 'auto:armed' | 'auto:posted' | 'auto:needs_approval' | 'auto:unidentified'
-
-type BadgeDimension =
-  | 'state' | 'draft' | 'review' | 'ci' | 'review_score'
-  | 'new_commits' | 'reviewers' | 'followup' | 'auto_verdict'
-
-export const BADGE_DIMENSION: Record<BadgeFilterKey, BadgeDimension> = {
-  'state:open': 'state',
-  'state:closed': 'state',
-  'state:merged': 'state',
-  draft: 'draft',
-  'review:approved': 'review',
-  'review:changes_requested': 'review',
-  'review:review_required': 'review',
-  'ci:success': 'ci',
-  'ci:failure': 'ci',
-  'ci:pending': 'ci',
-  has_review: 'review_score',
-  'score:good': 'review_score',
-  'score:ok': 'review_score',
-  'score:bad': 'review_score',
-  new_commits: 'new_commits',
-  reviewers_requested: 'reviewers',
-  followup: 'followup',
-  'auto:armed': 'auto_verdict',
-  'auto:posted': 'auto_verdict',
-  'auto:needs_approval': 'auto_verdict',
-  'auto:unidentified': 'auto_verdict',
-}
-
-export type BadgeFilterMode = 'OR' | 'AND'
 
 // Quick auto-mode filter, surfaced in the board header as a segmented control.
 // Deliberately separate from the `auto:armed` badge chip: this is the one-click
@@ -154,81 +118,18 @@ export function pinZoneClamp(
   return Math.max(lo, Math.min(desiredIndex, hi))
 }
 
-/**
- * Match a swimlane card against the search query. Matches:
- *  - exact PR number (when query is all digits)
- *  - any substring of PR number, title, author, repo (case-insensitive)
- * Empty / whitespace-only query → always false (caller decides what to do).
- */
+/** Match a swimlane card against the search query (see subjectMatchesQuery). */
 export function cardMatchesQuery(card: MergeQueueItem, query: string): boolean {
-  const q = query.trim().toLowerCase()
-  if (!q) return false
-  if (/^\d+$/.test(q) && String(card.number) === q) return true
-  const haystack = [
-    String(card.number),
-    card.title || '',
-    card.author || '',
-    card.repo || '',
-  ]
-    .join(' ')
-    .toLowerCase()
-  return haystack.includes(q)
+  return subjectMatchesQuery(card, query)
 }
 
-// Per-key predicate. Field names mirror getStateBadge/getReviewStatusBadge/etc.
-// in QueueItem so a filter matches exactly the cards whose badge is rendered.
-function cardMatchesBadge(card: MergeQueueItem, key: BadgeFilterKey): boolean {
-  switch (key) {
-    case 'state:open':   return card.prState === 'OPEN'
-    case 'state:closed': return card.prState === 'CLOSED'
-    case 'state:merged': return card.prState === 'MERGED'
-    case 'draft':        return !!card.isDraft
-    case 'review:approved':          return card.reviewDecision === 'APPROVED'
-    case 'review:changes_requested': return card.reviewDecision === 'CHANGES_REQUESTED'
-    case 'review:review_required':   return card.reviewDecision === 'REVIEW_REQUIRED'
-    case 'ci:success': return card.ciStatus === 'success'
-    case 'ci:failure': return card.ciStatus === 'failure'
-    case 'ci:pending': return card.ciStatus === 'pending'
-    case 'has_review': return !!card.hasReview
-    case 'score:good': return !!card.hasReview && card.reviewScore != null && card.reviewScore >= 7
-    case 'score:ok':   return !!card.hasReview && card.reviewScore != null && card.reviewScore >= 4 && card.reviewScore <= 6
-    case 'score:bad':  return !!card.hasReview && card.reviewScore != null && card.reviewScore < 4
-    case 'new_commits':         return !!card.hasNewCommits
-    case 'reviewers_requested': return (card.currentReviewers?.length ?? 0) > 0
-    case 'followup':            return !!card.isFollowup
-    case 'auto:armed':          return !!card.autoVerdict?.enabled
-    case 'auto:posted':         return card.autoVerdict?.last?.outcome === 'posted'
-    case 'auto:needs_approval': return card.autoVerdict?.last?.outcome === 'suppressed'
-    case 'auto:unidentified':   return card.automation?.status === 'unidentified'
-  }
-}
-
-/**
- * Visibility check for the badge filter. Returns true when no filters are
- * active. With multiple filters: within a dimension picks are OR'd; across
- * dimensions the combinator is `mode`.
- */
+/** Visibility check for the badge filter (see subjectMatchesBadges). */
 export function cardMatchesBadges(
   card: MergeQueueItem,
   filters: Set<BadgeFilterKey>,
   mode: BadgeFilterMode,
 ): boolean {
-  if (filters.size === 0) return true
-  if (mode === 'OR') {
-    for (const k of filters) if (cardMatchesBadge(card, k)) return true
-    return false
-  }
-  const byDim = new Map<BadgeDimension, BadgeFilterKey[]>()
-  for (const k of filters) {
-    const dim = BADGE_DIMENSION[k]
-    const arr = byDim.get(dim)
-    if (arr) arr.push(k)
-    else byDim.set(dim, [k])
-  }
-  for (const keys of byDim.values()) {
-    if (!keys.some((k) => cardMatchesBadge(card, k))) return false
-  }
-  return true
+  return subjectMatchesBadges(card, filters, mode)
 }
 
 /** Visibility check for the auto-mode segmented control. */

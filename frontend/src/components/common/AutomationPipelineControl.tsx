@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
 import { enrollAutomationDispatch, optOutAutomationDispatch } from '../../api/automation'
 import { AutomationDispatchRow, AutomationDispatchState } from '../../api/types'
+import { usePipelineStore } from '../../stores/usePipelineStore'
 import { Badge } from './Badge'
 
+/** PR-keyed so the same control renders on PR list cards, queue/board cards
+ * and pipeline rows. `repo` is `owner/name`. */
 interface AutomationPipelineControlProps {
-  repoFull: string
+  repo: string
   prNumber: number
   automation: AutomationDispatchState | null | undefined
   /** Closed/merged PRs can't be enrolled; hide the add button for them. */
@@ -61,13 +64,14 @@ function pipelineBadge(automation: AutomationDispatchState) {
 
 /** Automation pipeline badge plus the add/remove-from-pipeline control.
  *
- * Shared by PR list cards and queue/swimlane cards so pipeline membership is
- * visible — and controllable — everywhere a PR appears. Waiting PRs offer
- * "remove" (manual opt-out); un-enrolled or skipped/failed PRs offer "add";
- * dispatched/unidentified PRs are already handled, so only the badge shows.
+ * Shared by PR list cards, queue/swimlane cards and pipeline rows so pipeline
+ * membership is visible — and controllable — everywhere a PR appears. Waiting
+ * PRs offer "remove" (manual opt-out); un-enrolled or skipped/failed PRs offer
+ * "add"; dispatched/unidentified PRs are already handled, so only the badge
+ * shows.
  */
 export function AutomationPipelineControl({
-  repoFull,
+  repo,
   prNumber,
   automation,
   prState,
@@ -75,6 +79,8 @@ export function AutomationPipelineControl({
   // Server state arrives via list refreshes; toggles apply optimistically here.
   const [override, setOverride] = useState<AutomationDispatchState | null | undefined>(undefined)
   const [busy, setBusy] = useState(false)
+  const patchRow = usePipelineStore((s) => s.patchRow)
+  const setAutomationLocal = usePipelineStore((s) => s.setAutomationLocal)
 
   useEffect(() => {
     setOverride(undefined)
@@ -93,9 +99,14 @@ export function AutomationPipelineControl({
     setBusy(true)
     try {
       const resp = canRemove
-        ? await optOutAutomationDispatch(repoFull, prNumber)
-        : await enrollAutomationDispatch(repoFull, prNumber)
-      setOverride(rowToState(resp.dispatch))
+        ? await optOutAutomationDispatch(repo, prNumber)
+        : await enrollAutomationDispatch(repo, prNumber)
+      const next = rowToState(resp.dispatch)
+      setOverride(next)
+      // Keep the pipeline overlay's copy in step (no-op when the PR isn't
+      // in its rows yet — the next poll picks the new row up).
+      if (resp.row) patchRow(resp.row)
+      else setAutomationLocal(repo, prNumber, next)
     } catch {
       // Leave the rendered state as-is; the next list refresh is the truth.
     } finally {

@@ -19,6 +19,7 @@ from backend.logging_setup import configure_logging
 from backend.services.auto_review_watcher import auto_review_watcher_loop
 from backend.services.auto_verdict_watcher import auto_verdict_watcher_loop
 from backend.services.automation_dispatch_worker import automation_dispatch_worker_loop
+from backend.services.pipeline_snapshot import pipeline_snapshot_loop
 from backend.services.pr_sync_worker import pr_sync_worker_loop
 from backend.services.review_reconciliation import reconcile_orphaned_reviews
 from backend.services.stale_review_watcher import stale_review_watcher_loop
@@ -55,6 +56,8 @@ if __name__ == "__main__":
         # Drain pending automation dispatches into reviews. Started
         # unconditionally: the loop's own scope=='off' check is the gate.
         threading.Thread(target=automation_dispatch_worker_loop, daemon=True).start()
+        # Keep the Pipeline view's in-memory snapshot fresh (DB only, no gh).
+        threading.Thread(target=pipeline_snapshot_loop, daemon=True).start()
 
     app.run(
         host=config.get("host", "127.0.0.1"),

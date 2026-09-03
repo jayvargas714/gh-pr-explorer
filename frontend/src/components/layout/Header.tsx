@@ -6,7 +6,7 @@ import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
 
 export function Header() {
-  const { darkMode, toggleTheme, toggleQueuePanel, toggleHistoryPanel, toggleSwimlaneBoard, setActiveView } = useUIStore()
+  const { darkMode, toggleTheme, toggleQueuePanel, toggleHistoryPanel, toggleSwimlaneBoard, togglePipeline } = useUIStore()
   const queueCount = useQueueStore((state) => state.getQueueCount())
   const autoVerdictConfig = useAutoVerdictStore((state) => state.config)
   const automationScope = useAutomationStore((state) => state.config.scope)
@@ -48,13 +48,13 @@ export function Header() {
           <span className="mx-icon">📊</span>
         </Button>
 
-        {/* Automation Panel */}
+        {/* Pipeline overlay (automation config lives behind its ⚙) */}
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => setActiveView('automation')}
+          onClick={togglePipeline}
           className="mx-header__action"
-          data-tooltip={`Automation — ${describeCriteria(autoVerdictConfig)}`}
+          data-tooltip={`Pipeline — ${describeCriteria(autoVerdictConfig)}`}
         >
           <span className="mx-icon">🤖</span>
           {(autoVerdictConfig.enabled || automationScope !== 'off') && (
