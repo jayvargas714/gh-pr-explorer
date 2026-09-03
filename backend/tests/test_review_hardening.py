@@ -345,11 +345,11 @@ def test_sweeper_removes_only_old_unused_workspaces(monkeypatch, tmp_path):
 # --- dispatch window expiry ------------------------------------------------------
 
 def test_dispatch_window_expiry():
-    fresh = {"created_at": "2026-09-01 00:00:00"}
+    fresh = {"enrolled_at": "2026-09-01 00:00:00"}
     assert _dispatch_window_expired(fresh, {"dispatchTimeoutHours": 0}) is False
 
-    old = {"created_at": "2020-01-01 00:00:00"}
+    old = {"enrolled_at": "2020-01-01 00:00:00"}
     assert _dispatch_window_expired(old, {"dispatchTimeoutHours": 72}) is True
 
-    just_created = {"created_at": None}
-    assert _dispatch_window_expired(just_created, {"dispatchTimeoutHours": 72}) is False
+    never_enrolled = {"enrolled_at": None}
+    assert _dispatch_window_expired(never_enrolled, {"dispatchTimeoutHours": 72}) is False

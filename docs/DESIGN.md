@@ -477,8 +477,9 @@ CREATE TABLE IF NOT EXISTS automation_dispatches (
     reviewer_key TEXT,              -- routed reviewer for matched/default outcomes
     detail TEXT,                    -- error / skip reason
     attempts INTEGER NOT NULL DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,   -- first seen (never changes)
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    enrolled_at DATETIME,           -- dispatch-window clock; stamped on insert, reset by requeue
     UNIQUE(repo, pr_number)
 );
 CREATE INDEX idx_automation_dispatches_status ON automation_dispatches(status);
@@ -2292,7 +2293,7 @@ maps over `useAutomationStore.reviewers` instead of local constants.
 | `requireCiPass` | `true` | CI must be completed and passing before dispatch |
 | `requireBaseBranch` | `"main"` | the PR must target this branch for merge to dispatch; a PR on another base waits (stacked PRs dispatch after retargeting). Empty string = any base |
 | `maxBehindBase` | `10` | max commits the PR branch may be behind its base head |
-| `dispatchTimeoutHours` | `0` | rows still `pending` (waiting on gates) after this many hours are `skipped` with "dispatch window expired"; `0` = wait forever |
+| `dispatchTimeoutHours` | `0` | rows still `pending` (waiting on gates) this many hours after their `enrolled_at` are `skipped` with "dispatch window expired"; re-enrolling restarts the clock; `0` = wait forever |
 | `maxPipelineSize` | `1000` | max pending pipeline rows; new candidates are refused at the cap |
 | `ignorePatterns` | `[]` | globs stripped before classification (index files) |
 | `defaultRule` | default reviewer, verdict off | applies when no rule matches |
@@ -2332,8 +2333,8 @@ lists open PRs via `gh pr list --json number,author` (drafts included — an
 un-enrolled draft would never be caught at its ready transition), filters by
 author when scope is `authors`, then inserts missing rows as `pending` and
 revives `skipped`/`failed` rows of still-open PRs back to `pending` (via
-`AutomationDispatchesDB.requeue`, which clears attempts and replaces the detail
-with "revived by backfill"). `pending`/`dispatched`/`unidentified` rows are left
+`AutomationDispatchesDB.requeue`, which clears attempts, replaces the detail
+with "revived by backfill", and restarts the dispatch-window clock). `pending`/`dispatched`/`unidentified` rows are left
 untouched, preserving dispatch-at-most-once. Rows whose detail is
 `manual opt-out` are never revived — an operator's explicit removal sticks
 until re-enrolled by hand. Respects `maxPipelineSize` and prints
@@ -2406,7 +2407,11 @@ its base head (via `fetch_pr_behind_by`, the `gh api …/compare/{base}...{head}
 `behind_by` count; a compare failure blocks without consuming attempts). A
 blocked row stays `pending` with `detail = "waiting: <reason>"` **for as long as
 the PR stays open** — unless `dispatchTimeoutHours` is set, in which case a row
-older than that is `skipped` with "dispatch window expired"; CI turning green,
+whose `enrolled_at` is older than that is `skipped` with "dispatch window
+expired" (the clock is `enrolled_at`, not `created_at`: every `requeue` path —
+manual re-enroll, backfill revive, restart reconciliation — resets it, so a
+revived row gets a full fresh window instead of re-expiring on its next
+evaluation); CI turning green,
 a rebase, retargeting to main, or marking ready triggers the review naturally,
 and a closed/merged PR is `skipped` on its next evaluation. Each clean waiting evaluation resets the
 row's `attempts` (via `reset_attempts`), so transient errors spread over a long
@@ -2414,7 +2419,9 @@ wait can never accumulate into a permanent `failed`.
 
 **Dispatch statuses** (`automation_dispatches.status`): `pending` → `dispatched`
 | `unidentified` | `skipped` | `failed`. The row also stores `outcome_json`
-(classification result), `reviewer_key`, `detail`, `attempts`.
+(classification result), `reviewer_key`, `detail`, `attempts`, and
+`enrolled_at` (the dispatch-window clock; legacy rows were seeded from
+`created_at` by a startup migration).
 
 **No board placement**: the dispatcher used to add every evaluated PR to the
 merge queue and park it in a protected "Auto" swimlane (that is where arming

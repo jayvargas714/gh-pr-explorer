@@ -149,3 +149,55 @@ def test_get_for_prs_batch_lookup(dispatches):
     dispatches.record_candidate("other/repo", 2)
     rows = dispatches.get_for_prs([(REPO, 1), ("other/repo", 2), (REPO, 99)])
     assert set(rows.keys()) == {(REPO, 1), ("other/repo", 2)}
+
+
+def test_requeue_resets_enrolled_at(dispatches):
+    """The dispatch-window timer runs from enrolled_at, which requeue restarts;
+    created_at stays the first-seen timestamp."""
+    dispatches.record_candidate(REPO, 1)
+    row = dispatches.get_by_pr(REPO, 1)
+    with dispatches.db.connection() as conn:
+        conn.execute(
+            "UPDATE automation_dispatches SET created_at = datetime('now', '-100 hours'), "
+            "enrolled_at = datetime('now', '-100 hours') WHERE id = ?",
+            (row["id"],),
+        )
+    dispatches.set_status(row["id"], "skipped", detail="dispatch window expired (72h)")
+
+    dispatches.requeue(row["id"], detail="manually re-enrolled")
+
+    fresh = dispatches.get_by_pr(REPO, 1)
+    assert fresh["created_at"] < fresh["enrolled_at"]
+    assert fresh["enrolled_at"] >= dispatches.get_by_pr(REPO, 1)["updated_at"][:10]
+
+
+def test_legacy_rows_backfill_enrolled_at_from_created_at(tmp_path):
+    """Databases created before enrolled_at existed get the column added and
+    seeded from created_at, so existing rows keep their original window."""
+    import sqlite3
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE automation_dispatches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo TEXT NOT NULL,
+            pr_number INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            outcome_json TEXT,
+            reviewer_key TEXT,
+            detail TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(repo, pr_number)
+        );
+        INSERT INTO automation_dispatches (repo, pr_number, created_at)
+        VALUES ('owner/repo', 1, '2026-08-31 18:56:35');
+    """)
+    conn.commit()
+    conn.close()
+
+    legacy = AutomationDispatchesDB(Database(path))
+
+    row = legacy.get_by_pr(REPO, 1)
+    assert row["enrolled_at"] == "2026-08-31 18:56:35"

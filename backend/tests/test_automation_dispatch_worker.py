@@ -111,9 +111,9 @@ def _gates(state="OPEN", is_draft=False, rollup=CI_SUCCESS, behind=0, batch=...)
 def _age_row(stores, pr_number, hours):
     with stores["db"].connection() as conn:
         conn.execute(
-            "UPDATE automation_dispatches SET created_at = datetime('now', ?) "
-            "WHERE repo = ? AND pr_number = ?",
-            (f"-{hours} hours", REPO, pr_number),
+            "UPDATE automation_dispatches SET created_at = datetime('now', ?), "
+            "enrolled_at = datetime('now', ?) WHERE repo = ? AND pr_number = ?",
+            (f"-{hours} hours", f"-{hours} hours", REPO, pr_number),
         )
 
 
@@ -624,3 +624,18 @@ def test_closed_pr_skip_is_silent(env, monkeypatch, comments):
     _run_gated(env, monkeypatch, {"state": "MERGED"})
 
     assert comments == []
+
+
+def test_reenrolled_row_gets_a_fresh_dispatch_window(env, monkeypatch):
+    """Requeue restarts the dispatch-window timer: a row that expired once and
+    was re-enrolled must wait the full window again, not re-expire next cycle."""
+    env["dispatches"].record_candidate(REPO, 7)
+    _age_row(env, 7, hours=100)
+    row = env["dispatches"].get_by_pr(REPO, 7)
+    env["dispatches"].requeue(row["id"], detail="manually re-enrolled")
+
+    _run_gated(env, monkeypatch, {"rollup": CI_PENDING}, cfg_overrides={"dispatchTimeoutHours": 48})
+
+    fresh = env["dispatches"].get_by_pr(REPO, 7)
+    assert fresh["status"] == "pending"
+    assert fresh["detail"].startswith("waiting:")

@@ -33,20 +33,25 @@ EVAL_LIMIT = 20
 
 
 def _dispatch_window_expired(row, config):
-    """True when dispatchTimeoutHours is set and this row has waited past it."""
+    """True when dispatchTimeoutHours is set and this row has waited past it.
+
+    The clock is enrolled_at, not created_at: requeue (manual re-enroll,
+    backfill revive, restart reconciliation) restarts it, so a row that
+    expired once gets a full fresh window instead of re-expiring next cycle.
+    """
     timeout_hours = config.get("dispatchTimeoutHours", 0)
     if not timeout_hours:
         return False
-    created = row.get("created_at")
-    if not created:
+    enrolled = row.get("enrolled_at")
+    if not enrolled:
         return False
     try:
-        created_dt = datetime.fromisoformat(str(created))
+        enrolled_dt = datetime.fromisoformat(str(enrolled))
     except ValueError:
         return False
-    if created_dt.tzinfo is None:
-        created_dt = created_dt.replace(tzinfo=timezone.utc)
-    age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600
+    if enrolled_dt.tzinfo is None:
+        enrolled_dt = enrolled_dt.replace(tzinfo=timezone.utc)
+    age_hours = (datetime.now(timezone.utc) - enrolled_dt).total_seconds() / 3600
     return age_hours > timeout_hours
 
 

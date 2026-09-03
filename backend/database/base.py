@@ -403,6 +403,7 @@ class Database:
                     attempts INTEGER NOT NULL DEFAULT 0,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    enrolled_at DATETIME,
                     UNIQUE(repo, pr_number)
                 )
             """)
@@ -410,6 +411,19 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_automation_dispatches_status
                 ON automation_dispatches(status)
             """)
+
+            # Migration: enrolled_at is the dispatch-window clock (reset on
+            # requeue), distinct from created_at (first seen). Seed legacy rows
+            # from created_at so their window is unchanged.
+            cursor.execute("PRAGMA table_info(automation_dispatches)")
+            dispatch_columns = {row[1] for row in cursor.fetchall()}
+            if "enrolled_at" not in dispatch_columns:
+                cursor.execute("ALTER TABLE automation_dispatches ADD COLUMN enrolled_at DATETIME")
+                cursor.execute(
+                    "UPDATE automation_dispatches SET enrolled_at = created_at "
+                    "WHERE enrolled_at IS NULL"
+                )
+                logger.info("Added column enrolled_at to automation_dispatches table")
 
             # Reviewer registry: configurable reviewer agents (seeded by ReviewersDB.ensure_builtins)
             cursor.execute("""

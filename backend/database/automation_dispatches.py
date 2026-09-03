@@ -24,7 +24,8 @@ class AutomationDispatchesDB:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT OR IGNORE INTO automation_dispatches (repo, pr_number) VALUES (?, ?)",
+                "INSERT OR IGNORE INTO automation_dispatches (repo, pr_number, enrolled_at) "
+                "VALUES (?, ?, CURRENT_TIMESTAMP)",
                 (repo, pr_number),
             )
             inserted = cursor.rowcount > 0
@@ -125,13 +126,14 @@ class AutomationDispatchesDB:
 
     def requeue(self, dispatch_id: int, detail: Optional[str] = None) -> None:
         """Put a terminal row back into the pipeline: pending, attempts cleared,
-        detail replaced (not COALESCEd — the old failure text must not linger)."""
+        detail replaced (not COALESCEd — the old failure text must not linger),
+        and the dispatch-window clock (enrolled_at) restarted."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE automation_dispatches "
                 "SET status = 'pending', attempts = 0, detail = ?, "
-                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                "updated_at = CURRENT_TIMESTAMP, enrolled_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (detail, dispatch_id),
             )
         _mark_pipeline_dirty()
