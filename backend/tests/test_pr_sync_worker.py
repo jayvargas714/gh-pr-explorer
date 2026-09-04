@@ -255,7 +255,25 @@ def review_request_hook(monkeypatch):
         "backend.services.review_request_service.handle_review_request",
         lambda repo, number, pr_row: calls.append((repo, number)),
     )
+    # The sweep needs the dispatch/request stores; the diff tests isolate it.
+    monkeypatch.setattr(
+        "backend.services.review_request_service.untracked_review_requests",
+        lambda repo, rows, login: [],
+    )
     return calls
+
+
+@pytest.fixture
+def untracked_sweep(monkeypatch):
+    """Record what the sweep is asked to inspect; report every requested PR as untracked."""
+    seen = {}
+
+    def _sweep(repo, rows, login):
+        seen[repo] = sorted(rows)
+        return sorted(n for n, r in rows.items()
+                      if any(x.get("login") == login for x in r.get("reviewRequests") or []))
+    monkeypatch.setattr("backend.services.review_request_service.untracked_review_requests", _sweep)
+    return seen
 
 
 def test_incremental_detects_new_review_request_for_me(store, review_request_hook):
@@ -294,7 +312,34 @@ def test_review_request_hook_failure_does_not_break_sync(store, monkeypatch):
     def boom(*args, **kwargs):
         raise RuntimeError("router exploded")
     monkeypatch.setattr("backend.services.review_request_service.handle_review_request", boom)
+    monkeypatch.setattr("backend.services.review_request_service.untracked_review_requests", boom)
 
     _run_incremental(store, [1], {1: _pr_with_requests(1, ME)})
     assert 1 in store.get_prs_by_numbers("acme/widgets", [1])
     assert store.get_repo("acme/widgets")["last_synced_at"] is not None
+
+
+def test_incremental_sweeps_every_open_pr_for_untracked_requests(store, review_request_hook,
+                                                                 untracked_sweep):
+    """A standing request on a PR outside this cycle's batch is still routed,
+    and one the diff already handled is not routed twice."""
+    _synced_repo(store)
+    store.upsert_pr("acme/widgets", _pr_with_requests(2, ME))                  # quiet, standing request
+    store.upsert_pr("acme/widgets", _pr_with_requests(4))                      # quiet, no request
+    store.upsert_pr("acme/widgets", _pr_with_requests(5, ME))
+    store.upsert_pr("acme/widgets", {**_pr_with_requests(5, ME), "state": "MERGED"})  # closed
+
+    _run_incremental(store, [1], {1: _pr_with_requests(1, ME)})  # diff detects 1
+
+    assert untracked_sweep == {"acme/widgets": [1, 2, 4]}
+    assert review_request_hook == [("acme/widgets", 1), ("acme/widgets", 2)]
+
+
+def test_incremental_sweeps_even_when_nothing_changed(store, review_request_hook, untracked_sweep):
+    _synced_repo(store)
+    store.upsert_pr("acme/widgets", _pr_with_requests(2, ME))
+
+    _run_incremental(store, [], {})
+
+    assert untracked_sweep == {"acme/widgets": [2]}
+    assert review_request_hook == [("acme/widgets", 2)]

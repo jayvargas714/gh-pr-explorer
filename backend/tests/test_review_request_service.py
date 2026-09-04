@@ -11,6 +11,7 @@ from backend.database.automation_dispatches import AutomationDispatchesDB
 from backend.database.review_requests import ReviewRequestsDB
 from backend.services.review_request_service import (
     detect_new_review_requests, handle_review_request, review_requested_from,
+    untracked_review_requests,
 )
 
 REPO = "acme/widgets"
@@ -224,3 +225,79 @@ def test_review_requested_from_reads_current_requests():
     assert review_requested_from(_row("team:platform"), ME) is False
     assert review_requested_from({}, ME) is False
     assert review_requested_from(_row(ME), None) is False
+
+
+# ----- reconciliation sweep (outstanding but untracked requests) -----
+
+def _dispatch(env, number, status, detail=None, **kwargs):
+    env["dispatches"].record_candidate(REPO, number)
+    row = env["dispatches"].get_by_pr(REPO, number)
+    if status != "pending":
+        env["dispatches"].set_status(row["id"], status, detail=detail, **kwargs)
+    return row
+
+
+def test_untracked_requests_without_dispatch_row_are_hits(env):
+    assert untracked_review_requests(REPO, {7: _row(ME)}, ME) == [7]
+
+
+def test_untracked_requests_skip_pending_rows(env):
+    _dispatch(env, 7, "pending")
+    assert untracked_review_requests(REPO, {7: _row(ME)}, ME) == []
+
+
+@pytest.mark.parametrize("status", ["skipped", "failed"])
+def test_untracked_requests_include_terminal_dispatch_rows(env, status):
+    _dispatch(env, 7, status, detail="dispatch window expired (72h)")
+    assert untracked_review_requests(REPO, {7: _row(ME)}, ME) == [7]
+
+
+def test_untracked_requests_skip_unidentified_rows(env):
+    _dispatch(env, 7, "unidentified", detail="files span rules")
+    assert untracked_review_requests(REPO, {7: _row(ME)}, ME) == []
+
+
+def test_untracked_requests_include_dispatched_without_followup_demand(env):
+    _dispatch(env, 7, "dispatched")
+    assert untracked_review_requests(REPO, {7: _row(ME)}, ME) == [7]
+
+
+@pytest.mark.parametrize("status", ["pending", "fulfilled", "skipped", "failed"])
+def test_untracked_requests_skip_dispatched_with_any_request_row(env, status):
+    _dispatch(env, 7, "dispatched")
+    env["requests"].record(REPO, 7)
+    if status != "pending":
+        env["requests"].set_status(env["requests"].get_by_pr(REPO, 7)["id"], status)
+    assert untracked_review_requests(REPO, {7: _row(ME)}, ME) == []
+
+
+def test_untracked_requests_ignore_unrequested_closed_and_other_logins(env):
+    closed = _row(ME, number=8)
+    closed["state"] = "MERGED"
+    rows = {7: _row("someone-else", "team:platform"), 8: closed, 9: _row(ME, number=9)}
+    assert untracked_review_requests(REPO, rows, ME) == [9]
+
+
+def test_untracked_requests_no_login_finds_nothing(env):
+    assert untracked_review_requests(REPO, {7: _row(ME)}, None) == []
+
+
+def test_untracked_requests_are_sorted(env):
+    rows = {9: _row(ME, number=9), 3: _row(ME, number=3)}
+    assert untracked_review_requests(REPO, rows, ME) == [3, 9]
+
+
+def test_untracked_request_routes_like_a_fresh_request(env, monkeypatch, comments):
+    """End to end: a standing request on a reviewed PR (dispatched, no demand)
+    queues a follow-up and posts the queued comment; a second sweep is silent."""
+    _dispatch(env, 7, "dispatched", reviewer_key="default")
+    rows = {7: _row(ME)}
+    from backend.services import automation_config
+    monkeypatch.setattr(automation_config, "get_config", lambda: _cfg())
+
+    for number in untracked_review_requests(REPO, rows, ME):
+        handle_review_request(REPO, number, rows[number])
+    assert env["requests"].get_by_pr(REPO, 7)["status"] == "pending"
+    assert [c["kind"] for c in comments] == ["followup_queued"]
+
+    assert untracked_review_requests(REPO, rows, ME) == []

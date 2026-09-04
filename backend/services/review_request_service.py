@@ -57,6 +57,48 @@ def detect_new_review_requests(old_rows: Dict[int, Dict[str, Any]],
     return sorted(hits)
 
 
+def untracked_review_requests(repo_full: str, rows: Dict[int, Dict[str, Any]],
+                              login: Optional[str]) -> List[int]:
+    """Open PRs where `login` is a requested reviewer but the pipeline is not
+    acting on it.
+
+    The diff detector only sees a request *appear*. A request that was already
+    standing when the detector started, or one GitHub re-issued as a remove+add
+    between two syncs (the "re-request" button), never produces that transition.
+    Sweeping the current rows catches them: routing `handle_review_request` on
+    these is idempotent, so each hit is routed once and then disappears —
+    no dispatch row / skipped / failed become pending; dispatched without a
+    `review_requests` row gains one. Pending rows are already waiting on gates,
+    unidentified rows stay a human decision, and any existing `review_requests`
+    row (even terminal) is left alone: reviving it on every sweep would loop a
+    follow-up whenever a posted review failed to clear the GitHub request.
+    """
+    if not login:
+        return []
+    candidates = sorted(
+        number for number, row in rows.items()
+        if row.get("state") == "OPEN" and login in _requested_logins(row)
+    )
+    if not candidates:
+        return []
+
+    from backend.database import get_automation_dispatches_db, get_review_requests_db
+    pairs = [(repo_full, n) for n in candidates]
+    dispatches = get_automation_dispatches_db().get_for_prs(pairs)
+    requests = get_review_requests_db().get_for_prs(pairs)
+
+    hits = []
+    for number in candidates:
+        dispatch = dispatches.get((repo_full, number))
+        status = dispatch["status"] if dispatch else None
+        if status in ("pending", "unidentified"):
+            continue
+        if status == "dispatched" and (repo_full, number) in requests:
+            continue
+        hits.append(number)
+    return hits
+
+
 def handle_review_request(repo_full: str, pr_number: int, pr_row: Dict[str, Any]) -> None:
     """Route one detected review request into the pipeline. Never raises."""
     try:

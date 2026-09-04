@@ -87,27 +87,37 @@ def incremental_sync_repo(store, repo_full, history_days):
 
 
 def _record_review_requests(store, repo_full, numbers, old_rows):
-    """Route GitHub review requests newly addressed to the authenticated user.
+    """Route GitHub review requests addressed to the authenticated user.
 
-    Diffs the pre-hydration rows against the fresh ones, so detection costs no
-    gh calls and is restart-safe (the old state is the persisted blob). Only
-    called from incremental sync — never from backfill. Must never raise into
-    the sync cycle.
+    Two feeds, both free of gh calls: diffing the pre-hydration rows against the
+    fresh ones catches a request the moment it appears; sweeping every open row
+    for a standing request the pipeline is not tracking catches the ones the
+    diff cannot see (requests predating the detector, or re-requests GitHub
+    records as remove+add between two syncs). Only called from incremental sync
+    — never from backfill. Must never raise into the sync cycle.
     """
-    if not numbers:
-        return
     try:
         from backend.services.review_request_service import (
-            detect_new_review_requests, handle_review_request,
+            detect_new_review_requests, handle_review_request, untracked_review_requests,
         )
 
         login = get_authenticated_login()
         if not login:
             return
         new_rows = store.get_prs_by_numbers(repo_full, numbers)
+        handled = set()
         for number in detect_new_review_requests(old_rows, new_rows, login):
             logger.info(f"Review request for {login} detected on {repo_full}#{number}")
             handle_review_request(repo_full, number, new_rows[number])
+            handled.add(number)
+
+        open_rows = {pr["number"]: pr for pr in store.get_prs(repo_full, {"OPEN"})}
+        for number in untracked_review_requests(repo_full, open_rows, login):
+            if number in handled:
+                continue
+            logger.info(f"Standing review request for {login} on {repo_full}#{number} "
+                        f"is not tracked by the pipeline; routing it")
+            handle_review_request(repo_full, number, open_rows[number])
     except Exception:
         logger.exception(f"Review request detection failed for {repo_full}")
 

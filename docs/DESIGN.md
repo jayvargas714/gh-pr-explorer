@@ -2000,6 +2000,27 @@ review). Backfill never runs the hook. Assumes a review request bumps the PR's
 `updatedAt`; the detector is one function so the feed can be swapped for a
 per-repo `gh pr list --search review-requested:@me` if that ever fails.
 
+**Reconciliation sweep** (`review_request_service.untracked_review_requests`,
+same hook, same cycle, still no gh calls): the diff only sees a request
+*appear*. Two real cases never produce that transition — a request already
+standing when the detector started (pre-feature backlog, worker downtime), and
+GitHub's **re-request button**, which records a `ReviewRequestRemoved` +
+`ReviewRequested` pair seconds apart that no poll interval observes (the badge,
+reading the current blob, still shows it; that is how scala#3636 was missed on
+2026-09-04). After the diff, every OPEN synced row for the repo is swept and a PR
+is routed when the login is in `reviewRequests` and the pipeline is not acting
+on it: no dispatch row, or `skipped`/`failed`, or `dispatched` with no
+`review_requests` row. `pending` rows are already waiting on gates,
+`unidentified` rows stay a human decision, and any existing `review_requests`
+row — even a terminal one — is left alone, because reviving it every cycle
+would loop a follow-up whenever a posted review failed to clear the GitHub
+request (that residual case still needs a fresh appear-transition, i.e. remove
+the reviewer, wait a sync, re-request). Routing goes through
+`handle_review_request`, so a swept PR gets the same status comment as a
+detected one and, being idempotent, is routed exactly once. The sweep runs even
+when the incremental batch is empty, so a restart picks up the backlog on its
+first cycle.
+
 **Routing** (`handle_review_request`, never raises). Requires automation
 `scope != off` and the repo allowlisted; the **author scope is ignored** — a
 human asked explicitly. Then, by the PR's `automation_dispatches` row:
