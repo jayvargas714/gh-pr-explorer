@@ -15,6 +15,7 @@ is always global.
 
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
@@ -104,6 +105,31 @@ def evaluate_criteria(
     return "pass", tallies, f"{within} — within limits ({allowed}){suffix}"
 
 
+# A line whose lead token is a verdict or readiness call. Reviewers are told not
+# to write one (see _NO_VERDICT_INSTRUCTIONS in review_service); this is the
+# belt-and-braces guard so a stray line never reaches GitHub. Line-anchored on
+# purpose: prose that merely mentions "the verdict" mid-sentence is left alone.
+_VERDICT_LINE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?\s*"
+    r"(?:verdict(?:[- ]leaning)?\b|approved[- ]leaning\b|needs revision\b|recommendation:|LGTM\b"
+    r"|ready (?:for|to) (?:merge|live review)\b)",
+    re.IGNORECASE,
+)
+
+
+def strip_verdict_lines(summary: str) -> str:
+    """Drop lines that state a verdict, verdict-leaning, or readiness call.
+
+    The verdict is decided by the configured criteria (or a human), never by
+    the reviewer, so such a line is removed from the posted body. Blank lines
+    orphaned by the removal collapse so the summary keeps its paragraphs.
+    """
+    kept = [line for line in summary.splitlines() if not _VERDICT_LINE.match(line)]
+    text = "\n".join(kept)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def compose_report_body(content_json: Dict[str, Any]) -> str:
     """Compose the verdict body the same way the manual verdict modal does.
 
@@ -114,7 +140,7 @@ def compose_report_body(content_json: Dict[str, Any]) -> str:
     """
     parts = []
 
-    summary = (content_json.get("summary") or "").strip()
+    summary = strip_verdict_lines(content_json.get("summary") or "")
     if summary:
         parts.append(f"**Summary**\n\n{summary}")
 

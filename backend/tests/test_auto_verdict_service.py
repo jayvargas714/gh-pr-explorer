@@ -352,3 +352,37 @@ def test_report_body_includes_dispositions_for_followups():
 
 def test_report_body_has_no_dispositions_section_without_followup():
     assert "Dispositions" not in compose_report_body(_review(critical=1))
+
+
+# --- verdict lines never reach GitHub --------------------------------------
+
+from backend.services.auto_verdict_service import strip_verdict_lines
+
+
+@pytest.mark.parametrize("line", [
+    "**Verdict-leaning: Approved-leaning** — zero Critical findings",
+    "Verdict-leaning: Needs Revision",
+    "- Verdict: Approved-leaning (zero Critical)",
+    "**Verdict:** ready for live review",
+    "Approved-leaning — the ED may proceed to live review.",
+    "Recommendation: approve and merge.",
+    "LGTM",
+])
+def test_strip_verdict_lines_drops_a_verdict_line(line):
+    summary = f"The ED covers PB-017 §3.\n\n{line}\n\nFive passes ran."
+    assert strip_verdict_lines(summary) == "The ED covers PB-017 §3.\n\nFive passes ran."
+
+
+def test_strip_verdict_lines_keeps_ordinary_prose_that_mentions_a_verdict():
+    summary = ("The design is solid.\n"
+               "Disputed items are settled at live review, not by this verdict.\n"
+               "Two findings were deferred.")
+    assert strip_verdict_lines(summary) == summary
+
+
+def test_report_body_never_carries_a_verdict_line():
+    review = _review(minor=1)
+    review["summary"] = "Solid design.\n\n**Verdict-leaning: Approved-leaning** — zero Critical findings\n"
+    body = compose_report_body(review)
+    assert "Solid design." in body
+    assert "Approved-leaning" not in body and "Verdict" not in body
