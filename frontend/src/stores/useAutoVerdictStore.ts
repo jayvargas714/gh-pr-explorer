@@ -10,6 +10,7 @@ export const DEFAULT_AUTO_VERDICT_CONFIG: AutoVerdictConfig = {
   maxMinor: 99,
   allowAutoApprove: false,
   autoFollowupReview: false,
+  mediationDisputedThreshold: 3,
 }
 
 interface AutoVerdictState {
@@ -62,5 +63,6 @@ export const useAutoVerdictStore = create<AutoVerdictState>((set) => ({
 export function describeCriteria(config: AutoVerdictConfig): string {
   const limits = `max ${config.maxCritical} critical / ${config.maxMajor} major / ${config.maxMinor} minor`
   const approve = config.allowAutoApprove ? 'auto-approve on' : 'auto-approve off'
-  return config.enabled ? `${limits} — ${approve}` : 'Auto verdicts globally disabled'
+  const mediation = `mediation at ${config.mediationDisputedThreshold} disputed`
+  return config.enabled ? `${limits} — ${approve} — ${mediation}` : 'Auto verdicts globally disabled'
 }

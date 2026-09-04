@@ -185,9 +185,10 @@ class ReviewsDB:
             review_ids: Review row ids to tally.
 
         Returns:
-            ``{review_id: {"critical": n, "major": n, "minor": n}}``
+            ``{review_id: {"critical": n, "major": n, "minor": n}}`` — the
+            severity counts only; disputed/deferred set-asides are not exposed here.
         """
-        from backend.services.review_schema import count_issues
+        from backend.services.review_schema import SEVERITIES, count_issues
 
         unique_ids = list({rid for rid in review_ids if rid is not None})
         if not unique_ids:
@@ -212,7 +213,8 @@ class ReviewsDB:
                 except (json.JSONDecodeError, TypeError):
                     continue
                 if isinstance(parsed, dict):
-                    counts[row["id"]] = count_issues(parsed)
+                    full = count_issues(parsed)
+                    counts[row["id"]] = {sev: full[sev] for sev in SEVERITIES}
 
         return counts
 

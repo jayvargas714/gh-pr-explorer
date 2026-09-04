@@ -84,3 +84,51 @@ def test_finalize_rejects_an_unknown_outcome(auto_db, review_ids):
 
 def test_get_latest_returns_none_when_no_verdicts(auto_db):
     assert auto_db.get_latest_for_pr("owner/repo", 999) is None
+
+
+# --- disputed / deferred counts and the mediation outcome ------------------
+
+def test_finalize_records_disputed_and_deferred_counts(auto_db, review_ids):
+    rid = review_ids[0]
+    auto_db.claim("owner/repo", 42, review_id=rid)
+    auto_db.finalize(
+        rid, "mediation", event="COMMENT", reason="3 disputed critical/major findings >= 3",
+        tallies={"critical": 0, "major": 1, "minor": 0,
+                 "disputed": 3, "disputed_blocking": 3, "deferred": 1},
+    )
+    row = auto_db.get_latest_for_pr("owner/repo", 42)
+    assert row["outcome"] == "mediation"
+    assert row["disputed_count"] == 3
+    assert row["deferred_count"] == 1
+
+
+def test_finalize_leaves_set_aside_counts_null_when_tallies_lack_them(auto_db, review_ids):
+    rid = review_ids[0]
+    auto_db.claim("owner/repo", 42, review_id=rid)
+    auto_db.finalize(rid, "posted", event="APPROVE", tallies={"critical": 0, "major": 0, "minor": 0})
+    row = auto_db.get_latest_for_pr("owner/repo", 42)
+    assert row["disputed_count"] is None and row["deferred_count"] is None
+
+
+def test_migration_adds_set_aside_columns_to_an_existing_table():
+    import sqlite3
+    path = Path(tempfile.mkdtemp()) / "legacy.db"
+    conn = sqlite3.connect(path)
+    conn.execute("""
+        CREATE TABLE auto_verdicts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo TEXT NOT NULL, pr_number INTEGER NOT NULL, review_id INTEGER UNIQUE,
+            event TEXT, outcome TEXT NOT NULL DEFAULT 'pending', reason TEXT,
+            critical_count INTEGER, major_count INTEGER, minor_count INTEGER,
+            criteria_json TEXT, head_commit_sha TEXT, error_detail TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit(); conn.close()
+
+    Database(path)
+
+    conn = sqlite3.connect(path)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(auto_verdicts)")}
+    conn.close()
+    assert {"disputed_count", "deferred_count"} <= columns

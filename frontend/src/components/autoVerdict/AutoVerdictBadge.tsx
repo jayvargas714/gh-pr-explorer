@@ -29,6 +29,8 @@ export function describeAutoVerdict(record: AutoVerdictRecord): { label: string;
       return { label: '🤖 auto verdict failed', variant: 'error' }
     case 'deferred':
       return { label: '🤖 rate limited — will retry', variant: 'warning' }
+    case 'mediation':
+      return { label: '🤖 locked — human mediation', variant: 'error' }
     case 'pending':
       return { label: '🤖 auto verdict running', variant: 'neutral' }
     default:
@@ -39,9 +41,13 @@ export function describeAutoVerdict(record: AutoVerdictRecord): { label: string;
 export function AutoVerdictBadge({ record }: AutoVerdictBadgeProps) {
   const { label, variant } = describeAutoVerdict(record)
 
+  const setAside =
+    record.disputedCount != null || record.deferredCount != null
+      ? ` / ${record.disputedCount ?? 0} disputed / ${record.deferredCount ?? 0} deferred`
+      : ''
   const tallies =
     record.criticalCount !== null
-      ? `${record.criticalCount} critical / ${record.majorCount} major / ${record.minorCount} minor`
+      ? `${record.criticalCount} critical / ${record.majorCount} major / ${record.minorCount} minor${setAside}`
       : null
 
   const tooltip = [

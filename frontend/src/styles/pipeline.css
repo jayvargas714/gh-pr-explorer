@@ -376,6 +376,7 @@
 .mx-pipe-stage--ready        { color: var(--mx-color-info); }
 .mx-pipe-stage--reviewing    { color: var(--mx-color-info); }
 .mx-pipe-stage--reviewed     { color: var(--mx-color-success); }
+.mx-pipe-stage--mediation    { color: var(--mx-color-error); }
 .mx-pipe-stage--unidentified { color: var(--mx-color-warning); }
 .mx-pipe-stage--skipped      { color: var(--mx-color-text-muted); }
 .mx-pipe-stage--opted_out    { color: var(--mx-color-text-muted); }

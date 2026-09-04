@@ -20,14 +20,23 @@ DEFAULT_CRITERIA: Dict[str, Any] = {
     "maxMinor": 99,
     "allowAutoApprove": False,
     "autoFollowupReview": False,
+    # Disputed critical/major findings at or above this count route the PR to
+    # human mediation instead of a verdict. Disputed/deferred findings never
+    # count toward the max* thresholds.
+    "mediationDisputedThreshold": 3,
 }
 
-_INT_KEYS = ("maxCritical", "maxMajor", "maxMinor")
+_INT_KEYS = ("maxCritical", "maxMajor", "maxMinor", "mediationDisputedThreshold")
 _BOOL_KEYS = ("enabled", "allowAutoApprove", "autoFollowupReview")
+# Lower bounds for the int keys; anything absent here allows zero.
+_INT_MINIMUMS = {"mediationDisputedThreshold": 1}
 
 # Fields a per-PR override may replace. 'enabled' is deliberately absent: the
 # master switch is the one global kill-switch and can never be overridden.
-OVERRIDE_KEYS = ("maxCritical", "maxMajor", "maxMinor", "allowAutoApprove", "autoFollowupReview")
+OVERRIDE_KEYS = (
+    "maxCritical", "maxMajor", "maxMinor", "allowAutoApprove", "autoFollowupReview",
+    "mediationDisputedThreshold",
+)
 
 
 def get_criteria() -> Dict[str, Any]:
@@ -59,8 +68,9 @@ def validate_criteria(payload: Dict[str, Any]) -> Dict[str, Any]:
                 value = int(payload[key])
             except (TypeError, ValueError):
                 raise ValueError(f"{key} must be an integer")
-            if value < 0:
-                raise ValueError(f"{key} must be zero or greater")
+            minimum = _INT_MINIMUMS.get(key, 0)
+            if value < minimum:
+                raise ValueError(f"{key} must be {minimum} or greater")
             criteria[key] = value
     for key in _BOOL_KEYS:
         if key in payload:

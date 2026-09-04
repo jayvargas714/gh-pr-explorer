@@ -16,7 +16,9 @@ from backend.services.auto_verdict_service import (
 )
 
 
-def _review(critical=0, major=0, minor=0):
+def _review(critical=0, major=0, minor=0, disputed=(), deferred=()):
+    """Build a review; `disputed`/`deferred` are tuples of the original
+    severities of the issues set aside in those sections."""
     def issues(n):
         return [
             {
@@ -28,17 +30,35 @@ def _review(critical=0, major=0, minor=0):
             for i in range(n)
         ]
 
+    def set_aside(severities, kind):
+        return [
+            dict(issue, title=f"{kind} {i}", severity=sev, disposition=f"author: {kind} {i}")
+            for i, (issue, sev) in enumerate(zip(issues(len(severities)), severities))
+        ]
+
+    sections = [
+        {"type": "critical", "display_name": "Critical Issues", "issues": issues(critical)},
+        {"type": "major", "display_name": "Major Concerns", "issues": issues(major)},
+        {"type": "minor", "display_name": "Minor Issues", "issues": issues(minor)},
+    ]
+    if disputed:
+        sections.append({"type": "disputed", "display_name": "Disputed",
+                         "issues": set_aside(disputed, "Disputed")})
+    if deferred:
+        sections.append({"type": "deferred", "display_name": "Deferred",
+                         "issues": set_aside(deferred, "Deferred")})
     return {
         "schema_version": "1.0.0",
         "metadata": {"pr_number": 42, "repository": "owner/repo"},
         "summary": "A summary of the review.",
-        "sections": [
-            {"type": "critical", "display_name": "Critical Issues", "issues": issues(critical)},
-            {"type": "major", "display_name": "Major Concerns", "issues": issues(major)},
-            {"type": "minor", "display_name": "Minor Issues", "issues": issues(minor)},
-        ],
+        "sections": sections,
         "score": {"overall": 7},
     }
+
+
+def _tallies(critical=0, major=0, minor=0, disputed=0, disputed_blocking=0, deferred=0):
+    return {"critical": critical, "major": major, "minor": minor,
+            "disputed": disputed, "disputed_blocking": disputed_blocking, "deferred": deferred}
 
 
 def _criteria(**overrides):
@@ -50,18 +70,32 @@ def _criteria(**overrides):
 # --- count_issues -----------------------------------------------------------
 
 def test_count_issues_counts_each_severity():
-    assert count_issues(_review(critical=2, major=1, minor=5)) == {
-        "critical": 2, "major": 1, "minor": 5
-    }
+    assert count_issues(_review(critical=2, major=1, minor=5)) == _tallies(2, 1, 5)
 
 
 def test_count_issues_handles_missing_sections():
-    assert count_issues({}) == {"critical": 0, "major": 0, "minor": 0}
+    assert count_issues({}) == _tallies()
 
 
 def test_count_issues_ignores_unknown_section_types():
     review = {"sections": [{"type": "nitpick", "issues": [{"title": "x"}]}]}
-    assert count_issues(review) == {"critical": 0, "major": 0, "minor": 0}
+    assert count_issues(review) == _tallies()
+
+
+def test_count_issues_keeps_deferred_findings_out_of_the_severity_tally():
+    """3 majors, 2 of them properly deferred -> 1 major against maxMajor."""
+    review = _review(major=1, deferred=("major", "major"))
+    assert count_issues(review) == _tallies(major=1, deferred=2)
+
+
+def test_count_issues_counts_disputed_critical_and_major_as_blocking():
+    review = _review(disputed=("critical", "major", "minor"))
+    assert count_issues(review) == _tallies(disputed=3, disputed_blocking=2)
+
+
+def test_count_issues_reads_severity_case_insensitively():
+    review = _review(disputed=("Major",))
+    assert count_issues(review)["disputed_blocking"] == 1
 
 
 # --- evaluate_criteria: the defaults the user described ----------------------
@@ -89,7 +123,53 @@ def test_thresholds_are_inclusive_upper_bounds():
 
 def test_tallies_are_returned_alongside_the_decision():
     _, tallies, _ = evaluate_criteria(_review(critical=2, major=1, minor=3), _criteria())
-    assert tallies == {"critical": 2, "major": 1, "minor": 3}
+    assert tallies == _tallies(2, 1, 3)
+
+
+# --- disputed / deferred and the mediation threshold ------------------------
+
+def test_disputed_findings_below_the_threshold_do_not_count():
+    criteria = _criteria(maxMajor=1)
+    decision, _, _ = evaluate_criteria(_review(major=1, disputed=("major", "major")), criteria)
+    assert decision == "pass"
+
+
+def test_deferred_findings_never_count():
+    criteria = _criteria(maxMajor=1)
+    decision, _, _ = evaluate_criteria(_review(major=1, deferred=("critical", "major", "major")), criteria)
+    assert decision == "pass"
+
+
+def test_three_disputed_blocking_findings_route_to_mediation():
+    criteria = _criteria(maxMajor=1)
+    decision, tallies, reason = evaluate_criteria(
+        _review(major=1, disputed=("major", "major", "critical")), criteria)
+    assert decision == "mediation"
+    assert tallies["disputed_blocking"] == 3
+    assert "3 disputed" in reason and "mediation" in reason
+
+
+def test_disputed_minors_never_trigger_mediation():
+    decision, _, _ = evaluate_criteria(_review(disputed=("minor",) * 5), _criteria())
+    assert decision == "pass"
+
+
+def test_mediation_is_checked_before_severity_thresholds():
+    decision, _, _ = evaluate_criteria(_review(critical=8, disputed=("major",) * 3), _criteria())
+    assert decision == "mediation"
+
+
+def test_mediation_threshold_is_configurable():
+    criteria = _criteria(mediationDisputedThreshold=5)
+    assert evaluate_criteria(_review(disputed=("major",) * 4), criteria)[0] == "pass"
+    assert evaluate_criteria(_review(disputed=("major",) * 5), criteria)[0] == "mediation"
+
+
+def test_pass_reason_mentions_set_aside_counts_only_when_present():
+    _, _, reason = evaluate_criteria(_review(disputed=("major",), deferred=("minor", "minor")), _criteria())
+    assert "1 disputed" in reason and "2 deferred" in reason
+    _, _, clean = evaluate_criteria(_review(), _criteria())
+    assert "disputed" not in clean and "deferred" not in clean
 
 
 def test_reason_names_every_breached_severity():
@@ -120,7 +200,7 @@ def test_unparsable_content_is_rejected():
 def test_valid_content_is_parsed_from_a_json_string():
     import json
     parsed = _load_review_content({"content_json": json.dumps(_review(critical=1))})
-    assert count_issues(parsed) == {"critical": 1, "major": 0, "minor": 0}
+    assert count_issues(parsed) == _tallies(critical=1)
 
 
 # --- body composition -------------------------------------------------------
@@ -165,6 +245,23 @@ def test_validate_criteria_coerces_and_fills_defaults():
 def test_validate_criteria_coerces_auto_followup_review():
     assert validate_criteria({})["autoFollowupReview"] is False
     assert validate_criteria({"autoFollowupReview": 1})["autoFollowupReview"] is True
+
+
+def test_validate_criteria_defaults_mediation_threshold_to_three():
+    assert DEFAULT_CRITERIA["mediationDisputedThreshold"] == 3
+    assert validate_criteria({})["mediationDisputedThreshold"] == 3
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_validate_criteria_rejects_mediation_threshold_below_one(value):
+    with pytest.raises(ValueError):
+        validate_criteria({"mediationDisputedThreshold": value})
+
+
+def test_mediation_threshold_is_per_pr_overridable():
+    assert validate_override({"mediationDisputedThreshold": "4"})["mediationDisputedThreshold"] == 4
+    effective = apply_override(_criteria(), {"auto_verdict_criteria": '{"mediationDisputedThreshold": 4}'})
+    assert effective["mediationDisputedThreshold"] == 4
 
 
 def test_validate_criteria_rejects_negative_thresholds():

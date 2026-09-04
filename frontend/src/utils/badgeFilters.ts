@@ -18,7 +18,7 @@ export type BadgeFilterKey =
   | 'ci:success' | 'ci:failure' | 'ci:pending'
   | 'has_review' | 'score:good' | 'score:ok' | 'score:bad'
   | 'new_commits' | 'reviewers_requested' | 'followup'
-  | 'auto:armed' | 'auto:posted' | 'auto:needs_approval' | 'auto:unidentified'
+  | 'auto:armed' | 'auto:posted' | 'auto:needs_approval' | 'auto:mediation' | 'auto:unidentified'
 
 export type BadgeDimension =
   | 'state' | 'draft' | 'review' | 'ci' | 'review_score'
@@ -45,6 +45,7 @@ export const BADGE_DIMENSION: Record<BadgeFilterKey, BadgeDimension> = {
   'auto:armed': 'auto_verdict',
   'auto:posted': 'auto_verdict',
   'auto:needs_approval': 'auto_verdict',
+  'auto:mediation': 'auto_verdict',
   'auto:unidentified': 'auto_verdict',
 }
 
@@ -114,6 +115,7 @@ export function subjectMatchesBadge(s: BadgeSubject, key: BadgeFilterKey): boole
     case 'auto:armed':          return !!s.autoVerdict?.enabled
     case 'auto:posted':         return s.autoVerdict?.last?.outcome === 'posted'
     case 'auto:needs_approval': return s.autoVerdict?.last?.outcome === 'suppressed'
+    case 'auto:mediation':      return s.autoVerdict?.last?.outcome === 'mediation'
     case 'auto:unidentified':   return s.automation?.status === 'unidentified'
   }
 }

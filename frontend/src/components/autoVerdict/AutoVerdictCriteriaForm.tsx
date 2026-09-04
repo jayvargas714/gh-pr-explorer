@@ -1,7 +1,7 @@
 import { Toggle } from '../common/Toggle'
 import { AutoVerdictConfig } from '../../api/types'
 
-const THRESHOLDS: { key: keyof AutoVerdictConfig; label: string; hint: string }[] = [
+const THRESHOLDS: { key: keyof AutoVerdictConfig; label: string; hint: string; min?: number }[] = [
   {
     key: 'maxCritical',
     label: 'Critical issues allowed',
@@ -16,6 +16,14 @@ const THRESHOLDS: { key: keyof AutoVerdictConfig; label: string; hint: string }[
     key: 'maxMinor',
     label: 'Minor issues allowed',
     hint: '99 is effectively unlimited — minors alone will not block.',
+  },
+  {
+    key: 'mediationDisputedThreshold',
+    label: 'Disputed critical/major → mediation at',
+    hint: 'Disputed and deferred findings never count toward the limits above. At this many '
+      + 'disputed critical/major findings the review is posted as a comment, auto verdict is '
+      + 'disarmed, and the PR is routed to a human.',
+    min: 1,
   },
 ]
 
@@ -58,13 +66,13 @@ export function AutoVerdictCriteriaForm({
       )}
 
       <div className="mx-auto-verdict-config__thresholds">
-        {THRESHOLDS.map(({ key, label, hint }) => (
+        {THRESHOLDS.map(({ key, label, hint, min }) => (
           <div className="mx-auto-verdict-config__field" key={key}>
             <label htmlFor={`av-${key}`}>{label}</label>
             <input
               id={`av-${key}`}
               type="number"
-              min={0}
+              min={min ?? 0}
               value={draft[key] as number}
               onChange={(e) => setNumber(key, e.target.value)}
               disabled={saving}

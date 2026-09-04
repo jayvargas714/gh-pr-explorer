@@ -237,6 +237,8 @@ def _format_auto_verdict(row):
         "criticalCount": row.get("critical_count"),
         "majorCount": row.get("major_count"),
         "minorCount": row.get("minor_count"),
+        "disputedCount": row.get("disputed_count"),
+        "deferredCount": row.get("deferred_count"),
         "createdAt": row.get("created_at"),
     }
 

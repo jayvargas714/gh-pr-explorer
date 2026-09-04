@@ -1806,12 +1806,13 @@ Stored as the `auto_verdict_config` key in `user_settings`. Defaults live in exa
 | `maxMinor` | `99` | Minor issues tolerated — effectively unlimited, so minors alone never block. |
 | `allowAutoApprove` | `false` | When off, a passing review posts nothing; only changes-requested is automated. |
 | `autoFollowupReview` | `false` | When on, an armed PR that gets new commits after a review automatically starts a follow-up review. Independent of `enabled` — it starts reviews but never posts to GitHub itself. |
+| `mediationDisputedThreshold` | `3` | Disputed critical/major findings at or above this count route the PR to **human mediation** instead of a verdict (see below). Minimum 1. |
 
 Thresholds are **inclusive upper bounds**: `maxMajor: 1` allows one major and trips on two. Both switches default off so installing the feature cannot post anything until deliberately enabled.
 
 #### Per-PR Criteria Overrides
 
-The global config is the default; any PR can carry its own **criteria override** — a complete snapshot of the five overridable fields (`maxCritical`, `maxMajor`, `maxMinor`, `allowAutoApprove`, `autoFollowupReview`) stored as JSON in `auto_verdict_arming.auto_verdict_criteria`. The rules:
+The global config is the default; any PR can carry its own **criteria override** — a complete snapshot of the six overridable fields (`maxCritical`, `maxMajor`, `maxMinor`, `allowAutoApprove`, `autoFollowupReview`, `mediationDisputedThreshold`) stored as JSON in `auto_verdict_arming.auto_verdict_criteria`. The rules:
 
 - **Whole-config, not per-field.** A PR either follows the global config or has its own full snapshot; there is no partial inheritance. Later changes to the global defaults do not affect overridden PRs.
 - **The master `enabled` switch is never overridable.** `OVERRIDE_KEYS` in `auto_verdict_config.py` deliberately excludes it, `validate_override` strips it, and `apply_override` never copies it — so "the master switch is off" always means nothing posts, board-wide.
@@ -1825,6 +1826,7 @@ Verdict mode:
 
 | Condition | Event posted | Recorded outcome |
 |-----------|--------------|------------------|
+| Disputed critical/major findings ≥ `mediationDisputedThreshold` (checked first) | `COMMENT` | `mediation` — PR disarmed |
 | Any severity over its limit | `REQUEST_CHANGES` | `posted` |
 | Within all limits, `allowAutoApprove` on, PR authored by someone else | `APPROVE` | `posted` |
 | Within all limits, `allowAutoApprove` on, PR self-authored | `COMMENT` | `posted` |
@@ -1842,13 +1844,43 @@ Comment mode:
 | `post_verdict` returned non-200 or raised | *(attempted)* | `error` |
 | `post_verdict` hit the GitHub API rate limit (429) | *(attempted)* | `deferred` — retried later |
 
-Comment mode never suppresses: thresholds and `allowAutoApprove` are irrelevant, and the reason records the issue tallies (`comment mode — review findings posted as comment (N critical, …)`). Both modes are gated by the global master `enabled` switch — while it is off, armed cards in either mode post nothing and per-PR overrides are inert.
+Comment mode never suppresses and never mediates: thresholds, `allowAutoApprove` and the mediation threshold are irrelevant, and the reason records the issue tallies (`comment mode — review findings posted as comment (N critical, …)`). Both modes are gated by the global master `enabled` switch — while it is off, armed cards in either mode post nothing and per-PR overrides are inert.
 
 GitHub rejects `APPROVE` on your own PR with a 422, so in verdict mode a self-authored passing PR falls back to `COMMENT` and the reason records why. A `suppressed` outcome is the "changes-requested only" mode: the card shows *passed — approve manually* so every approval stays a human action.
 
+#### Disputed and Deferred Findings
+
+A review's severity sections hold only findings the author is expected to fix in this PR. Two more section types, `disputed` and `deferred`, hold findings an author disposition set aside (see the Review JSON Schema): each issue there carries `severity` (the severity it had when first raised) and `disposition` (the author's one-line rationale or follow-up target).
+
+- **Deferred** — the author agreed to fix the finding in a named follow-up (issue, PR, later milestone). The follow-up prompt has the reviewer mark it `deferred` and move it to the `deferred` section.
+- **Disputed** — the author declined with a rationale the reviewer does not accept. Marked `disputed`, moved to the `disputed` section, and **not re-argued** in later rounds; it stays there verbatim until the author changes position or a human settles it at live review.
+
+`count_issues` never adds set-aside issues to the `critical` / `major` / `minor` tallies, so three Majors with two properly deferred evaluate as one Major against `maxMajor`. It additionally returns `disputed`, `deferred`, and `disputed_blocking` (disputed issues whose original severity is critical or major). Minors may be disputed without limit. Both counts are stored on the `auto_verdicts` row (`disputed_count`, `deferred_count`) and surface as `disputedCount` / `deferredCount` on the card payload.
+
+This is what stopped the non-converging ED loop (scala PR #3437, eleven REQUEST_CHANGES rounds): standing disagreements used to count against `maxMajor` forever.
+
+#### Mediation
+
+When `disputed_blocking >= mediationDisputedThreshold`, `evaluate_criteria` returns the decision `mediation` — checked **before** the severity thresholds, so a standing disagreement is never reported as an ordinary breach. `maybe_post_auto_verdict` then:
+
+1. **Disarms the PR** (`AutoVerdictArmingDB.set_arming(enabled=False)`, reviewer and mode preserved) *before* posting, so stopping the loop does not depend on GitHub accepting the post. Disarming is what stops further auto follow-ups — the follow-up watcher scans only armed PRs. There is no separate lock flag; a human re-arms the PR to resume.
+2. Posts the review body as a `COMMENT` review (not APPROVE / REQUEST_CHANGES) so the Disputed list is in front of the mediator.
+3. Records outcome `mediation` (event `COMMENT`) on the `auto_verdicts` row and logs `verdict_posted` on the run, with the reason text carrying the routing.
+4. Posts the `verdict-mediation` PR status comment (`post_verdict_mediation_comment`): the disputed count and threshold, the tallies, and the next step (an Area Lead settles the Disputed items, then re-arms).
+
+If the COMMENT post is rate-limited the row is `deferred` as usual (the PR is already disarmed); the retry sweep re-derives the decision from the stored `criteria_json` + review content, skips its "disarmed while deferred" gate for such rows, and finalizes `mediation` on success. A finalized `mediation` row is never retried. If the post errors the PR stays disarmed and the usual `verdict-error` comment posts.
+
+In the UI the outcome renders as `🤖 locked — human mediation` (badge), the pipeline overlay derives the sticky stage `mediation` (until the next review's verdict row exists), and the badge filter gains the chip *🤖 Locked — Mediation*.
+
+**No review agent renders a verdict.** The pipeline prompt tells every registered reviewer not to state approve / request changes / readiness / mediation anywhere in the review (`_NO_VERDICT_INSTRUCTIONS` in `review_service.py`, in both the initial and follow-up prompts); the verdict is computed here from the configured criteria. The agent files (`ed-reviewer`, `product-brief-reviewer`, `elite-code-reviewer`) carry the same rule.
+
+#### Follow-Up Scope
+
+A follow-up prompt scopes the round explicitly (`_FOLLOWUP_SCOPE_INSTRUCTIONS`): review only the diff since the previous review, the previous review's findings, and the author's dispositions in the conversation. The reviewer must not re-review sections the diff did not touch nor raise new findings against unchanged text; a new finding must be anchored in the changed lines or be a residual of a fix the author took. The previous behaviour — a full five-pass "fresh-eyes" review on every push — produced two to four new Majors per round on a large ED indefinitely.
+
 #### Verdict Body
 
-The body is composed by `compose_report_body(content_json)` to match what the manual verdict modal posts by default: the summary, each severity section that has issues (with Location/Problem/Fix per issue), and — for follow-ups with a `followup.resolution_status` — a **Dispositions** section (`- **Status** — issue: notes`, via `format_resolution_lines`) so the author sees which pushback was accepted (`withdrawn`) and which was held (`disputed`), joined with horizontal rules. The frontend composer (`sectionsFromJSON` in `frontend/src/utils/reviewSections.ts`) offers the same Dispositions section. The report title, metadata block, positive highlights, and the 0-10 score are deliberately excluded so auto-posted verdicts are indistinguishable in format from manually posted ones. It is truncated at 60 000 characters (GitHub's cap is 65 536) with a trailing notice. No inline comments are posted, and no auto-generated header is injected into the body; the auto-generated marker lives in the UI badge instead.
+The body is composed by `compose_report_body(content_json)` to match what the manual verdict modal posts by default: the summary, each severity section that has issues (with Location/Problem/Fix per issue), then the Disputed and Deferred sections when present (each issue also showing `Severity:` and `Disposition:`; set-aside issues are never posted inline), and — for follow-ups with a `followup.resolution_status` — a **Dispositions** section (`- **Status** — issue: notes`, via `format_resolution_lines`) so the author sees which pushback was accepted (`withdrawn`), which was held (`disputed`), and what was deferred (`deferred`), joined with horizontal rules. The frontend composer (`sectionsFromJSON` in `frontend/src/utils/reviewSections.ts`) offers the same Dispositions section. The report title, metadata block, positive highlights, and the 0-10 score are deliberately excluded so auto-posted verdicts are indistinguishable in format from manually posted ones. It is truncated at 60 000 characters (GitHub's cap is 65 536) with a trailing notice. No inline comments are posted, and no auto-generated header is injected into the body; the auto-generated marker lives in the UI badge instead.
 
 Note there is no per-issue resolved/dismissed state anywhere in the system, so "remaining issues" necessarily means *the issues in the latest review*. For a follow-up review that is already the remaining set.
 
@@ -1868,7 +1900,7 @@ A verdict post lands at the worst possible moment for the shared GraphQL/REST qu
 - `post_verdict` maps a rate-limited head-SHA fetch or review POST to `({"error": …, "rate_limited": true}, 429)` instead of a generic 500. (Manual verdict posts surface the same 429 to the UI.)
 - `maybe_post_auto_verdict` records outcome `deferred` (instead of terminal `error`), keeping the decided event, reason, tallies, and criteria snapshot on the `auto_verdicts` row, and logs a `verdict_not_posted` event with reason `rate_limited`.
 
-`retry_deferred_verdicts()` (in `auto_verdict_service.py`, driven by the 10s auto-verdict watcher cycle) sweeps rows with outcome `deferred`: the first retry comes 5 minutes after deferral, doubling per rate-limited attempt up to 1 hour, tracked in an in-memory schedule (`_retry_schedule`) — a restart just means one immediate retry, which the rate limit itself throttles if still active. Before posting, the sweep re-checks that the card is still armed and the PR is still `OPEN` (finalizing `skipped` otherwise), recomposes the body from the stored review content, and reuses the decision recorded at defer time. Success finalizes `posted` and logs `verdict_posted` on the run; a non-429 failure finalizes `error`; a row older than 24 hours expires as `error` (`rate-limit retry window expired`). The armed card shows a `🤖 rate limited — will retry` badge while deferred.
+`retry_deferred_verdicts()` (in `auto_verdict_service.py`, driven by the 10s auto-verdict watcher cycle) sweeps rows with outcome `deferred`: the first retry comes 5 minutes after deferral, doubling per rate-limited attempt up to 1 hour, tracked in an in-memory schedule (`_retry_schedule`) — a restart just means one immediate retry, which the rate limit itself throttles if still active. Before posting, the sweep re-checks that the card is still armed (unless the stored criteria + content re-evaluate to `mediation`, which disarmed the card on purpose) and the PR is still `OPEN` (finalizing `skipped` otherwise), recomposes the body from the stored review content, and reuses the decision recorded at defer time. Success finalizes `posted` (or `mediation`) and logs `verdict_posted` on the run; a non-429 failure finalizes `error`; a row older than 24 hours expires as `error` (`rate-limit retry window expired`). The armed card shows a `🤖 rate limited — will retry` badge while deferred.
 
 #### Auto Follow-Up Reviews
 
@@ -1892,6 +1924,7 @@ The setting is deliberately independent of the master `enabled` switch: `enabled
 auto_verdicts (
   id, repo, pr_number, review_id UNIQUE, event, outcome,
   reason, critical_count, major_count, minor_count,
+  disputed_count, deferred_count,        -- set-asides; NULL on rows before the columns existed
   criteria_json, head_commit_sha, error_detail, created_at
 )
 ```
@@ -1925,7 +1958,7 @@ The four same-named columns still present on `merge_queue` are legacy: the track
 | 🤖 header button | Header | Opens the criteria panel; shows an `on` chip while the master switch is enabled |
 | `RevLogBadge` | Card rev-log popover | Shows the verdict as a chip on the triggering review's row (reason in the tooltip); orphaned verdicts render as standalone `AUTO`-tagged entries whose click opens the derived-from review |
 
-Badge variants: `🤖 auto ✗ changes requested` (error), `🤖 auto ✓ approved` (success), `🤖 auto 💬 comment` (info), `🤖 passed — approve manually` (warning), `🤖 auto verdict failed` (error), `🤖 auto skipped` (neutral).
+Badge variants: `🤖 auto ✗ changes requested` (error), `🤖 auto ✓ approved` (success), `🤖 auto 💬 comment` (info), `🤖 passed — approve manually` (warning), `🤖 rate limited — will retry` (warning), `🤖 locked — human mediation` (error), `🤖 auto verdict failed` (error), `🤖 auto skipped` (neutral). The tooltip tallies append `/ N disputed / N deferred` when the row carries them.
 
 #### Optimistic arming
 
@@ -1943,7 +1976,7 @@ An armed card's **Review** button skips the reviewer picker on its primary click
 
 Arming state (`mode`, `criteriaOverride`) rides the card payload's `autoVerdict` object (shaped by `format_auto_verdict_state` in `queue_enrichment.py`), so both the queue panel and the swimlane board see it. Comment-armed cards count as "auto" in the header's auto/manual split and the auto-mode filter, same as verdict-armed ones — the existing Auto Verdict badge chips cover both modes.
 
-The swimlane badge filter gains an **Auto Verdict** dimension with chips *🤖 Armed*, *🤖 Verdict Posted*, and *🤖 Needs Manual Approval*, mirroring the rendered badges one-for-one as `cardMatchesBadge` requires.
+The swimlane badge filter gains an **Auto Verdict** dimension with chips *🤖 Armed*, *🤖 Verdict Posted*, *🤖 Needs Manual Approval*, and *🤖 Locked — Mediation*, mirroring the rendered badges one-for-one as `cardMatchesBadge` requires.
 
 ---
 
@@ -2611,6 +2644,7 @@ derived `stage`:
 | `ready` | pending row with no blocker, waiting on the concurrency budget |
 | `reviewing` | a review is running right now |
 | `reviewed` | dispatched; latest review + verdict shown |
+| `mediation` | latest auto verdict outcome is `mediation` — disputed findings reached the threshold, PR disarmed, a human settles it; sticky until the next review's verdict row exists |
 | `unidentified` | files span rules — route by hand |
 | `opted_out` | skipped with detail `manual opt-out` |
 | `skipped` / `failed` | terminal, reason in `detail` |
@@ -3331,7 +3365,8 @@ Returns the global auto-verdict criteria, stored values merged over `DEFAULT_CRI
     "maxMajor": 0,
     "maxMinor": 99,
     "allowAutoApprove": false,
-    "autoFollowupReview": false
+    "autoFollowupReview": false,
+    "mediationDisputedThreshold": 3
   }
 }
 ```
@@ -3352,7 +3387,8 @@ back to their defaults. Also accepts POST. The payload may be sent either wrappe
     "maxMajor": 1,
     "maxMinor": 99,
     "allowAutoApprove": false,
-    "autoFollowupReview": false
+    "autoFollowupReview": false,
+    "mediationDisputedThreshold": 3
   }
 }
 ```
@@ -4794,10 +4830,12 @@ Reviews are stored as structured JSON in the `content_json` column. The schema i
 | `summary` | string | Yes | Brief overall assessment |
 | `score.overall` | integer | Yes | Overall score (0-10) |
 | `score.breakdown` | array | No | Optional array of `{category, score, comment}` |
-| `sections` | array | Yes | Array of `{type, display_name, issues}` objects |
+| `sections` | array | Yes | Array of `{type, display_name, issues}` objects; `type` ∈ `critical`, `major`, `minor` (findings to fix) plus `disputed` / `deferred` (set aside by an author disposition; follow-ups only) — `SECTION_TYPES` in `review_schema.py` |
+| `sections[].issues[].severity` | string | In `disputed`/`deferred` only | The severity the finding had when first raised (`critical` / `major` / `minor`); rejected on issues in a severity section |
+| `sections[].issues[].disposition` | string | In `disputed`/`deferred` only | The author's one-line rationale (disputed) or follow-up target (deferred) |
 | `highlights` | array | No | Positive aspects of the PR |
 | `followup` | object | No | Follow-ups only: `{previous_review_id, resolution_status[]}` |
-| `followup.resolution_status[]` | array | No | `{issue, status, notes}` per previous finding; `status` ∈ `resolved`, `partially_addressed`, `not_addressed`, `wont_fix`, `withdrawn` (author rationale accepted, finding dropped), `disputed` (author pushback rejected, issue kept) — `RESOLUTION_STATUSES` in `review_schema.py` |
+| `followup.resolution_status[]` | array | No | `{issue, status, notes}` per previous finding; `status` ∈ `resolved`, `partially_addressed`, `not_addressed`, `wont_fix`, `withdrawn` (author rationale accepted, finding dropped), `disputed` (author pushback rejected, issue moved to the `disputed` section), `deferred` (author agreed to a named follow-up, issue moved to the `deferred` section) — `RESOLUTION_STATUSES` in `review_schema.py` |
 
 #### Validation and Conversion
 

@@ -377,10 +377,58 @@ def test_followup_prompt_carries_conversation_and_disposition_rules(spawn_env):
     assert "@alice replied: guarded upstream" in prompt
     assert "---END PR CONVERSATION---" in prompt
     assert "DISPOSITION" in prompt
-    for status in ("resolved", "partially_addressed", "not_addressed", "wont_fix", "withdrawn", "disputed"):
+    for status in ("resolved", "partially_addressed", "not_addressed", "wont_fix", "withdrawn",
+                   "disputed", "deferred"):
         assert status in prompt
     assert "never silently drop" in prompt.lower()
     assert "No new commits since the previous review" not in prompt
+
+
+def test_followup_prompt_moves_dispositions_into_set_aside_sections(spawn_env):
+    review_service.start_review_process(
+        PR_URL, OWNER, REPO, PR, is_followup=True, previous_review_content=PREV_CONTENT,
+        head_sha="abc123", conversation="x",
+    )
+    prompt = _prompt_of(spawn_env)
+    assert "'deferred' section" in prompt and "'disputed' section" in prompt
+    assert "original severity" in prompt
+    assert "do not re-argue" in prompt.lower()
+    assert "stay there" in prompt.lower()          # carry-forward rule
+    assert "Focus on: changes since last review" not in prompt
+
+
+def test_followup_prompt_scopes_the_round_to_diff_and_dispositions(spawn_env):
+    review_service.start_review_process(
+        PR_URL, OWNER, REPO, PR, is_followup=True, previous_review_content=PREV_CONTENT,
+        head_sha="abc123", conversation="x",
+    )
+    prompt = _prompt_of(spawn_env)
+    assert "SCOPE:" in prompt
+    assert "Do NOT re-review" in prompt
+
+
+def test_initial_prompt_has_no_followup_scope_rule(spawn_env):
+    review_service.start_review_process(PR_URL, OWNER, REPO, PR)
+    prompt = _prompt_of(spawn_env)
+    assert "Do NOT re-review" not in prompt
+    assert "stay there" not in prompt.lower()
+
+
+def test_schema_instructions_describe_set_aside_sections(spawn_env):
+    review_service.start_review_process(PR_URL, OWNER, REPO, PR)
+    prompt = _prompt_of(spawn_env)
+    assert "type=critical|major|minor|disputed|deferred" in prompt
+    assert "severity" in prompt and "disposition" in prompt
+
+
+@pytest.mark.parametrize("followup", [False, True])
+def test_every_prompt_forbids_a_verdict(spawn_env, followup):
+    kwargs = dict(is_followup=True, previous_review_content=PREV_CONTENT,
+                  head_sha="abc123", conversation="x") if followup else {}
+    review_service.start_review_process(PR_URL, OWNER, REPO, PR, **kwargs)
+    prompt = _prompt_of(spawn_env)
+    assert "Do NOT state a verdict" in prompt
+    assert "configured criteria" in prompt
 
 
 def test_followup_prompt_flags_unchanged_head(spawn_env):

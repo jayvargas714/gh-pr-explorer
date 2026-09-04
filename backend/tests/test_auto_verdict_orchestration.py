@@ -20,7 +20,8 @@ REPO = "owner/repo"
 PR = 42
 
 
-def _content(critical=0, major=0, minor=0):
+def _content(critical=0, major=0, minor=0, disputed=(), deferred=()):
+    """`disputed`/`deferred` are tuples of original severities for the set-aside sections."""
     def issues(n):
         return [
             {"title": f"Issue {i}", "location": {"file": "a.py", "start_line": 1, "end_line": 1},
@@ -28,15 +29,27 @@ def _content(critical=0, major=0, minor=0):
             for i in range(n)
         ]
 
+    def set_aside(severities, kind):
+        return [dict(issue, title=f"{kind} {i}", severity=sev,
+                     disposition=f"author disposition for {kind.lower()} {i}")
+                for i, (issue, sev) in enumerate(zip(issues(len(severities)), severities))]
+
+    sections = [
+        {"type": "critical", "display_name": "Critical Issues", "issues": issues(critical)},
+        {"type": "major", "display_name": "Major Concerns", "issues": issues(major)},
+        {"type": "minor", "display_name": "Minor Issues", "issues": issues(minor)},
+    ]
+    if disputed:
+        sections.append({"type": "disputed", "display_name": "Disputed",
+                         "issues": set_aside(disputed, "Disputed")})
+    if deferred:
+        sections.append({"type": "deferred", "display_name": "Deferred",
+                         "issues": set_aside(deferred, "Deferred")})
     return json.dumps({
         "schema_version": "1.0.0",
         "metadata": {"pr_number": PR, "repository": REPO},
         "summary": "Summary text.",
-        "sections": [
-            {"type": "critical", "display_name": "Critical Issues", "issues": issues(critical)},
-            {"type": "major", "display_name": "Major Concerns", "issues": issues(major)},
-            {"type": "minor", "display_name": "Minor Issues", "issues": issues(minor)},
-        ],
+        "sections": sections,
         "score": {"overall": 6},
     })
 
@@ -86,10 +99,11 @@ def _arm(h, enabled=True, author="someone-else", mode=None, criteria_override=No
         h.arming.set_criteria(REPO, PR, criteria_override)
 
 
-def _review(h, critical=0, major=0, minor=0, status="completed", author="someone-else"):
+def _review(h, critical=0, major=0, minor=0, status="completed", author="someone-else",
+            disputed=(), deferred=()):
     return h.reviews.save_review(
         pr_number=PR, repo=REPO, pr_author=author, status=status,
-        content_json=_content(critical, major, minor),
+        content_json=_content(critical, major, minor, disputed=disputed, deferred=deferred),
     )
 
 
@@ -527,7 +541,7 @@ def comments(monkeypatch):
             return True
         return _post
 
-    for kind in ("suppressed", "deferred", "error", "skipped"):
+    for kind in ("suppressed", "deferred", "error", "skipped", "mediation"):
         monkeypatch.setattr(
             f"backend.services.pr_status_comments.post_verdict_{kind}_comment",
             _recorder(kind),
@@ -547,7 +561,8 @@ def test_suppressed_outcome_comments_with_tallies(harness, monkeypatch, comments
     svc.maybe_post_auto_verdict(REPO, PR, rid)
 
     assert [c["kind"] for c in comments] == ["suppressed"]
-    assert comments[0]["tallies"] == {"critical": 0, "major": 0, "minor": 3}
+    assert {k: comments[0]["tallies"][k] for k in ("critical", "major", "minor")} == {
+        "critical": 0, "major": 0, "minor": 3}
     assert "auto-approve disabled" in comments[0]["reason"]
 
 
@@ -621,3 +636,145 @@ def test_retry_expiry_comments_the_error(harness, monkeypatch, comments):
 
     assert [c["kind"] for c in comments] == ["error"]
     assert "expired" in comments[0]["error_detail"]
+
+
+# --- disputed / deferred findings and the mediation outcome -------------------
+
+THREE_DISPUTED = ("major", "major", "critical")
+
+
+def test_disputes_below_the_threshold_still_approve(harness, monkeypatch):
+    _criteria(monkeypatch, maxMajor=1)
+    _arm(harness)
+    rid = _review(harness, major=1, disputed=("major", "major"), deferred=("critical",))
+
+    result = svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert result["event"] == "APPROVE"
+    assert harness.arming.get(REPO, PR)["auto_verdict_enabled"] == 1
+    body = harness.posted[0]["body"]
+    assert "**Disputed**" in body and "**Deferred**" in body
+    assert "author disposition for disputed 0" in body
+
+
+def test_mediation_posts_comment_disarms_and_records_outcome(harness, monkeypatch, comments):
+    _criteria(monkeypatch, maxMajor=1)
+    harness.arming.set_arming(REPO, PR, True, "ed", mode="verdict")
+    rid = _review(harness, major=1, disputed=THREE_DISPUTED)
+
+    result = svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert result["outcome"] == "mediation"
+    assert result["event"] == "COMMENT"
+    assert [p["event"] for p in harness.posted] == ["COMMENT"]
+    assert "**Disputed**" in harness.posted[0]["body"]
+    row = harness.auto.get_latest_for_pr(REPO, PR)
+    assert (row["outcome"], row["event"], row["disputed_count"]) == ("mediation", "COMMENT", 3)
+    arming = harness.arming.get(REPO, PR)
+    assert arming["auto_verdict_enabled"] == 0
+    assert (arming["auto_verdict_reviewer"], arming["auto_verdict_mode"]) == ("ed", "verdict")
+    assert [c["kind"] for c in comments] == ["mediation"]
+    assert comments[0]["disputed_blocking"] == 3 and comments[0]["threshold"] == 3
+
+
+def test_mediation_is_logged_as_a_posted_comment(harness, monkeypatch, isolate_review_event_log):
+    _criteria(monkeypatch)
+    _arm(harness)
+    rid = _review(harness, disputed=THREE_DISPUTED)
+    isolate_review_event_log.log_event("completed", REPO, PR, "run-xyz", attempt=1, review_id=rid)
+
+    svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    rows = _run_events(isolate_review_event_log, "verdict_posted")
+    assert len(rows) == 1
+    assert rows[0]["detail"].startswith("COMMENT")
+    assert "mediation" in rows[0]["detail"]
+
+
+def test_mediation_disarms_even_when_the_post_fails(harness, monkeypatch, comments):
+    _criteria(monkeypatch)
+    _arm(harness)
+    rid = _review(harness, disputed=THREE_DISPUTED)
+    harness.post_result = ({"error": "boom"}, 500)
+
+    result = svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert result["outcome"] == "error"
+    assert harness.arming.get(REPO, PR)["auto_verdict_enabled"] == 0
+    assert [c["kind"] for c in comments] == ["error"]
+
+
+def test_comment_mode_never_mediates(harness, monkeypatch):
+    _criteria(monkeypatch)
+    _arm(harness, mode="comment")
+    rid = _review(harness, disputed=THREE_DISPUTED + ("major", "major"))
+
+    result = svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert result["outcome"] == "posted"
+    assert harness.arming.get(REPO, PR)["auto_verdict_enabled"] == 1
+
+
+def test_mediation_threshold_override_applies_per_pr(harness, monkeypatch):
+    _criteria(monkeypatch)
+    _arm(harness, criteria_override={"maxCritical": 0, "maxMajor": 0, "maxMinor": 99,
+                                     "allowAutoApprove": True, "autoFollowupReview": False,
+                                     "mediationDisputedThreshold": 5})
+    rid = _review(harness, disputed=THREE_DISPUTED)
+
+    result = svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert result["event"] == "APPROVE"
+
+
+def test_rate_limited_mediation_is_finalized_by_the_retry_sweep(harness, monkeypatch, comments):
+    _criteria(monkeypatch)
+    _arm(harness)
+    rid = _review(harness, disputed=THREE_DISPUTED)
+    harness.post_result = RATE_LIMITED
+
+    first = svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert first["outcome"] == "deferred" and first["event"] == "COMMENT"
+    assert harness.arming.get(REPO, PR)["auto_verdict_enabled"] == 0   # disarmed at decision time
+    assert [c["kind"] for c in comments] == ["deferred"]
+
+    harness.post_result = ({"message": "ok"}, 200)
+    import time
+    svc.retry_deferred_verdicts(now=time.time() + svc.RETRY_INITIAL_BACKOFF_SECONDS + 1)
+
+    assert len(harness.posted) == 2
+    row = harness.auto.get_latest_for_pr(REPO, PR)
+    assert (row["outcome"], row["event"], row["disputed_count"]) == ("mediation", "COMMENT", 3)
+    assert [c["kind"] for c in comments] == ["deferred", "mediation"]
+    assert harness.arming.get(REPO, PR)["auto_verdict_enabled"] == 0
+
+
+def test_finalized_mediation_rows_are_not_retried(harness, monkeypatch):
+    _criteria(monkeypatch)
+    _arm(harness)
+    rid = _review(harness, disputed=THREE_DISPUTED)
+    svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    import time
+    svc.retry_deferred_verdicts(now=time.time() + svc.RETRY_MAX_BACKOFF_SECONDS)
+
+    assert len(harness.posted) == 1
+    assert harness.auto.get_deferred() == []
+
+
+def test_retry_sweep_never_mediates_a_comment_mode_row(harness, monkeypatch, comments):
+    _criteria(monkeypatch)
+    _arm(harness, mode="comment")
+    rid = _review(harness, disputed=THREE_DISPUTED)
+    harness.post_result = RATE_LIMITED
+    assert svc.maybe_post_auto_verdict(REPO, PR, rid)["outcome"] == "deferred"
+
+    harness.post_result = ({"message": "ok"}, 200)
+    import time
+    svc.retry_deferred_verdicts(now=time.time() + svc.RETRY_INITIAL_BACKOFF_SECONDS + 1)
+
+    row = harness.auto.get_latest_for_pr(REPO, PR)
+    assert row["outcome"] == "posted"
+    assert harness.arming.get(REPO, PR)["auto_verdict_enabled"] == 1
+    assert [c["kind"] for c in comments] == ["deferred", "deleted"]

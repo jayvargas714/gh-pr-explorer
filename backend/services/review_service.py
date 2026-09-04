@@ -60,12 +60,27 @@ _SCHEMA_INSTRUCTIONS = (
     '"metadata" (object with pr_number, repository, pr_url, pr_title, author, branch {head, base}, '
     "review_date, review_type, files_changed, additions, deletions), "
     '"summary" (string), '
-    '"sections" (array of objects with type=critical|major|minor, display_name, and issues array), '
+    '"sections" (array of objects with type=critical|major|minor|disputed|deferred, display_name, and issues array), '
     '"highlights" (array of strings), '
     '"score" (object with overall 0-10, optional breakdown array of {category, score, comment}, optional summary). '
     "Each issue MUST have: title (string), location (object with file, start_line, end_line), "
     "problem (string), and optionally principle (string — the engineering principle violated, "
     "e.g. 'DRY / Single Source of Truth (violates DRY)'), fix (string), and code_snippet (string). "
+    "Issues in a disputed or deferred section MUST also have severity (critical|major|minor — the "
+    "severity the finding had when first raised) and disposition (string — the author's one-line "
+    "rationale or follow-up target). Never put severity on issues in critical/major/minor sections. "
+    "Disputed and deferred sections appear only in follow-up reviews. "
+)
+
+# Every registered reviewer runs through this prompt, so the no-verdict rule is
+# enforced here rather than relying on each agent file. The verdict is computed
+# by auto_verdict_service from the configured criteria.
+_NO_VERDICT_INSTRUCTIONS = (
+    "Do NOT state a verdict, recommendation, or readiness judgement anywhere in the review — "
+    "no approve / request changes / LGTM / ready to merge / ready for live review / needs "
+    "mediation / blocked, and no 'verdict-leaning' line. The application decides the verdict "
+    "from the severity counts against configured criteria. Report findings, severities, "
+    "dispositions, highlights, and the score only. "
 )
 
 # The wrapper CLI must not hand the review off to a background agent. In
@@ -1094,11 +1109,29 @@ def _conversation_since(owner, repo, pr_number, since):
 
 _DISPOSITION_INSTRUCTIONS = (
     "Replies in the PR conversation that address a previous finding are the author's "
-    "DISPOSITIONS of it and must be processed: if the author's rationale holds, mark that "
-    "issue 'withdrawn' and do not re-report it; if it does not hold, mark it 'disputed', keep "
-    "the issue in its severity section, and in 'notes' state why the rationale fails. "
-    "Never silently drop a finding the author disputed. Findings the author did not address "
-    "keep the usual statuses (resolved / partially_addressed / not_addressed / wont_fix). "
+    "DISPOSITIONS of it and must be processed. If the author's rationale holds, mark that issue "
+    "'withdrawn' and do not re-report it. If the author agrees to fix it in a named follow-up "
+    "(issue, PR, or later milestone), mark it 'deferred' and move it to the 'deferred' section "
+    "with its original severity and the follow-up target as disposition. If the author declines "
+    "and the rationale does not hold, mark it 'disputed' and move it to the 'disputed' section "
+    "with its original severity and the author's rationale as disposition; state in 'notes' why "
+    "the rationale fails, and do not re-argue it in later rounds. Findings already in the "
+    "previous review's disputed or deferred sections stay there verbatim unless the author's new "
+    "replies change their position. Never silently drop a finding the author disputed. Disputed "
+    "and deferred findings do not count toward the verdict; the application routes the PR to "
+    "human mediation when enough critical/major findings are disputed. Findings the author did "
+    "not address keep the usual statuses (resolved / partially_addressed / not_addressed / wont_fix). "
+)
+
+# A follow-up round is the diff plus the previous round's findings and the
+# author's dispositions — never a fresh sweep of unchanged sections, which is
+# what kept ED review loops from converging.
+_FOLLOWUP_SCOPE_INSTRUCTIONS = (
+    "SCOPE: review only (1) the diff since the previous review, (2) the previous review's "
+    "findings and whether each was addressed, and (3) the author's dispositions in the "
+    "conversation below. Do NOT re-review sections the diff did not touch and do NOT raise new "
+    "findings against unchanged text; a new finding must be anchored in the changed lines or be "
+    "a residual of a fix the author took. "
 )
 
 
@@ -1163,15 +1196,16 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
             f"PR conversation since that review (author replies, threads on our inline comments, reviews):\n\n"
             f"---PR CONVERSATION SINCE PREVIOUS REVIEW---\n{conversation_block}\n---END PR CONVERSATION---\n\n"
             f"{head_note}"
-            f"Focus on: changes since last review, whether previous issues were addressed. "
+            f"{_FOLLOWUP_SCOPE_INSTRUCTIONS}"
             f"{_DISPOSITION_INSTRUCTIONS}"
             f"Include a 'followup' section with a 'resolution_status' array tracking each previous issue. "
             f"Each entry MUST be an object with exactly these fields: "
             f'"issue" (string — the human-readable title of the previous issue, copy it verbatim from the previous review), '
-            f'"status" (one of: resolved, partially_addressed, not_addressed, wont_fix, withdrawn, disputed), '
+            f'"status" (one of: resolved, partially_addressed, not_addressed, wont_fix, withdrawn, disputed, deferred), '
             f'"notes" (string — brief explanation of what changed or why). '
             f'Do NOT use "title", "details", or "id" as alternative field names. '
             f"Use the {agent_name} agent. "
+            f"{_NO_VERDICT_INSTRUCTIONS}"
             f"{_FOREGROUND_INSTRUCTIONS}"
             f"{workspace_instructions}"
             f"Write the review to {review_file}. "
@@ -1184,6 +1218,7 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
             f"Review PR #{pr_number} at {pr_url}. "
             f"{pb_context}"
             f"Use the {agent_name} agent. "
+            f"{_NO_VERDICT_INSTRUCTIONS}"
             f"{_FOREGROUND_INSTRUCTIONS}"
             f"{workspace_instructions}"
             f"Write the review to {review_file}. "

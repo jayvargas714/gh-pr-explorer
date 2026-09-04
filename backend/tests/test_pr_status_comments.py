@@ -319,6 +319,30 @@ def test_verdict_skipped_body(gh):
     assert "no usable structured content" in body
 
 
+def test_verdict_mediation_body(gh):
+    svc.post_verdict_mediation_comment(
+        OWNER, REPO, PR, disputed_blocking=3, threshold=3,
+        tallies={"critical": 0, "major": 1, "minor": 2, "disputed": 4, "deferred": 1},
+    )
+
+    body = gh.body
+    assert "mediation" in body.lower()
+    assert "3 critical/major findings are disputed" in body
+    assert "threshold 3" in body
+    assert "0 critical, 1 major, 2 minor" in body
+    assert "4 disputed" in body and "1 deferred" in body
+    assert "disarmed" in body.lower()
+    assert "re-arm" in body.lower()
+    assert gh.kinds == ["list", "post"]
+
+
+def test_verdict_mediation_honours_kill_switch(gh, monkeypatch):
+    monkeypatch.setattr(svc, "get_config", lambda: {"post_review_started_comment": False})
+    assert svc.post_verdict_mediation_comment(
+        OWNER, REPO, PR, disputed_blocking=3, threshold=3, tallies={}) is False
+    assert gh.calls == []
+
+
 # --- orphaned / automation (K, L, M, N, O, P) ------------------------------------
 
 def test_orphaned_requeued_body(gh):

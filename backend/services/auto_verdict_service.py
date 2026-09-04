@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
-from backend.services.auto_verdict_config import apply_override, get_criteria
+from backend.services.auto_verdict_config import DEFAULT_CRITERIA, apply_override, get_criteria
 from backend.services.github_service import (
     fetch_pr_state_and_sha,
     get_authenticated_login,
@@ -33,6 +33,7 @@ from backend.services.review_event_log import (
     record_verdict_posted,
 )
 from backend.services.review_schema import (
+    SECTION_TYPES,
     SEVERITIES,
     count_issues,
     format_issue_lines,
@@ -65,9 +66,20 @@ def evaluate_criteria(
 ) -> Tuple[str, Dict[str, int], str]:
     """Compare a review's issue counts against the thresholds.
 
-    Returns (decision, tallies, reason) where decision is 'request_changes' or 'pass'.
+    Returns (decision, tallies, reason) where decision is 'mediation',
+    'request_changes' or 'pass'. Disputed and deferred findings never count
+    toward the severity thresholds; but when the disputed critical/major count
+    reaches ``mediationDisputedThreshold`` the review is routed to human
+    mediation, checked before the thresholds so a standing disagreement is
+    never reported as an ordinary breach.
     """
     tallies = count_issues(content_json)
+    threshold = criteria.get("mediationDisputedThreshold", DEFAULT_CRITERIA["mediationDisputedThreshold"])
+    if tallies["disputed_blocking"] >= threshold:
+        return "mediation", tallies, (
+            f"{tallies['disputed_blocking']} disputed critical/major findings >= {threshold} "
+            f"— routed to human mediation"
+        )
     limits = {
         "critical": criteria["maxCritical"],
         "major": criteria["maxMajor"],
@@ -85,7 +97,11 @@ def evaluate_criteria(
 
     within = ", ".join(f"{tallies[sev]} {sev}" for sev in SEVERITIES)
     allowed = "/".join(str(limits[sev]) for sev in SEVERITIES)
-    return "pass", tallies, f"{within} — within limits ({allowed})"
+    set_aside = ", ".join(
+        f"{tallies[kind]} {kind}" for kind in ("disputed", "deferred") if tallies.get(kind)
+    )
+    suffix = f"; {set_aside} set aside" if set_aside else ""
+    return "pass", tallies, f"{within} — within limits ({allowed}){suffix}"
 
 
 def compose_report_body(content_json: Dict[str, Any]) -> str:
@@ -103,7 +119,13 @@ def compose_report_body(content_json: Dict[str, Any]) -> str:
         parts.append(f"**Summary**\n\n{summary}")
 
     section_names = get_section_display_names()
-    for section in content_json.get("sections", []) or []:
+    # Severity sections first, then the Disputed / Deferred set-asides, whatever
+    # order the reviewer wrote them in.
+    sections = sorted(
+        content_json.get("sections", []) or [],
+        key=lambda sec: SECTION_TYPES.index(sec.get("type")) if sec.get("type") in SECTION_TYPES else len(SECTION_TYPES),
+    )
+    for section in sections:
         issues = section.get("issues") or []
         if not issues:
             continue
@@ -137,7 +159,9 @@ def _finalize_and_log(
         review_id, outcome, event=event, reason=reason,
         tallies=tallies, criteria=criteria, error_detail=error_detail,
     )
-    if outcome == "posted":
+    if outcome in ("posted", "mediation"):
+        # A mediation review reaches GitHub as a COMMENT, so it is a posted event;
+        # the reason text carries the mediation routing.
         record_verdict_posted(
             repo, pr_number, review_id=review_id, event=event,
             auto_started=True, detail=reason,
@@ -154,12 +178,12 @@ def _finalize_and_log(
             detail=error_detail or reason,
         )
     _post_outcome_status_comment(repo, pr_number, outcome, event, reason,
-                                 tallies, error_detail)
+                                 tallies, error_detail, criteria)
     return {"outcome": outcome, "event": event, "reason": reason}
 
 
 def _post_outcome_status_comment(repo, pr_number, outcome, event, reason,
-                                 tallies, error_detail):
+                                 tallies, error_detail, criteria=None):
     """Mirror a verdict outcome onto the PR as a status comment.
 
     A posted verdict needs no comment — the formal review IS the message —
@@ -170,6 +194,7 @@ def _post_outcome_status_comment(repo, pr_number, outcome, event, reason,
         delete_status_comments,
         post_verdict_deferred_comment,
         post_verdict_error_comment,
+        post_verdict_mediation_comment,
         post_verdict_skipped_comment,
         post_verdict_suppressed_comment,
     )
@@ -182,6 +207,13 @@ def _post_outcome_status_comment(repo, pr_number, outcome, event, reason,
     elif outcome == "suppressed":
         post_verdict_suppressed_comment(
             owner, repo_name, pr_number, tallies=tallies, reason=reason)
+    elif outcome == "mediation":
+        post_verdict_mediation_comment(
+            owner, repo_name, pr_number,
+            disputed_blocking=(tallies or {}).get("disputed_blocking"),
+            threshold=(criteria or {}).get(
+                "mediationDisputedThreshold", DEFAULT_CRITERIA["mediationDisputedThreshold"]),
+            tallies=tallies)
     elif outcome == "deferred":
         post_verdict_deferred_comment(
             owner, repo_name, pr_number, event=event, tallies=tallies)
@@ -205,6 +237,21 @@ def _load_review_content(review: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(parsed, dict) or parsed.get("error"):
         return None
     return parsed
+
+
+def _disarm_for_mediation(repo: str, pr_number: int, arming: Dict[str, Any]) -> None:
+    """Switch the PR's auto verdict off, keeping its reviewer and mode so a
+    human can re-arm it unchanged once the disputed findings are settled.
+    Disarming is what stops further auto follow-ups: the watcher scans only
+    armed PRs."""
+    from backend.database import get_auto_verdict_arming_db
+
+    get_auto_verdict_arming_db().set_arming(
+        repo, pr_number, False,
+        reviewer_type=arming.get("auto_verdict_reviewer"),
+        mode=arming.get("auto_verdict_mode"),
+    )
+    logger.info(f"Auto verdict for {repo}#{pr_number} disarmed: routed to human mediation")
 
 
 def maybe_post_auto_verdict(repo: str, pr_number: int, review_id: int) -> Optional[Dict[str, Any]]:
@@ -271,11 +318,18 @@ def maybe_post_auto_verdict(repo: str, pr_number: int, review_id: int) -> Option
         tallies = count_issues(content_json)
         counts = ", ".join(f"{tallies[sev]} {sev}" for sev in SEVERITIES)
         event = "COMMENT"
+        decision = "comment"
         reason = f"comment mode — review findings posted as comment ({counts})"
     else:
         decision, tallies, reason = evaluate_criteria(content_json, criteria)
 
-        if decision == "request_changes":
+        if decision == "mediation":
+            # The findings still go up, as a COMMENT so the Disputed list is in
+            # front of the mediator. Disarm *before* posting: stopping the loop
+            # must not depend on GitHub accepting the comment.
+            event = "COMMENT"
+            _disarm_for_mediation(repo, pr_number, arming)
+        elif decision == "request_changes":
             event = "REQUEST_CHANGES"
         elif not criteria.get("allowAutoApprove"):
             return record(
@@ -313,7 +367,8 @@ def maybe_post_auto_verdict(repo: str, pr_number: int, review_id: int) -> Option
             error_detail=str(result.get("error", result))[:500],
         )
 
-    return record("posted", event=event, reason=reason, tallies=tallies)
+    outcome = "mediation" if mode != "comment" and decision == "mediation" else "posted"
+    return record(outcome, event=event, reason=reason, tallies=tallies)
 
 
 def _parse_row_timestamp(value: Optional[str]) -> Optional[float]:
@@ -352,6 +407,7 @@ def retry_deferred_verdicts(now: Optional[float] = None) -> None:
         except (json.JSONDecodeError, TypeError):
             criteria = None
         tallies = {sev: row.get(f"{sev}_count") for sev in SEVERITIES}
+        tallies.update({kind: row.get(f"{kind}_count") for kind in ("disputed", "deferred")})
         event = row.get("event")
 
         def record(outcome, **kwargs):
@@ -372,17 +428,29 @@ def retry_deferred_verdicts(now: Optional[float] = None) -> None:
         if now < next_attempt:
             continue
 
-        arming = get_auto_verdict_arming_db().get(repo, pr_number)
-        if not arming or not arming.get("auto_verdict_enabled"):
-            record("skipped", event=event, tallies=tallies,
-                   reason="card disarmed while verdict was deferred")
-            continue
-
         review = get_reviews_db().get_review(review_id)
         content_json = _load_review_content(review) if review else None
         if content_json is None:
             record("skipped", event=event, tallies=tallies,
                    reason="review content no longer usable")
+            continue
+
+        # A mediation decision disarmed the PR on purpose at decision time, so
+        # the disarmed gate below must not swallow its retry. Re-derived from the
+        # stored criteria + content rather than parsed out of the reason text;
+        # comment mode never mediates, whatever the counts say.
+        arming = get_auto_verdict_arming_db().get(repo, pr_number)
+        is_mediation = (
+            criteria is not None
+            and (arming or {}).get("auto_verdict_mode") != "comment"
+            and evaluate_criteria(content_json, criteria)[0] == "mediation"
+        )
+        if is_mediation:
+            tallies = count_issues(content_json)
+
+        if not is_mediation and (not arming or not arming.get("auto_verdict_enabled")):
+            record("skipped", event=event, tallies=tallies,
+                   reason="card disarmed while verdict was deferred")
             continue
 
         owner, _, repo_name = repo.partition("/")
@@ -419,4 +487,5 @@ def retry_deferred_verdicts(now: Optional[float] = None) -> None:
                    error_detail=str(result.get("error", result))[:500])
             continue
 
-        record("posted", event=event, reason=row.get("reason"), tallies=tallies)
+        record("mediation" if is_mediation else "posted",
+               event=event, reason=row.get("reason"), tallies=tallies)

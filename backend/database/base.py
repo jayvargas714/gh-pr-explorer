@@ -376,6 +376,8 @@ class Database:
                     critical_count INTEGER,
                     major_count INTEGER,
                     minor_count INTEGER,
+                    disputed_count INTEGER,
+                    deferred_count INTEGER,
                     criteria_json TEXT,
                     head_commit_sha TEXT,
                     error_detail TEXT,
@@ -387,6 +389,15 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_auto_verdicts_repo_pr
                 ON auto_verdicts(repo, pr_number)
             """)
+            # Set-aside counts: findings the author disputed or deferred, which
+            # never count toward the verdict thresholds but drive the mediation
+            # outcome. NULL on rows recorded before the columns existed.
+            cursor.execute("PRAGMA table_info(auto_verdicts)")
+            auto_verdict_columns = {row[1] for row in cursor.fetchall()}
+            for column in ("disputed_count", "deferred_count"):
+                if column not in auto_verdict_columns:
+                    cursor.execute(f"ALTER TABLE auto_verdicts ADD COLUMN {column} INTEGER")
+                    logger.info(f"Added column {column} to auto_verdicts table")
 
             # Automation dispatches: one row per PR the automation pipeline has seen.
             # UNIQUE(repo, pr_number) is the restart-proof idempotence guard — a PR

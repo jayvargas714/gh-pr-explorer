@@ -146,6 +146,37 @@ def test_derive_stage_matrix(status, detail, pr_state, running, expected):
     assert derive_stage(status, detail, pr_state, running) == expected
 
 
+@pytest.mark.parametrize("status,pr_state,running,last_outcome,expected", [
+    ("dispatched", "OPEN", False, "mediation", "mediation"),   # disputed findings, human needed
+    ("pending", "OPEN", False, "mediation", "mediation"),      # regardless of dispatch status
+    ("dispatched", "MERGED", False, "mediation", "closed"),    # closed still wins
+    ("dispatched", "OPEN", True, "mediation", "reviewing"),    # a running review wins
+    ("dispatched", "OPEN", False, "posted", "reviewed"),       # other outcomes change nothing
+    ("dispatched", "OPEN", False, None, "reviewed"),
+])
+def test_derive_stage_reads_the_last_auto_verdict_outcome(status, pr_state, running, last_outcome, expected):
+    assert derive_stage(status, None, pr_state, running, last_outcome) == expected
+
+
+def test_build_rows_stage_is_mediation_after_a_mediation_outcome(env):
+    env["synced"].upsert_pr(REPO, _pr(9))
+    _dispatch(env, 9, "dispatched", reviewer_key="ed")
+    rid = env["reviews"].save_review(pr_number=9, repo=REPO, status="completed",
+                                     content_json=_content(), head_commit_sha="head999")
+    env["verdicts"].claim(REPO, 9, rid)
+    env["verdicts"].finalize(rid, "mediation", event="COMMENT", reason="3 disputed",
+                             tallies={"critical": 0, "major": 1, "minor": 0,
+                                      "disputed": 3, "deferred": 1})
+    env["arming"].set_arming(REPO, 9, False, "ed", "verdict")
+
+    row = next(r for r in build_rows() if r["prNumber"] == 9)
+
+    assert row["stage"] == "mediation"
+    assert row["autoVerdict"]["enabled"] is False
+    assert row["autoVerdict"]["last"]["outcome"] == "mediation"
+    assert row["autoVerdict"]["last"]["disputedCount"] == 3
+
+
 # ----- build_rows -----
 
 

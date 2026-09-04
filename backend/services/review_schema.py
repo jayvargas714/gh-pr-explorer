@@ -15,12 +15,14 @@ SCHEMA_VERSION = "1.0.0"
 # Path to the formal JSON Schema spec (for external tools/agents)
 SCHEMA_SPEC_PATH = Path(__file__).parent / "review_schema_spec.json"
 
-# followup.resolution_status[].status vocabulary. The last two record author
+# followup.resolution_status[].status vocabulary. The last three record author
 # dispositions: "withdrawn" = the reviewer accepted the author's rationale and
 # dropped the finding; "disputed" = the author pushed back, the reviewer holds,
-# and the issue stays in its section.
+# and the issue moves to the "disputed" section; "deferred" = the author agreed
+# to fix it in a named follow-up and the issue moves to the "deferred" section.
 RESOLUTION_STATUSES = (
     "resolved", "partially_addressed", "not_addressed", "wont_fix", "withdrawn", "disputed",
+    "deferred",
 )
 
 # Default section display names (can be overridden in config.json)
@@ -28,25 +30,45 @@ DEFAULT_SECTION_NAMES = {
     "critical": "Critical Issues",
     "major": "Major Concerns",
     "minor": "Minor Issues",
+    "disputed": "Disputed",
+    "deferred": "Deferred",
 }
 
 
 SEVERITIES = ("critical", "major", "minor")
 
+# Sections whose issues were set aside by an author disposition. Each issue there
+# carries the severity it had when first raised plus the author's disposition, and
+# none of them count toward the verdict thresholds.
+DISPOSITION_SECTIONS = ("disputed", "deferred")
+SECTION_TYPES = SEVERITIES + DISPOSITION_SECTIONS
+
 
 def count_issues(content_json: Dict[str, Any]) -> Dict[str, int]:
-    """Count issues per severity in a review's content_json.
+    """Tally a review's content_json.
+
+    Returns the three severity counts (findings the author must fix) plus
+    ``disputed``, ``deferred`` and ``disputed_blocking`` — the disputed issues
+    whose original severity is critical or major. Set-aside issues are never
+    added to the severity counts.
 
     Lives here with the other content_json helpers so read-only callers (the
     review log) can tally a review without importing auto_verdict_service, which
     pulls in verdict_service and the gh subprocess layer.
     """
-    tallies = {sev: 0 for sev in SEVERITIES}
+    tallies = {sev: 0 for sev in SECTION_TYPES}
+    tallies["disputed_blocking"] = 0
     for section in content_json.get("sections", []) or []:
         section_type = section.get("type", "")
-        if section_type in tallies:
-            issues = section.get("issues") or []
-            tallies[section_type] = len(issues)
+        if section_type not in SECTION_TYPES:
+            continue
+        issues = section.get("issues") or []
+        tallies[section_type] = len(issues)
+        if section_type == "disputed":
+            tallies["disputed_blocking"] = sum(
+                1 for issue in issues
+                if str(issue.get("severity", "")).lower() in ("critical", "major")
+            )
     return tallies
 
 
@@ -97,7 +119,7 @@ def validate_review_json(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     # sections
     sections = data.get("sections")
     if isinstance(sections, list):
-        valid_types = {"critical", "major", "minor"}
+        valid_types = set(SECTION_TYPES)
         for i, sec in enumerate(sections):
             if not isinstance(sec, dict):
                 errors.append(f"sections[{i}] must be an object")
@@ -122,6 +144,20 @@ def validate_review_json(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
                     loc = issue.get("location")
                     if not isinstance(loc, dict) or "file" not in loc:
                         errors.append(f"sections[{i}].issues[{j}].location.file is required")
+                    severity = issue.get("severity")
+                    if sec_type in DISPOSITION_SECTIONS:
+                        if str(severity or "").lower() not in SEVERITIES:
+                            errors.append(
+                                f"sections[{i}].issues[{j}].severity must be one of {SEVERITIES} "
+                                f"in a {sec_type} section, got {severity!r}")
+                        disposition = issue.get("disposition")
+                        if not isinstance(disposition, str) or not disposition.strip():
+                            errors.append(
+                                f"sections[{i}].issues[{j}].disposition is required in a {sec_type} section")
+                    elif severity is not None:
+                        errors.append(
+                            f"sections[{i}].issues[{j}].severity is only allowed in "
+                            f"{DISPOSITION_SECTIONS} sections")
     elif sections is not None:
         errors.append("sections must be an array")
 
@@ -160,6 +196,10 @@ def format_issue_lines(issues: List[Dict[str, Any]]) -> List[str]:
             loc_str += f":{start}"
         if loc_str:
             lines.append(f"- Location: `{loc_str}`")
+        if issue.get("severity"):
+            lines.append(f"- Severity: {str(issue['severity']).title()}")
+        if issue.get("disposition"):
+            lines.append(f"- Disposition: {issue['disposition']}")
         if issue.get("principle"):
             lines.append(f"- Principle: {issue['principle']}")
         if issue.get("problem"):
@@ -482,7 +522,7 @@ def _parse_summary(content: str) -> str:
     # Heading-style: "## Summary" or "### Summary" — terminator is any
     # subsequent section heading or horizontal rule.
     m = re.search(
-        r'^#{2,6}\s*Summary\s*\n+(.*?)(?=\n#{2,6}\s|\n---\s*\n|\n\*\*(?:Critical|Major|Minor|Positive|Score|Recommendations)\*\*)',
+        r'^#{2,6}\s*Summary\s*\n+(.*?)(?=\n#{2,6}\s|\n---\s*\n|\n\*\*(?:Critical|Major|Minor|Disputed|Deferred|Positive|Score|Recommendations)\*\*)',
         content, re.DOTALL | re.IGNORECASE | re.MULTILINE
     )
     if m:
@@ -490,7 +530,7 @@ def _parse_summary(content: str) -> str:
 
     # Bold-style: **Summary**
     m = re.search(
-        r'\*\*Summary\*\*\s*\n+(.*?)(?=\n---|\n\*\*(?:Critical|Major|Minor|Positive|Score|Recommendations))',
+        r'\*\*Summary\*\*\s*\n+(.*?)(?=\n---|\n\*\*(?:Critical|Major|Minor|Disputed|Deferred|Positive|Score|Recommendations))',
         content, re.DOTALL | re.IGNORECASE
     )
     if m:
@@ -519,17 +559,20 @@ _SECTION_MAP = {
     "Critical Issues": "critical",
     "Major Concerns": "major",
     "Minor Issues": "minor",
+    "Disputed": "disputed",
+    "Deferred": "deferred",
 }
 
 # All known section headings that terminate a section (matches frontend reviewSections.ts)
 _ALL_HEADINGS = [
-    "Critical Issues", "Major Concerns", "Minor Issues",
+    "Critical Issues", "Major Concerns", "Minor Issues", "Disputed", "Deferred",
     "Positive Highlights", "Recommendations", "Summary", "Score",
 ]
 
 
 def _parse_sections(content: str) -> List[Dict[str, Any]]:
-    """Parse Critical Issues, Major Concerns, Minor Issues sections."""
+    """Parse the severity sections (always emitted, empty or not) plus the
+    Disputed / Deferred sections (emitted only when their heading is present)."""
     sections = []
     display_names = get_section_display_names()
 
@@ -547,6 +590,8 @@ def _parse_sections(content: str) -> List[Dict[str, Any]]:
         match = pattern.search(content)
 
         display_name = display_names.get(sec_type, heading)
+        if not match and sec_type in DISPOSITION_SECTIONS:
+            continue
         if not match or not match.group(1).strip() or match.group(1).strip().lower() == "none":
             sections.append({
                 "type": sec_type,
@@ -589,6 +634,8 @@ def _parse_issues_from_section(section_text: str) -> List[Dict[str, Any]]:
         principle = _extract_field(block, "Principle")
         problem = _extract_field(block, "Problem")
         fix = _extract_field(block, "Fix")
+        severity = _extract_field(block, "Severity")
+        disposition = _extract_field(block, "Disposition")
 
         loc = _parse_location_string(location_str)
         if not loc:
@@ -603,6 +650,10 @@ def _parse_issues_from_section(section_text: str) -> List[Dict[str, Any]]:
             issue["principle"] = principle
         if fix:
             issue["fix"] = fix
+        if severity and severity.strip().lower() in SEVERITIES:
+            issue["severity"] = severity.strip().lower()
+        if disposition:
+            issue["disposition"] = disposition
 
         # Extract code snippets
         code_match = re.search(r'```[\w]*\n(.*?)```', block, re.DOTALL)
@@ -617,7 +668,7 @@ def _parse_issues_from_section(section_text: str) -> List[Dict[str, Any]]:
 def _extract_field(block: str, field_name: str) -> Optional[str]:
     """Extract a field from an issue block (e.g. '- Location: value')."""
     pattern = re.compile(
-        rf'-\s*{field_name}:\s*(.*?)(?=\n-\s*(?:Location|Principle|Problem|Fix):|\n\*\*\d+\.|\n```|\Z)',
+        rf'-\s*{field_name}:\s*(.*?)(?=\n-\s*(?:Location|Principle|Severity|Problem|Fix|Disposition):|\n\*\*\d+\.|\n```|\Z)',
         re.DOTALL
     )
     m = pattern.search(block)
@@ -769,7 +820,7 @@ def _parse_followup(content: str, metadata: Optional[Dict[str, Any]] = None) -> 
 
     # Look for resolution items: "- **Issue text**: Resolved" or similar
     res_pattern = re.compile(
-        r'-\s*\*\*(.+?)\*\*:\s*(resolved|partially[\s_]addressed|not[\s_]addressed|wont[\s_]fix|withdrawn|disputed)(?:\s*[-–]\s*(.+))?',
+        r'-\s*\*\*(.+?)\*\*:\s*(resolved|partially[\s_]addressed|not[\s_]addressed|wont[\s_]fix|withdrawn|disputed|deferred)(?:\s*[-–]\s*(.+))?',
         re.IGNORECASE
     )
     for m in res_pattern.finditer(content):

@@ -7,7 +7,7 @@ import { Alert } from '../common/Alert'
 import { Spinner } from '../common/Spinner'
 import { getReviewDetail, postVerdict, checkPRReviewed } from '../../api/reviews'
 import { getAuditDetail, checkPRAudited } from '../../api/audits'
-import { getReviewSections, type ReviewSection } from '../../utils/reviewSections'
+import { SECTION_KEY_BY_TYPE, getReviewSections, type ReviewSection } from '../../utils/reviewSections'
 import { SectionEditModal, type EditableIssue } from './SectionEditModal'
 import type {
   VerdictEvent,
@@ -453,9 +453,9 @@ export function VerdictModal({
       if (review.content_json?.sections) {
         const issueMap: Record<string, EditableIssue[]> = {}
         for (const jsonSection of review.content_json.sections) {
-          const key = jsonSection.type === 'critical' ? 'critical-issues'
-            : jsonSection.type === 'major' ? 'major-concerns'
-            : 'minor-issues'
+          const key = SECTION_KEY_BY_TYPE[jsonSection.type] ?? jsonSection.type
+          // Disputed / Deferred set-asides are never posted inline.
+          if (!INLINE_ELIGIBLE_KEYS.has(key)) continue
           if (jsonSection.issues.length > 0) {
             issueMap[key] = jsonSection.issues.map((issue: ReviewIssueJSON) => ({
               title: issue.title,

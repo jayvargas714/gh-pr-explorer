@@ -10,7 +10,20 @@ const SECTION_HEADINGS = [
   'Critical Issues',
   'Major Concerns',
   'Minor Issues',
+  'Disputed',
+  'Deferred',
 ]
+
+/** Section key per JSON section type. Keys for the set-aside sections are
+ * deliberately absent from VerdictModal's INLINE_ELIGIBLE_KEYS. Mirrors
+ * `_SECTION_MAP` in backend/services/review_schema.py. */
+export const SECTION_KEY_BY_TYPE: Record<ReviewSectionJSON['type'], string> = {
+  critical: 'critical-issues',
+  major: 'major-concerns',
+  minor: 'minor-issues',
+  disputed: 'disputed',
+  deferred: 'deferred',
+}
 
 // All known review headings that act as section terminators
 // ('Recommendations' only so legacy reports that still carry one terminate cleanly)
@@ -72,6 +85,10 @@ function formatSectionToMarkdown(section: ReviewSectionJSON): string {
       locStr += `:${loc.start_line}`
     }
     if (locStr) parts.push(`- Location: \`${locStr}\``)
+    if (issue.severity) {
+      parts.push(`- Severity: ${issue.severity.charAt(0).toUpperCase()}${issue.severity.slice(1)}`)
+    }
+    if (issue.disposition) parts.push(`- Disposition: ${issue.disposition}`)
     if (issue.principle) parts.push(`- Principle: ${issue.principle}`)
     if (issue.problem) parts.push(`- Problem: ${issue.problem}`)
     if (issue.fix) parts.push(`- Fix: ${issue.fix}`)
@@ -98,9 +115,7 @@ export function sectionsFromJSON(reviewJson: ReviewJSON): ReviewSection[] {
   for (const section of reviewJson.sections) {
     if (section.issues.length > 0) {
       sections.push({
-        key: section.type === 'critical' ? 'critical-issues'
-          : section.type === 'major' ? 'major-concerns'
-          : 'minor-issues',
+        key: SECTION_KEY_BY_TYPE[section.type] ?? section.type,
         heading: section.display_name,
         content: formatSectionToMarkdown(section),
       })

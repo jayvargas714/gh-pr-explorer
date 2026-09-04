@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 PIPELINE_REBUILD_SECONDS = 10
 DIRTY_CHECK_SECONDS = 1
 
-STAGES = ("waiting", "ready", "reviewing", "reviewed", "unidentified",
+STAGES = ("waiting", "ready", "reviewing", "reviewed", "mediation", "unidentified",
           "skipped", "opted_out", "failed", "closed")
 
 _STATUS_TO_DECISION = {
@@ -106,13 +106,17 @@ def pipeline_snapshot_loop(interval=PIPELINE_REBUILD_SECONDS):
 
 
 def derive_stage(dispatch_status: str, detail: Optional[str], pr_state: Optional[str],
-                 running: bool) -> str:
-    """Collapse dispatch status + detail, PR state and the live registry into
-    one Stage. First match wins; see the spec table."""
+                 running: bool, last_verdict_outcome: Optional[str] = None) -> str:
+    """Collapse dispatch status + detail, PR state, the live registry and the
+    last auto-verdict outcome into one Stage. First match wins; see the spec table."""
     if (pr_state or "").upper() in ("MERGED", "CLOSED"):
         return "closed"
     if running:
         return "reviewing"
+    if last_verdict_outcome == "mediation":
+        # Disputed findings reached the threshold: auto verdict is disarmed and a
+        # human settles it. Sticky until the next review's verdict row exists.
+        return "mediation"
     if dispatch_status == "failed":
         return "failed"
     if dispatch_status == "unidentified":
@@ -277,7 +281,8 @@ def _build_row(dispatch, pr, pr_reviews, pr_audits, pr_verdicts, arming_row, que
         "prUpdatedAt": pr.get("updatedAt"),
         "prSyncedAt": pr.get("fetchedAt"),
         "headSha": head_sha,
-        "stage": derive_stage(dispatch["status"], dispatch.get("detail"), pr_state, is_running),
+        "stage": derive_stage(dispatch["status"], dispatch.get("detail"), pr_state, is_running,
+                              (last_verdict or {}).get("outcome")),
         "dispatch": {
             "status": dispatch["status"],
             "detail": dispatch.get("detail"),

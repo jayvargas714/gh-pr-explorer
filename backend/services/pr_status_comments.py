@@ -326,6 +326,25 @@ def post_verdict_skipped_comment(owner, repo, pr_number, *, reason):
     return _post_status_comment(owner, repo, pr_number, body, "verdict-skipped")
 
 
+def post_verdict_mediation_comment(owner, repo, pr_number, *, disputed_blocking, threshold, tallies):
+    """Comment that the disputed-findings threshold was reached: the review went
+    up as a COMMENT, auto verdict is disarmed, and a human settles the disputes."""
+    tallies = tallies or {}
+    body = (
+        "🤖 **Auto verdict stopped — human mediation needed**\n\n"
+        f"{disputed_blocking} critical/major findings are disputed (threshold {threshold}): "
+        "the author declined them with a rationale the reviewer does not accept. The review "
+        "was posted as a comment instead of a verdict, and auto verdict is now disarmed for "
+        "this PR so no further automatic rounds run.\n\n"
+        f"- Findings: {_tallies_line(tallies)}\n"
+        f"- Set aside: {tallies.get('disputed', 0)} disputed, {tallies.get('deferred', 0)} deferred\n"
+        f"- Stopped: {_now()}\n\n"
+        "**Next step:** an Area Lead settles the Disputed items at live review, then re-arm "
+        "auto verdict from GitHub PR Explorer to resume.\n"
+    )
+    return _post_status_comment(owner, repo, pr_number, body, "verdict-mediation")
+
+
 # --- automation pipeline ----------------------------------------------------------
 
 def post_automation_enrolled_comment(owner, repo, pr_number):

@@ -180,3 +180,14 @@ def test_format_automation_state_tolerates_malformed_outcome_json():
     assert state["status"] == "failed"
     assert state["ruleName"] is None
     assert state["matchedRules"] == []
+
+
+def test_auto_verdict_last_carries_set_aside_counts():
+    from backend.services.queue_enrichment import _format_auto_verdict
+    row = {"review_id": 5, "event": "COMMENT", "outcome": "mediation", "reason": "r",
+           "critical_count": 0, "major_count": 1, "minor_count": 0,
+           "disputed_count": 3, "deferred_count": 1, "created_at": "2026-09-04 07:00:00"}
+    last = _format_auto_verdict(row)
+    assert last["outcome"] == "mediation"
+    assert last["disputedCount"] == 3
+    assert last["deferredCount"] == 1

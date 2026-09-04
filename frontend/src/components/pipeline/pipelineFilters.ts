@@ -44,7 +44,7 @@ export interface StagePresentation {
 // Attention-first ordering: failed/unidentified need a human, reviewing is
 // live, ready/waiting are the pipeline doing its job, reviewed is done.
 export const STAGE_ORDER: PipelineStage[] = [
-  'failed', 'unidentified', 'reviewing', 'ready', 'waiting',
+  'failed', 'unidentified', 'mediation', 'reviewing', 'ready', 'waiting',
   'reviewed', 'skipped', 'opted_out', 'closed',
 ]
 
@@ -53,6 +53,7 @@ export const STAGE_META: Record<PipelineStage, { icon: string; label: string }> 
   ready:        { icon: '▷', label: 'ready' },
   reviewing:    { icon: '▶', label: 'reviewing' },
   reviewed:     { icon: '✓', label: 'reviewed' },
+  mediation:    { icon: '⚖', label: 'mediation' },
   unidentified: { icon: '❓', label: 'unidentified' },
   skipped:      { icon: '⤼', label: 'skipped' },
   opted_out:    { icon: '⏸', label: 'opted out' },
@@ -119,6 +120,11 @@ export function stagePresentation(row: PipelineRow): StagePresentation {
     case 'reviewed':
       reason = reviewedReason(row)
       break
+    case 'mediation': {
+      const disputed = row.autoVerdict?.last?.disputedCount
+      reason = disputed != null ? `${disputed} disputed · disarmed` : 'disputed findings · disarmed'
+      break
+    }
     case 'unidentified':
       reason = `rules: ${row.dispatch.matchedRules.join(', ') || 'none'}`
       break

@@ -49,7 +49,8 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["critical", "major", "minor"]
+            "enum": ["critical", "major", "minor", "disputed", "deferred"],
+            "description": "critical/major/minor hold findings the author must fix. disputed = the author declined with a rationale the reviewer does not accept; deferred = the author agreed to fix it in a named follow-up. Issues in disputed/deferred keep their original severity and never count toward verdict thresholds."
           },
           "display_name": { "type": "string" },
           "issues": {
@@ -71,7 +72,9 @@
                 "principle": { "type": "string", "description": "Engineering principle violated (e.g. DRY, SOLID, Fail Fast) with optional rule code" },
                 "problem": { "type": "string" },
                 "fix": { "type": "string" },
-                "code_snippet": { "type": "string" }
+                "code_snippet": { "type": "string" },
+                "severity": { "type": "string", "enum": ["critical", "major", "minor"], "description": "Required in disputed/deferred sections (the severity the finding had when first raised); not allowed elsewhere" },
+                "disposition": { "type": "string", "description": "Required in disputed/deferred sections: the author's one-line rationale or follow-up target" }
               }
             }
           }
@@ -120,7 +123,7 @@
               "issue": { "type": "string" },
               "status": {
                 "type": "string",
-                "enum": ["resolved", "partially_addressed", "not_addressed", "wont_fix", "withdrawn", "disputed"]
+                "enum": ["resolved", "partially_addressed", "not_addressed", "wont_fix", "withdrawn", "disputed", "deferred"]
               },
               "notes": { "type": "string" }
             }

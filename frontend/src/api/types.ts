@@ -360,9 +360,15 @@ export interface AutoVerdictConfig {
   maxMinor: number
   allowAutoApprove: boolean
   autoFollowupReview: boolean
+  /** Disputed critical/major findings at or above this count route the PR to
+   * human mediation instead of a verdict (min 1). */
+  mediationDisputedThreshold: number
 }
 
-export type AutoVerdictOutcome = 'pending' | 'posted' | 'suppressed' | 'skipped' | 'error' | 'deferred'
+/** 'deferred' = rate-limited post awaiting retry; 'mediation' = disputed
+ * findings reached the threshold, review posted as COMMENT, PR disarmed. */
+export type AutoVerdictOutcome =
+  | 'pending' | 'posted' | 'suppressed' | 'skipped' | 'error' | 'deferred' | 'mediation'
 
 /** The most recent auto verdict recorded for a PR. */
 export interface AutoVerdictRecord {
@@ -373,6 +379,10 @@ export interface AutoVerdictRecord {
   criticalCount: number | null
   majorCount: number | null
   minorCount: number | null
+  /** Set-aside findings (author disputed / deferred); null on rows recorded
+   * before the columns existed. */
+  disputedCount: number | null
+  deferredCount: number | null
   createdAt: string
 }
 
@@ -513,7 +523,7 @@ export interface AutomationDispatchState {
 // ============================================================================
 
 export type PipelineStage =
-  | 'waiting' | 'ready' | 'reviewing' | 'reviewed'
+  | 'waiting' | 'ready' | 'reviewing' | 'reviewed' | 'mediation'
   | 'unidentified' | 'skipped' | 'opted_out' | 'failed' | 'closed'
 
 export interface PipelineDispatch {
@@ -664,6 +674,11 @@ export interface ReviewJSONMetadata {
   description?: string
 }
 
+export type ReviewSeverity = 'critical' | 'major' | 'minor'
+
+/** Sections whose issues were set aside by an author disposition. */
+export type ReviewSetAsideSection = 'disputed' | 'deferred'
+
 export interface ReviewIssueJSON {
   title: string
   location: { file: string; start_line: number | null; end_line: number | null }
@@ -671,10 +686,16 @@ export interface ReviewIssueJSON {
   problem: string
   fix?: string
   code_snippet?: string
+  /** Only on issues in a disputed/deferred section: the severity the finding
+   * had when first raised. */
+  severity?: ReviewSeverity
+  /** Only on issues in a disputed/deferred section: the author's one-line
+   * rationale or follow-up target. */
+  disposition?: string
 }
 
 export interface ReviewSectionJSON {
-  type: 'critical' | 'major' | 'minor'
+  type: ReviewSeverity | ReviewSetAsideSection
   display_name: string
   issues: ReviewIssueJSON[]
 }
@@ -687,7 +708,7 @@ export interface ReviewScoreJSON {
 
 export type ResolutionStatus =
   | 'resolved' | 'partially_addressed' | 'not_addressed' | 'wont_fix'
-  | 'withdrawn' | 'disputed'
+  | 'withdrawn' | 'disputed' | 'deferred'
 
 export interface ReviewFollowup {
   previous_review_id: number | null
