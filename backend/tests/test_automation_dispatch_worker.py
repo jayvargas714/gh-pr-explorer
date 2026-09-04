@@ -11,6 +11,8 @@ from backend.database.base import Database
 from backend.database.auto_verdict_arming import AutoVerdictArmingDB
 from backend.database.automation_dispatches import AutomationDispatchesDB
 from backend.database.merge_queue import MergeQueueDB
+from backend.database.review_requests import ReviewRequestsDB
+from backend.database.reviews import ReviewsDB
 from backend.database.swimlanes import SwimlanesDB
 from backend.database.synced_prs import SyncedPRsDB
 from backend.services.automation_dispatch_worker import process_pending_dispatches
@@ -46,6 +48,8 @@ def env(tmp_path, monkeypatch):
         "queue": MergeQueueDB(db),
         "swimlanes": SwimlanesDB(db),
         "synced": SyncedPRsDB(db),
+        "requests": ReviewRequestsDB(db),
+        "reviews": ReviewsDB(db),
     }
     stores["swimlanes"].ensure_default_lane()
     monkeypatch.setattr(db_pkg, "get_automation_dispatches_db", lambda: stores["dispatches"])
@@ -53,7 +57,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(db_pkg, "get_queue_db", lambda: stores["queue"])
     monkeypatch.setattr(db_pkg, "get_swimlanes_db", lambda: stores["swimlanes"])
     monkeypatch.setattr(db_pkg, "get_synced_prs_db", lambda: stores["synced"])
-    monkeypatch.setattr(db_pkg, "get_reviews_db", lambda: None)  # begin_review is mocked
+    monkeypatch.setattr(db_pkg, "get_review_requests_db", lambda: stores["requests"])
+    monkeypatch.setattr(db_pkg, "get_reviews_db", lambda: stores["reviews"])  # begin_review is mocked
 
     from backend.extensions import active_reviews
     active_reviews.clear()
@@ -87,7 +92,7 @@ def _patch_config(monkeypatch, **overrides):
 
 
 @contextmanager
-def _gates(state="OPEN", is_draft=False, rollup=CI_SUCCESS, behind=0, batch=...):
+def _gates(state="OPEN", is_draft=False, rollup=CI_SUCCESS, behind=0, batch=..., head_sha="newsha"):
     """Patch the live PR condition sources (batched state/draft/CI + divergence).
 
     The worker gates from one fetch_open_prs_queue_data call per repo: a PR
@@ -95,7 +100,8 @@ def _gates(state="OPEN", is_draft=False, rollup=CI_SUCCESS, behind=0, batch=...)
     """
     if batch is ...:
         if state == "OPEN":
-            batch = {7: {"state": "OPEN", "isDraft": is_draft, "statusCheckRollup": rollup}}
+            batch = {7: {"state": "OPEN", "isDraft": is_draft, "statusCheckRollup": rollup,
+                         "headRefOid": head_sha}}
         else:
             batch = {}  # non-open PRs don't appear in an open-PR listing
     behind_side = behind if not isinstance(behind, Exception) else None
@@ -639,3 +645,224 @@ def test_reenrolled_row_gets_a_fresh_dispatch_window(env, monkeypatch):
     fresh = env["dispatches"].get_by_pr(REPO, 7)
     assert fresh["status"] == "pending"
     assert fresh["detail"].startswith("waiting:")
+
+
+# ----- review-request follow-ups -----
+
+OLD_SHA = "oldsha"
+
+
+def _dispatched(env, reviewer_key="pb"):
+    env["dispatches"].record_candidate(REPO, 7)
+    row = env["dispatches"].get_by_pr(REPO, 7)
+    env["dispatches"].set_status(row["id"], "dispatched", reviewer_key=reviewer_key)
+    return row
+
+
+def _saved_review(env, head_commit_sha=OLD_SHA):
+    return env["reviews"].save_review(
+        pr_number=7, repo=REPO, status="completed", pr_url="https://github.com/owner/repo/pull/7",
+        pr_title="t", pr_author="a", content_json="{}", head_commit_sha=head_commit_sha,
+    )
+
+
+def _age_request(env, hours):
+    with env["db"].connection() as conn:
+        conn.execute(
+            "UPDATE review_requests SET requested_at = datetime('now', ?) WHERE repo = ? AND pr_number = ?",
+            (f"-{hours} hours", REPO, 7),
+        )
+
+
+def _run_request(env, monkeypatch, gate_kwargs=None, cfg_overrides=None, begin=({"message": "started"}, 201)):
+    _patch_config(monkeypatch, **(cfg_overrides or {}))
+    with _gates(**(gate_kwargs or {})) as mock_behind, \
+         patch("backend.services.github_service.fetch_pr_files") as mock_files, \
+         patch("backend.services.review_service.begin_review", return_value=begin) as mock_begin:
+        process_pending_dispatches()
+    mock_begin.batch_mock = mock_behind.batch_mock
+    mock_begin.files_mock = mock_files
+    return mock_begin
+
+
+def test_review_request_starts_followup_with_armed_reviewer(env, monkeypatch):
+    _dispatched(env, reviewer_key="pb")
+    env["arming"].set_arming(REPO, 7, True, "ed", mode="verdict")
+    _saved_review(env)
+    env["requests"].record(REPO, 7)
+
+    mock_begin = _run_request(env, monkeypatch)
+
+    assert mock_begin.call_count == 1
+    kwargs = mock_begin.call_args.kwargs
+    assert kwargs["is_followup"] is True
+    assert kwargs["auto_started"] is True
+    assert kwargs["reviewer_type"] == "ed"
+    assert kwargs["head_unchanged"] is False
+    assert "new commits" in kwargs["comment_note"]
+    assert mock_begin.files_mock.call_count == 0  # no routing for follow-ups
+    req = env["requests"].get_by_pr(REPO, 7)
+    assert req["status"] == "fulfilled"
+    assert "ed" in req["detail"]
+
+
+def test_review_request_uses_routed_reviewer_when_unarmed(env, monkeypatch):
+    _dispatched(env, reviewer_key="pb")
+    _saved_review(env)
+    env["requests"].record(REPO, 7)
+    mock_begin = _run_request(env, monkeypatch)
+    assert mock_begin.call_args.kwargs["reviewer_type"] == "pb"
+
+
+def test_review_request_falls_back_to_default_reviewer(env, monkeypatch):
+    _dispatched(env, reviewer_key=None)
+    env["requests"].record(REPO, 7)  # no saved review either
+    mock_begin = _run_request(env, monkeypatch)
+    assert mock_begin.call_args.kwargs["reviewer_type"] == "default"
+    assert mock_begin.call_args.kwargs["head_unchanged"] is False
+
+
+def test_review_request_with_unchanged_head_says_so(env, monkeypatch):
+    _dispatched(env)
+    _saved_review(env, head_commit_sha="samesha")
+    env["requests"].record(REPO, 7)
+    mock_begin = _run_request(env, monkeypatch, {"head_sha": "samesha"})
+    kwargs = mock_begin.call_args.kwargs
+    assert kwargs["head_unchanged"] is True
+    assert "no new commits" in kwargs["comment_note"]
+
+
+def test_review_request_waits_on_ci_with_followup_comment(env, monkeypatch, comments):
+    _dispatched(env)
+    env["requests"].record(REPO, 7)
+    mock_begin = _run_request(env, monkeypatch, {"rollup": CI_PENDING})
+    assert mock_begin.call_count == 0
+    req = env["requests"].get_by_pr(REPO, 7)
+    assert req["status"] == "pending"
+    assert req["detail"] == "waiting: CI pending"
+    assert comments == [{"kind": "waiting", "pr": 7, "reason": "CI pending", "is_followup": True}]
+
+
+def test_review_request_waiting_reason_is_not_reposted(env, monkeypatch, comments):
+    _dispatched(env)
+    env["requests"].record(REPO, 7)
+    _run_request(env, monkeypatch, {"rollup": CI_PENDING})
+    _run_request(env, monkeypatch, {"rollup": CI_PENDING})
+    assert len(comments) == 1
+
+
+def test_review_request_draft_waits(env, monkeypatch):
+    _dispatched(env)
+    env["requests"].record(REPO, 7)
+    mock_begin = _run_request(env, monkeypatch, {"is_draft": True})
+    assert mock_begin.call_count == 0
+    assert env["requests"].get_by_pr(REPO, 7)["detail"] == "waiting: PR is a draft"
+
+
+def test_review_request_closed_pr_is_skipped(env, monkeypatch, comments):
+    _dispatched(env)
+    env["requests"].record(REPO, 7)
+    _run_request(env, monkeypatch, {"state": "CLOSED"})
+    assert env["requests"].get_by_pr(REPO, 7)["status"] == "skipped"
+    assert comments == []
+
+
+def test_review_request_409_is_fulfilled_by_running_review(env, monkeypatch):
+    _dispatched(env)
+    env["requests"].record(REPO, 7)
+    _run_request(env, monkeypatch, begin=({"error": "running"}, 409))
+    req = env["requests"].get_by_pr(REPO, 7)
+    assert req["status"] == "fulfilled"
+    assert "already in progress" in req["detail"]
+
+
+def test_review_request_429_stays_pending_without_attempts(env, monkeypatch):
+    _dispatched(env)
+    env["requests"].record(REPO, 7)
+    _run_request(env, monkeypatch, begin=({"error": "budget", "over_budget": True}, 429))
+    req = env["requests"].get_by_pr(REPO, 7)
+    assert req["status"] == "pending"
+    assert req["attempts"] == 0
+
+
+def test_review_request_failure_retries_then_fails(env, monkeypatch, comments):
+    _dispatched(env)
+    env["requests"].record(REPO, 7)
+    for _ in range(2):
+        _run_request(env, monkeypatch, begin=({"error": "boom"}, 500))
+        assert env["requests"].get_by_pr(REPO, 7)["status"] == "pending"
+    _run_request(env, monkeypatch, begin=({"error": "boom"}, 500))
+    req = env["requests"].get_by_pr(REPO, 7)
+    assert req["status"] == "failed"
+    assert req["attempts"] == 3
+    assert _kinds(comments) == ["failed"]
+
+
+def test_review_request_window_expires_from_requested_at(env, monkeypatch, comments):
+    _dispatched(env)
+    env["requests"].record(REPO, 7)
+    _age_request(env, hours=100)
+    mock_begin = _run_request(env, monkeypatch, {"rollup": CI_PENDING},
+                              cfg_overrides={"dispatchTimeoutHours": 48})
+    assert mock_begin.call_count == 0
+    assert env["requests"].get_by_pr(REPO, 7)["status"] == "skipped"
+    assert _kinds(comments) == ["window_expired"]
+
+
+def test_review_request_without_timeout_waits_indefinitely(env, monkeypatch):
+    _dispatched(env)
+    env["requests"].record(REPO, 7)
+    _age_request(env, hours=24 * 45)
+    _run_request(env, monkeypatch, {"rollup": CI_PENDING})
+    assert env["requests"].get_by_pr(REPO, 7)["status"] == "pending"
+
+
+def test_review_requests_share_the_concurrency_budget(env, monkeypatch):
+    """Budget 1, a ready first review and a ready follow-up: only one starts."""
+    env["dispatches"].record_candidate(REPO, 8)
+    env["synced"].upsert_pr(REPO, _synced_pr(8))
+    _dispatched(env)
+    env["requests"].record(REPO, 7)
+    _patch_config(monkeypatch, maxConcurrentAutoReviews=1)
+    batch = {n: {"state": "OPEN", "isDraft": False, "statusCheckRollup": CI_SUCCESS,
+                 "headRefOid": "x"} for n in (7, 8)}
+    with _gates(batch=batch), \
+         patch("backend.services.github_service.fetch_pr_files", return_value=["briefs/PB-1.md"]), \
+         patch("backend.services.review_service.begin_review",
+               return_value=({"message": "started"}, 201)) as mock_begin:
+        process_pending_dispatches()
+    assert mock_begin.call_count == 1
+    assert env["dispatches"].get_by_pr(REPO, 8)["status"] == "dispatched"
+    assert env["requests"].get_by_pr(REPO, 7)["status"] == "pending"
+
+
+def test_review_request_shares_the_per_repo_batch_fetch(env, monkeypatch):
+    env["dispatches"].record_candidate(REPO, 8)
+    env["synced"].upsert_pr(REPO, _synced_pr(8))
+    _dispatched(env)
+    env["requests"].record(REPO, 7)
+    _patch_config(monkeypatch)
+    batch = {n: {"state": "OPEN", "isDraft": False, "statusCheckRollup": CI_PENDING,
+                 "headRefOid": "x"} for n in (7, 8)}
+    with _gates(batch=batch) as mock_behind, \
+         patch("backend.services.github_service.fetch_pr_files"), \
+         patch("backend.services.review_service.begin_review"):
+        process_pending_dispatches()
+    assert mock_behind.batch_mock.call_count == 1
+
+
+def test_scope_off_ignores_review_requests(env, monkeypatch):
+    _dispatched(env)
+    env["requests"].record(REPO, 7)
+    mock_begin = _run_request(env, monkeypatch, cfg_overrides={"scope": "off"})
+    assert mock_begin.call_count == 0
+    assert env["requests"].get_by_pr(REPO, 7)["status"] == "pending"
+
+
+def test_review_request_never_touches_merge_queue_or_swimlanes(env, monkeypatch):
+    _dispatched(env)
+    env["requests"].record(REPO, 7)
+    _run_request(env, monkeypatch)
+    assert env["queue"].get_queue() == []
+    with env["db"].connection() as conn:
+        assert conn.execute("SELECT COUNT(*) AS n FROM swimlane_assignments").fetchone()["n"] == 0

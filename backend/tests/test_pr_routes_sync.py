@@ -193,3 +193,20 @@ def test_pr_list_carries_auto_verdict_arming(client, store, monkeypatch, tmp_pat
     prs = {p["number"]: p for p in resp.get_json()["prs"]}
     assert prs[1]["autoVerdict"] == {"enabled": True, "reviewerType": "ed", "mode": "comment"}
     assert prs[2]["autoVerdict"] is None
+
+
+def test_pr_list_flags_review_requested_from_me(client, store, monkeypatch):
+    import backend.routes.pr_routes as pr_routes
+    monkeypatch.setattr(pr_routes, "get_authenticated_login", lambda: "me")
+    store.register_repo("acme/widgets")
+    store.mark_backfill_done("acme/widgets")
+    store.update_last_synced("acme/widgets")
+    store.upsert_pr("acme/widgets", _pr(1, reviewRequests=[{"__typename": "User", "login": "me"}]))
+    store.upsert_pr("acme/widgets", _pr(2, reviewRequests=[{"__typename": "User", "login": "bob"}]))
+
+    with patch("backend.routes.pr_routes.run_gh_command"):
+        resp = client.get("/api/repos/acme/widgets/prs?state=open")
+
+    prs = {p["number"]: p for p in resp.get_json()["prs"]}
+    assert prs[1]["reviewRequestedFromMe"] is True
+    assert prs[2]["reviewRequestedFromMe"] is False

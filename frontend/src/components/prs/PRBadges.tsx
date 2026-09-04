@@ -116,9 +116,22 @@ export function PRBadges({ pr, divergence, repoFull }: PRBadgesProps) {
     )
   }
 
+  const getReviewRequestedBadge = () => {
+    if (!pr.reviewRequestedFromMe) return null
+    return (
+      <span
+        key="review-requested"
+        data-tooltip="A review is currently requested from the PR Explorer account on GitHub"
+      >
+        <Badge variant="info">🙋 Review requested</Badge>
+      </span>
+    )
+  }
+
   const badges = [
     getStateBadge(),
     getReviewStatusBadge(),
+    getReviewRequestedBadge(),
     reviewers.length > 0 ? <ReviewersBadge key="reviewers" reviewers={reviewers} /> : null,
     getCIStatusBadge(),
     getDivergenceBadge(),

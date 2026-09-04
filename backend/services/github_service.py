@@ -294,13 +294,13 @@ def fetch_pr_queue_data(owner, repo, pr_number):
     """
     empty = {
         "state": None, "headRefOid": None, "reviewDecision": None,
-        "statusCheckRollup": None, "isDraft": False, "reviews": None,
+        "statusCheckRollup": None, "isDraft": False, "reviews": None, "reviewRequests": None,
     }
     try:
         output = run_gh_command([
             "pr", "view", str(pr_number),
             "-R", f"{owner}/{repo}",
-            "--json", "state,headRefOid,reviewDecision,statusCheckRollup,isDraft,reviews",
+            "--json", "state,headRefOid,reviewDecision,statusCheckRollup,isDraft,reviews,reviewRequests",
         ])
         data = parse_json_output(output)
         if isinstance(data, dict):
@@ -311,6 +311,7 @@ def fetch_pr_queue_data(owner, repo, pr_number):
                 "statusCheckRollup": data.get("statusCheckRollup") or None,
                 "isDraft": data.get("isDraft", False),
                 "reviews": data.get("reviews") or None,
+                "reviewRequests": data.get("reviewRequests") or None,
             }
         return empty
     except RuntimeError as e:
@@ -326,7 +327,7 @@ def fetch_open_prs_queue_data(owner, repo, limit=1000):
     rate limit. One `gh pr list` covers the whole repo per cycle instead.
 
     Returns:
-        dict mapping PR number -> {state, isDraft, statusCheckRollup}, or None
+        dict mapping PR number -> {state, isDraft, statusCheckRollup, headRefOid}, or None
         when the fetch failed. Callers MUST treat None as "unknown", never as
         "no open PRs" — mistaking an outage for an empty repo would mass-skip
         the pipeline. A PR absent from a successful result is not open.
@@ -335,7 +336,7 @@ def fetch_open_prs_queue_data(owner, repo, limit=1000):
         output = run_gh_command([
             "pr", "list", "-R", f"{owner}/{repo}",
             "--state", "open", "--limit", str(limit),
-            "--json", "number,state,isDraft,statusCheckRollup",
+            "--json", "number,state,isDraft,statusCheckRollup,headRefOid",
         ])
         rows = parse_json_output(output)
     except RuntimeError as e:
@@ -348,6 +349,7 @@ def fetch_open_prs_queue_data(owner, repo, limit=1000):
             "state": (row.get("state") or "").upper() or "OPEN",
             "isDraft": bool(row.get("isDraft")),
             "statusCheckRollup": row.get("statusCheckRollup") or None,
+            "headRefOid": row.get("headRefOid") or None,
         }
         for row in rows
         if isinstance(row, dict) and isinstance(row.get("number"), int)

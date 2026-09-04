@@ -234,3 +234,24 @@ def test_apply_override_does_not_mutate_the_base():
     base = _criteria(maxCritical=0)
     apply_override(base, {"auto_verdict_criteria": json.dumps({"maxCritical": 9})})
     assert base["maxCritical"] == 0
+
+
+def _with_followup(review, statuses):
+    review = dict(review)
+    review["followup"] = {"previous_review_id": 1, "resolution_status": [
+        {"issue": f"Issue {i}", "status": s, "notes": f"note {i}"} for i, s in enumerate(statuses)
+    ]}
+    return review
+
+
+def test_report_body_includes_dispositions_for_followups():
+    body = compose_report_body(_with_followup(_review(critical=1), ["withdrawn", "disputed", "resolved"]))
+    assert "**Dispositions**" in body
+    assert "Withdrawn" in body and "Disputed" in body and "Resolved" in body
+    assert "Issue 0" in body and "note 1" in body
+    # Dispositions follow the findings so the author reads the verdict first.
+    assert body.index("**Critical Issues**") < body.index("**Dispositions**")
+
+
+def test_report_body_has_no_dispositions_section_without_followup():
+    assert "Dispositions" not in compose_report_body(_review(critical=1))

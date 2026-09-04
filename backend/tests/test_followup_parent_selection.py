@@ -52,7 +52,7 @@ def spawned(monkeypatch):
 
     def fake_spawn(pr_url, owner, repo, pr_number, is_followup=False,
                    previous_review_content=None, reviewer_type="default",
-                   head_sha=None):
+                   head_sha=None, **kwargs):
         calls.append({
             "is_followup": is_followup,
             "previous_review_content": previous_review_content,

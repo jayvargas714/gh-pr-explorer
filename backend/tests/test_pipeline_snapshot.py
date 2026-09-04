@@ -16,6 +16,7 @@ from backend.database.audits import AuditsDB
 from backend.database.auto_verdict_arming import AutoVerdictArmingDB
 from backend.database.auto_verdicts import AutoVerdictsDB
 from backend.database.automation_dispatches import AutomationDispatchesDB
+from backend.database.review_requests import ReviewRequestsDB
 from backend.database.base import Database
 from backend.database.merge_queue import MergeQueueDB
 from backend.database.reviews import ReviewsDB
@@ -33,6 +34,7 @@ ROW_KEYS = [
     "stage", "dispatch", "automation", "autoVerdict", "reviewDecision",
     "currentReviewers", "ciStatus", "statusCheckRollup", "running", "review",
     "hasNewCommits", "revLog", "rounds", "onBoard", "queueItemId", "notesCount",
+    "reviewRequest", "reviewRequestedFromMe",
 ]
 
 
@@ -54,6 +56,7 @@ def env(tmp_path, monkeypatch):
         "arming": AutoVerdictArmingDB(db),
         "queue": MergeQueueDB(db),
         "swimlanes": SwimlanesDB(db),
+        "requests": ReviewRequestsDB(db),
     }
     stores["swimlanes"].ensure_default_lane()
     for name, getter in (
@@ -61,10 +64,12 @@ def env(tmp_path, monkeypatch):
         ("reviews", "get_reviews_db"), ("audits", "get_audits_db"),
         ("verdicts", "get_auto_verdicts_db"), ("arming", "get_auto_verdict_arming_db"),
         ("queue", "get_queue_db"), ("swimlanes", "get_swimlanes_db"),
+        ("requests", "get_review_requests_db"),
     ):
         monkeypatch.setattr(db_pkg, getter, lambda s=stores[name]: s)
     monkeypatch.setattr(ps, "snapshot", PipelineSnapshot())
     monkeypatch.setattr("backend.services.github_service.run_gh_command", _gh_forbidden)
+    monkeypatch.setattr("backend.services.github_service.get_authenticated_login", lambda: "me")
 
     from backend.extensions import active_reviews
     active_reviews.clear()
@@ -420,3 +425,25 @@ def test_enroll_and_optout_return_the_row(client, env):
     revived = client.post(f"/api/automation/dispatches/{REPO}/5/enroll")
     assert revived.status_code == 200
     assert revived.get_json()["row"]["dispatch"]["detail"] == "manually re-enrolled"
+
+
+def test_build_rows_carries_review_request_state(env):
+    env["dispatches"].record_candidate(REPO, 1)
+    row1 = env["dispatches"].get_by_pr(REPO, 1)
+    env["dispatches"].set_status(row1["id"], "dispatched")
+    env["synced"].upsert_pr(REPO, _pr(1, reviewRequests=[{"__typename": "User", "login": "me"}]))
+    env["requests"].record(REPO, 1)
+    req = env["requests"].get_by_pr(REPO, 1)
+    env["requests"].set_status(req["id"], "pending", detail="waiting: CI pending")
+
+    env["dispatches"].record_candidate(REPO, 2)
+    env["synced"].upsert_pr(REPO, _pr(2, reviewRequests=[{"__typename": "User", "login": "bob"}]))
+
+    rows = {r["prNumber"]: r for r in ps.build_rows()}
+    assert rows[1]["reviewRequest"] == {
+        "status": "pending", "detail": "waiting: CI pending",
+        "requestedAt": req["requested_at"], "attempts": 0,
+    }
+    assert rows[1]["reviewRequestedFromMe"] is True
+    assert rows[2]["reviewRequest"] is None
+    assert rows[2]["reviewRequestedFromMe"] is False

@@ -340,11 +340,12 @@ def post_automation_enrolled_comment(owner, repo, pr_number):
     return _post_status_comment(owner, repo, pr_number, body, "automation-enrolled")
 
 
-def post_automation_waiting_comment(owner, repo, pr_number, *, reason):
-    """Comment that the queued review is blocked on a dispatch gate."""
+def post_automation_waiting_comment(owner, repo, pr_number, *, reason, is_followup=False):
+    """Comment that the queued review (or requested follow-up) is blocked on a gate."""
+    what = "requested follow-up review" if is_followup else "automatic review"
     body = (
-        "🤖 **Automated review waiting**\n\n"
-        "This PR's automatic review is queued but waiting on a gate:\n\n"
+        f"🤖 **Automated {'follow-up ' if is_followup else ''}review waiting**\n\n"
+        f"This PR's {what} is queued but waiting on a gate:\n\n"
         f"- Waiting on: {reason}\n"
         f"- Since: {_now()}\n\n"
         "The pipeline re-checks about once a minute and starts the review "
@@ -391,3 +392,46 @@ def post_automation_unidentified_comment(owner, repo, pr_number, *, matched_rule
         "the right reviewer.\n"
     )
     return _post_status_comment(owner, repo, pr_number, body, "automation-unidentified")
+
+
+# --- review requests ---------------------------------------------------------------
+
+def post_review_requested_enrolled_comment(owner, repo, pr_number, *, reenrolled):
+    """Comment that a GitHub review request pulled the PR into the pipeline."""
+    verb = "re-enrolled" if reenrolled else "enrolled"
+    body = (
+        "🤖 **Review requested — PR enrolled for automated review**\n\n"
+        f"A review was requested from GitHub PR Explorer's account, so this PR has been "
+        f"{verb} in the automatic review pipeline. The review starts once all gates "
+        "pass (not a draft, CI green, branch close enough to base, review slot free).\n\n"
+        f"- {verb.capitalize()}: {_now()}\n"
+    )
+    return _post_status_comment(owner, repo, pr_number, body, "review-requested-enrolled")
+
+
+def post_review_requested_followup_queued_comment(owner, repo, pr_number):
+    """Comment that a review request queued a follow-up on an already-reviewed PR."""
+    body = (
+        "🤖 **Review requested — follow-up queued**\n\n"
+        "A review was requested from GitHub PR Explorer's account. A follow-up review "
+        "has been queued; it starts under the same conditions as an automatic review "
+        "(not a draft, CI green, branch close enough to base, review slot free).\n\n"
+        "The follow-up reads the PR conversation since the previous review, so replies "
+        "that dispute or explain earlier findings are treated as dispositions and "
+        "answered in the next verdict.\n\n"
+        f"- Queued: {_now()}\n"
+    )
+    return _post_status_comment(owner, repo, pr_number, body, "review-requested-queued")
+
+
+def post_review_requested_unidentified_comment(owner, repo, pr_number):
+    """Comment that a review request landed on a PR whose routing is ambiguous."""
+    body = (
+        "🤖 **Review requested — needs manual routing**\n\n"
+        "A review was requested from GitHub PR Explorer's account, but this PR's changed "
+        "files span multiple routing rules, so no reviewer agent can be chosen "
+        "automatically.\n\n"
+        "**Next step:** start the review manually from GitHub PR Explorer with the "
+        "right reviewer.\n"
+    )
+    return _post_status_comment(owner, repo, pr_number, body, "review-requested-unidentified")

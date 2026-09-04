@@ -37,6 +37,7 @@ from backend.services.review_schema import (
     count_issues,
     format_issue_lines,
     format_recommendation_lines,
+    format_resolution_lines,
     get_section_display_names,
 )
 from backend.services.verdict_service import post_verdict
@@ -116,6 +117,14 @@ def compose_report_body(content_json: Dict[str, Any]) -> str:
     if recs:
         content = "\n".join(format_recommendation_lines(recs)).strip()
         parts.append(f"**Recommendations**\n\n{content}")
+
+    # Follow-ups: tell the author how each previous finding was resolved —
+    # including which pushback was accepted (withdrawn) and which was held
+    # (disputed). Rendered after the findings so the verdict reads first.
+    resolution = (content_json.get("followup") or {}).get("resolution_status") or []
+    if resolution:
+        content = "\n".join(format_resolution_lines(resolution)).strip()
+        parts.append(f"**Dispositions**\n\n{content}")
 
     body = "\n\n---\n\n".join(parts)
     if len(body) > MAX_BODY_CHARS:

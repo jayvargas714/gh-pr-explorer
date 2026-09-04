@@ -46,3 +46,17 @@ def isolate_pr_status_comments(monkeypatch):
         lambda args, **kwargs: (calls.append(args), "")[1],
     )
     return calls
+
+
+@pytest.fixture(autouse=True)
+def isolate_pr_conversation(monkeypatch):
+    """Keep the follow-up conversation fetch off the real gh CLI.
+
+    begin_review gathers the PR conversation for every follow-up (three REST
+    calls), so any test that starts a follow-up would otherwise shell out to
+    gh. Tests that care about the conversation monkeypatch
+    review_service.fetch_conversation_since themselves; this is the default.
+    """
+    from backend.services import review_service
+
+    monkeypatch.setattr(review_service, "fetch_conversation_since", lambda *a, **kw: [])

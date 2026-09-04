@@ -143,6 +143,24 @@ export function sectionsFromJSON(reviewJson: ReviewJSON): ReviewSection[] {
     })
   }
 
+  // Follow-ups: how each previous finding was resolved, incl. author
+  // dispositions (withdrawn / disputed). Mirrors compose_report_body.
+  const resolution = reviewJson.followup?.resolution_status
+  if (resolution?.length) {
+    sections.push({
+      key: 'dispositions',
+      heading: 'Dispositions',
+      content: resolution
+        .map((r) => {
+          const status = String(r.status || 'unknown')
+            .replace(/_/g, ' ')
+            .replace(/\b\w/g, (c) => c.toUpperCase())
+          return `- **${status}** — ${r.issue}${r.notes ? `: ${r.notes}` : ''}`
+        })
+        .join('\n'),
+    })
+  }
+
   return sections
 }
 

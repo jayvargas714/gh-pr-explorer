@@ -32,17 +32,17 @@ MAX_ATTEMPTS = 3
 EVAL_LIMIT = 20
 
 
-def _dispatch_window_expired(row, config):
+def _dispatch_window_expired(row, config, clock="enrolled_at"):
     """True when dispatchTimeoutHours is set and this row has waited past it.
 
-    The clock is enrolled_at, not created_at: requeue (manual re-enroll,
-    backfill revive, restart reconciliation) restarts it, so a row that
+    The clock is enrolled_at (dispatch rows) or requested_at (review-request
+    rows), never created_at: requeue / re-request restarts it, so a row that
     expired once gets a full fresh window instead of re-expiring next cycle.
     """
     timeout_hours = config.get("dispatchTimeoutHours", 0)
     if not timeout_hours:
         return False
-    enrolled = row.get("enrolled_at")
+    enrolled = row.get(clock)
     if not enrolled:
         return False
     try:
@@ -125,6 +125,133 @@ def _repo_open_prs(cache, repo_full):
     return cache[repo_full]
 
 
+def _mark_waiting(store, row, reason, owner, repo, pr_number, is_followup=False):
+    """Keep the row pending (rows wait as long as the PR stays open), and
+    clear the attempt counter: a clean waiting evaluation proves the row is
+    healthy, so transient errors over a long wait can't add up to failed.
+
+    Announces the wait on the PR only when the blocking reason actually
+    changed (digit-insensitively), so a PR parked on the same gate for
+    hours is commented once, not every cycle."""
+    from backend.services.pr_status_comments import post_automation_waiting_comment
+
+    if _normalize_wait(f"waiting: {reason}") != _normalize_wait(row.get("detail")):
+        post_automation_waiting_comment(owner, repo, pr_number, reason=reason,
+                                        is_followup=is_followup)
+    store.set_status(row["id"], "pending", detail=f"waiting: {reason}")
+    if row.get("attempts"):
+        store.reset_attempts(row["id"])
+
+
+def _retry_or_fail(store, row, detail, owner, repo, pr_number):
+    """Count a failed attempt; after MAX_ATTEMPTS the row is failed and announced."""
+    from backend.services.pr_status_comments import post_automation_failed_comment
+
+    attempts = store.increment_attempts(row["id"])
+    if attempts >= MAX_ATTEMPTS:
+        store.set_status(row["id"], "failed", detail=detail)
+        logger.error(f"Automation: giving up on {owner}/{repo}#{pr_number} after "
+                     f"{attempts} attempts: {detail}")
+        post_automation_failed_comment(owner, repo, pr_number, attempts=attempts, detail=detail)
+    else:
+        logger.warning(f"Automation: attempt {attempts} failed for "
+                       f"{owner}/{repo}#{pr_number}, will retry: {detail}")
+
+
+def _process_review_request(row, config, batch_cache):
+    """Fulfil one pending review-request row with a follow-up review.
+
+    Same gates as a first review (open, non-draft, base branch, CI, behind-base,
+    dispatch window from requested_at), but no routing: the reviewer is the armed
+    one, else the dispatch row's routed reviewer, else default. Arming is NOT
+    required — a human asked. Returns True when a review was started.
+    """
+    from backend.database import (
+        get_automation_dispatches_db, get_auto_verdict_arming_db, get_review_requests_db,
+        get_reviews_db,
+    )
+    from backend.services.pr_status_comments import post_automation_window_expired_comment
+    from backend.services.review_service import begin_review
+
+    requests = get_review_requests_db()
+    repo_full = row["repo"]
+    pr_number = row["pr_number"]
+
+    if repo_full not in config["repoAllowlist"]:
+        requests.set_status(row["id"], "skipped", detail="repo no longer allowlisted")
+        return False
+    owner, repo = repo_full.split("/", 1)
+
+    if _dispatch_window_expired(row, config, clock="requested_at"):
+        requests.set_status(
+            row["id"], "skipped",
+            detail=f"dispatch window expired ({config['dispatchTimeoutHours']}h)",
+        )
+        logger.info(f"Automation: review request on {repo_full}#{pr_number} expired")
+        post_automation_window_expired_comment(
+            owner, repo, pr_number, timeout_hours=config["dispatchTimeoutHours"])
+        return False
+
+    try:
+        pr = _get_pr_metadata(repo_full, pr_number)
+    except Exception as e:
+        _retry_or_fail(requests, row, f"metadata fetch failed: {e}", owner, repo, pr_number)
+        return False
+
+    open_prs = _repo_open_prs(batch_cache, repo_full)
+    if open_prs is None:
+        _mark_waiting(requests, row, "PR status check failed", owner, repo, pr_number, is_followup=True)
+        return False
+    queue_data = open_prs.get(pr_number)
+    if queue_data is None:
+        requests.set_status(row["id"], "skipped", detail="PR is not open (closed or merged)")
+        return False
+    if queue_data.get("isDraft"):
+        _mark_waiting(requests, row, "PR is a draft", owner, repo, pr_number, is_followup=True)
+        return False
+    blocker = _dispatch_blocker(config, queue_data, pr, owner, repo, pr_number)
+    if blocker:
+        _mark_waiting(requests, row, blocker, owner, repo, pr_number, is_followup=True)
+        return False
+
+    arming = get_auto_verdict_arming_db().get(repo_full, pr_number) or {}
+    dispatch_row = get_automation_dispatches_db().get_by_pr(repo_full, pr_number) or {}
+    reviewer_key = (
+        (arming.get("auto_verdict_reviewer") if arming.get("auto_verdict_enabled") else None)
+        or dispatch_row.get("reviewer_key") or "default"
+    )
+
+    reviews_db = get_reviews_db()
+    latest = reviews_db.get_latest_review_for_pr(repo_full, pr_number) or {}
+    last_sha, current_sha = latest.get("head_commit_sha"), queue_data.get("headRefOid")
+    head_unchanged = bool(last_sha and current_sha and last_sha == current_sha)
+    note = "Review requested on GitHub; " + (
+        "no new commits since the last review — evaluating author dispositions"
+        if head_unchanged else "new commits since the last review"
+    )
+
+    payload, status = begin_review(
+        owner, repo, pr_number, pr.get("url"), reviews_db,
+        is_followup=True, auto_started=True, reviewer_type=reviewer_key,
+        pr_title=pr.get("title"), pr_author=(pr.get("author") or {}).get("login"),
+        comment_note=note, head_unchanged=head_unchanged,
+    )
+    if status == 201:
+        requests.set_status(row["id"], "fulfilled", detail=f"follow-up started ({reviewer_key})")
+        logger.info(f"Automation: review request on {repo_full}#{pr_number} started a "
+                    f"{reviewer_key} follow-up")
+        return True
+    if status == 409:
+        requests.set_status(row["id"], "fulfilled", detail="satisfied by review already in progress")
+        return False
+    if status == 429:
+        _mark_waiting(requests, row, "concurrency budget full", owner, repo, pr_number, is_followup=True)
+        return False
+    _retry_or_fail(requests, row, f"begin_review failed ({status}): {payload.get('error')}",
+                   owner, repo, pr_number)
+    return False
+
+
 def _process_one(row, config, batch_cache):
     """Handle one pending dispatch row. Returns True when a review was started."""
     from backend.database import (
@@ -134,9 +261,7 @@ def _process_one(row, config, batch_cache):
     from backend.services.github_service import fetch_pr_files
     from backend.services.pr_status_comments import (
         post_automation_enrolled_comment,
-        post_automation_failed_comment,
         post_automation_unidentified_comment,
-        post_automation_waiting_comment,
         post_automation_window_expired_comment,
     )
     from backend.services.review_service import begin_review
@@ -166,37 +291,17 @@ def _process_one(row, config, batch_cache):
             owner, repo, pr_number, timeout_hours=config["dispatchTimeoutHours"])
         return False
 
-    def _retry_or_fail(detail):
-        attempts = dispatches.increment_attempts(row["id"])
-        if attempts >= MAX_ATTEMPTS:
-            dispatches.set_status(row["id"], "failed", detail=detail)
-            logger.error(f"Automation: giving up on {repo_full}#{pr_number} after "
-                         f"{attempts} attempts: {detail}")
-            post_automation_failed_comment(
-                owner, repo, pr_number, attempts=attempts, detail=detail)
-        else:
-            logger.warning(f"Automation: attempt {attempts} failed for "
-                           f"{repo_full}#{pr_number}, will retry: {detail}")
+    def _retry_or_fail_row(detail):
+        _retry_or_fail(dispatches, row, detail, owner, repo, pr_number)
+
+    def _wait(reason):
+        _mark_waiting(dispatches, row, reason, owner, repo, pr_number)
 
     try:
         pr = _get_pr_metadata(repo_full, pr_number)
     except Exception as e:
-        _retry_or_fail(f"metadata fetch failed: {e}")
+        _retry_or_fail_row(f"metadata fetch failed: {e}")
         return False
-
-    def _wait(reason):
-        """Keep the row pending (rows wait as long as the PR stays open), and
-        clear the attempt counter: a clean waiting evaluation proves the row is
-        healthy, so transient errors over a long wait can't add up to failed.
-
-        Announces the wait on the PR only when the blocking reason actually
-        changed (digit-insensitively), so a PR parked on the same gate for
-        hours is commented once, not every cycle."""
-        if _normalize_wait(f"waiting: {reason}") != _normalize_wait(row.get("detail")):
-            post_automation_waiting_comment(owner, repo, pr_number, reason=reason)
-        dispatches.set_status(row["id"], "pending", detail=f"waiting: {reason}")
-        if row.get("attempts"):
-            dispatches.reset_attempts(row["id"])
 
     open_prs = _repo_open_prs(batch_cache, repo_full)
     if open_prs is None:
@@ -232,7 +337,7 @@ def _process_one(row, config, batch_cache):
     try:
         files = fetch_pr_files(owner, repo, pr_number)
     except Exception as e:
-        _retry_or_fail(f"file fetch failed: {e}")
+        _retry_or_fail_row(f"file fetch failed: {e}")
         return False
 
     result = classify_files(files, config)
@@ -286,13 +391,13 @@ def _process_one(row, config, batch_cache):
         # stays pending for the next cycle.
         _wait("concurrency budget full")
     else:
-        _retry_or_fail(f"begin_review failed ({status}): {payload.get('error')}")
+        _retry_or_fail_row(f"begin_review failed ({status}): {payload.get('error')}")
     return False
 
 
 def process_pending_dispatches():
     """One pass over pending dispatch rows, within the concurrency budget."""
-    from backend.database import get_automation_dispatches_db
+    from backend.database import get_automation_dispatches_db, get_review_requests_db
     from backend.services.automation_config import get_config
     from backend.services.review_service import count_running_reviews
 
@@ -319,6 +424,19 @@ def process_pending_dispatches():
                 started += 1
         except Exception:
             logger.exception(f"Automation dispatch failed for {row['repo']}#{row['pr_number']}")
+
+    # Review-request follow-ups share the budget and the per-repo batch fetch.
+    remaining = budget - started
+    if remaining <= 0:
+        return
+    for row in get_review_requests_db().get_pending(max(remaining, EVAL_LIMIT)):
+        if started >= budget:
+            break
+        try:
+            if _process_review_request(row, config, batch_cache):
+                started += 1
+        except Exception:
+            logger.exception(f"Review-request dispatch failed for {row['repo']}#{row['pr_number']}")
 
 
 def automation_dispatch_worker_loop(interval=WATCH_INTERVAL_SECONDS):

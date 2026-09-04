@@ -483,6 +483,22 @@ CREATE TABLE IF NOT EXISTS automation_dispatches (
     UNIQUE(repo, pr_number)
 );
 CREATE INDEX idx_automation_dispatches_status ON automation_dispatches(status);
+
+-- Review requests: follow-up demand created when a human requests a review from
+-- the authenticated user on an already-dispatched PR (see Review Requests).
+CREATE TABLE IF NOT EXISTS review_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending|fulfilled|skipped|failed
+    requested_at DATETIME NOT NULL,          -- dispatch-window clock; reset on re-request
+    detail TEXT,                             -- waiting reason / outcome
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(repo, pr_number)
+);
+CREATE INDEX idx_review_requests_status ON review_requests(status);
 ```
 
 #### ReviewsDB Methods
@@ -1604,11 +1620,25 @@ The system supports creating follow-up reviews for previously reviewed PRs:
 
 #### Follow-up Workflow
 
-1. User clicks "Follow-up" button on a PR with existing review
-2. Backend fetches most recent review content for that PR
-3. Claude CLI prompt includes previous review as context
-4. New review is created with `is_followup=true` and `parent_review_id` set
-5. Review chain viewable in History panel
+1. User clicks "Follow-up" button on a PR with existing review (or a watcher /
+   review request starts one — see Auto Follow-Up Reviews and Review Requests)
+2. Backend fetches most recent usable review content for that PR
+3. Backend gathers the **PR conversation since that review** — top-level comments,
+   inline review-comment threads (root kept as context, replies after the review),
+   and review bodies from others — via three paginated REST calls
+   (`backend/services/pr_conversation.py`), dropping bots, the app's own account,
+   and its own status comments. A fetch failure never blocks the review: the
+   prompt then says the conversation was unavailable.
+4. Claude CLI prompt includes the previous review, the conversation block, and
+   **disposition rules**: a reply that addresses a previous finding is the
+   author's disposition — sound rationale → `withdrawn` (finding dropped);
+   unsound → `disputed` (issue kept, notes say why); disputed findings are never
+   silently dropped. When the head SHA is unchanged the prompt says so and asks
+   the reviewer to focus on dispositions. Same prompt for every reviewer agent.
+5. New review is created with `is_followup=true` and `parent_review_id` set; its
+   `followup.resolution_status` uses the six-value vocabulary (`resolved`,
+   `partially_addressed`, `not_addressed`, `wont_fix`, `withdrawn`, `disputed`)
+6. Review chain viewable in History panel
 
 #### Error Handling
 
@@ -1819,7 +1849,7 @@ GitHub rejects `APPROVE` on your own PR with a 422, so in verdict mode a self-au
 
 #### Verdict Body
 
-The body is composed by `compose_report_body(content_json)` to match what the manual verdict modal posts by default: the summary, each severity section that has issues (with Location/Problem/Fix per issue), and recommendations, joined with horizontal rules. The report title, metadata block, positive highlights, and the 0-10 score are deliberately excluded so auto-posted verdicts are indistinguishable in format from manually posted ones. It is truncated at 60 000 characters (GitHub's cap is 65 536) with a trailing notice. No inline comments are posted, and no auto-generated header is injected into the body; the auto-generated marker lives in the UI badge instead.
+The body is composed by `compose_report_body(content_json)` to match what the manual verdict modal posts by default: the summary, each severity section that has issues (with Location/Problem/Fix per issue), recommendations, and — for follow-ups with a `followup.resolution_status` — a **Dispositions** section (`- **Status** — issue: notes`, via `format_resolution_lines`) so the author sees which pushback was accepted (`withdrawn`) and which was held (`disputed`), joined with horizontal rules. The frontend composer (`sectionsFromJSON` in `frontend/src/utils/reviewSections.ts`) offers the same Dispositions section. The report title, metadata block, positive highlights, and the 0-10 score are deliberately excluded so auto-posted verdicts are indistinguishable in format from manually posted ones. It is truncated at 60 000 characters (GitHub's cap is 65 536) with a trailing notice. No inline comments are posted, and no auto-generated header is injected into the body; the auto-generated marker lives in the UI badge instead.
 
 Note there is no per-issue resolved/dismissed state anywhere in the system, so "remaining issues" necessarily means *the issues in the latest review*. For a follow-up review that is already the remaining set.
 
@@ -1915,6 +1945,82 @@ An armed card's **Review** button skips the reviewer picker on its primary click
 Arming state (`mode`, `criteriaOverride`) rides the card payload's `autoVerdict` object (shaped by `format_auto_verdict_state` in `queue_enrichment.py`), so both the queue panel and the swimlane board see it. Comment-armed cards count as "auto" in the header's auto/manual split and the auto-mode filter, same as verdict-armed ones — the existing Auto Verdict badge chips cover both modes.
 
 The swimlane badge filter gains an **Auto Verdict** dimension with chips *🤖 Armed*, *🤖 Verdict Posted*, and *🤖 Needs Manual Approval*, mirroring the rendered badges one-for-one as `cardMatchesBadge` requires.
+
+---
+
+### Review Requests
+
+**Purpose**: turn `<author> requested a review from <me>` on GitHub into pipeline
+work. The commit-triggered follow-up (above) never fires when an author answers
+findings with a rationale instead of a push; re-requesting a review is how they
+ask for another look. Every review request addressed to the gh-authenticated
+user is detected at zero API cost and fulfilled through the automation pipeline,
+so first reviews and requested follow-ups obey the same dispatch gates.
+
+**Detection** (`pr_sync_worker._record_review_requests` →
+`review_request_service.detect_new_review_requests`, pure): the incremental sync
+already re-hydrates every PR whose `updatedAt` moved and has the pre-hydration
+rows in hand. Diffing old vs new `reviewRequests` (User entries only; teams are
+ignored) for the login from `get_authenticated_login()` yields the PRs where the
+request just appeared — restart-safe (the old state is the persisted blob) and
+once-per-request by construction (GitHub clears the request when we submit a
+review). Backfill never runs the hook. Assumes a review request bumps the PR's
+`updatedAt`; the detector is one function so the feed can be swapped for a
+per-repo `gh pr list --search review-requested:@me` if that ever fails.
+
+**Routing** (`handle_review_request`, never raises). Requires automation
+`scope != off` and the repo allowlisted; the **author scope is ignored** — a
+human asked explicitly. Then, by the PR's `automation_dispatches` row:
+
+| Dispatch row | Action | PR comment |
+|---|---|---|
+| none | `record_candidate` + detail `review requested` (cap applies) | review requested — enrolled |
+| `pending` | nothing (already waiting on gates) | — |
+| `skipped` / `failed` (incl. `manual opt-out`) | `requeue` (fresh window) | review requested — re-enrolled |
+| `unidentified` | nothing — routing stays a human decision | review requested — needs manual routing |
+| `dispatched` | `ReviewRequestsDB.record` → pending follow-up demand | review requested — follow-up queued |
+
+When scope is off or the repo is not allowlisted nothing is queued; the card
+badge below still shows the live request.
+
+**Fulfilment** (`automation_dispatch_worker._process_review_request`): each
+cycle, after the first-review rows and within the same concurrency budget and
+per-repo batch fetch (`fetch_open_prs_queue_data` now also carries
+`headRefOid`), pending `review_requests` rows pass the same gates — allowlisted,
+dispatch window (from `requested_at`; expiry posts the window-expired comment),
+open (absent from the open listing → `skipped`, silent), non-draft,
+`_dispatch_blocker` (base branch / CI / behind-base) — waiting rows keep
+`detail = "waiting: <reason>"` and post the follow-up flavoured waiting comment
+once per reason change. Then `begin_review(is_followup=True, auto_started=True)`
+**regardless of arming**, with the armed reviewer if any, else the dispatch
+row's routed `reviewer_key`, else `default`; `comment_note` and `head_unchanged`
+tell the started comment and the prompt whether new commits landed since the
+last review. 201 → `fulfilled` ("follow-up started (<reviewer>)"); 409 →
+`fulfilled` ("satisfied by review already in progress"); 429 → stays pending;
+other failures → `attempts`, `failed` after 3 (+ failed comment). A re-request
+on a terminal row revives it with a fresh `requested_at`.
+
+**Persistence**: `review_requests` (see Database Module) — one row per PR,
+`ReviewRequestsDB` (`record`, `get_pending`, `get_by_pr`, `get_for_prs`,
+`set_status`, `reset_attempts`, `increment_attempts`), snapshot-dirtying like
+the dispatch ledger.
+
+**Surfaces**: pipeline rows carry `reviewRequest: {status, detail, requestedAt,
+attempts} | null` (badge `🙋 Follow-up requested` while pending) and every card
+surface carries `reviewRequestedFromMe` (PR list from the synced blob, queue/
+swimlane cards from the per-card fetch which now includes `reviewRequests`,
+pipeline rows from the synced blob) rendered as `🙋 Review requested`. No gh
+call is added for any badge; the login lookup is process-cached.
+
+**Status comments** (`pr_status_comments`): `post_review_requested_enrolled_comment`
+(enrolled / re-enrolled), `post_review_requested_followup_queued_comment`,
+`post_review_requested_unidentified_comment`; `post_automation_waiting_comment`
+gained `is_followup` for the follow-up wording. Same marker, supersede-delete,
+and kill switch as every other status comment.
+
+**Non-goals**: team requests, actor attribution (no timeline fetch), per-issue
+identity (dispositions join on the verbatim issue title, as follow-ups always
+have), changes to the agent definitions (the prompt is the single binding).
 
 ---
 
@@ -4697,6 +4803,8 @@ Reviews are stored as structured JSON in the `content_json` column. The schema i
 | `sections` | array | Yes | Array of `{type, display_name, issues}` objects |
 | `highlights` | array | No | Positive aspects of the PR |
 | `recommendations` | array | No | Array of `{priority, text}` objects |
+| `followup` | object | No | Follow-ups only: `{previous_review_id, resolution_status[]}` |
+| `followup.resolution_status[]` | array | No | `{issue, status, notes}` per previous finding; `status` ∈ `resolved`, `partially_addressed`, `not_addressed`, `wont_fix`, `withdrawn` (author rationale accepted, finding dropped), `disputed` (author pushback rejected, issue kept) — `RESOLUTION_STATUSES` in `review_schema.py` |
 
 #### Validation and Conversion
 

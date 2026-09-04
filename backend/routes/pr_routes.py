@@ -15,7 +15,7 @@ from backend.database import (
 from backend.services.auto_verdict_config import validate_override
 from backend.services.github_service import (
     run_gh_command, parse_json_output, TransientGitHubError,
-    PR_LIST_JSON_FIELDS as PR_JSON_FIELDS, fetch_full_pr,
+    PR_LIST_JSON_FIELDS as PR_JSON_FIELDS, fetch_full_pr, get_authenticated_login,
 )
 from backend.services.pr_local_filter import (
     filter_prs_locally, needs_github_search, sort_prs_locally, states_for,
@@ -97,6 +97,15 @@ def _attach_automation(prs, repo_full):
         logger.warning(f"Could not attach auto-verdict arming for {repo_full}: {e}")
         for pr in prs:
             pr.setdefault("autoVerdict", None)
+    try:
+        from backend.services.review_request_service import review_requested_from
+        login = get_authenticated_login()
+        for pr in prs:
+            pr["reviewRequestedFromMe"] = review_requested_from(pr, login)
+    except Exception as e:
+        logger.warning(f"Could not attach review-request flag for {repo_full}: {e}")
+        for pr in prs:
+            pr.setdefault("reviewRequestedFromMe", False)
     return prs
 
 

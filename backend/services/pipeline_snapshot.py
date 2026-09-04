@@ -153,7 +153,8 @@ def build_rows(dispatch_rows: Optional[List[Dict[str, Any]]] = None) -> List[Dic
     ledger). Database + in-memory registry only — never gh."""
     from backend.database import (
         get_audits_db, get_auto_verdict_arming_db, get_auto_verdicts_db,
-        get_automation_dispatches_db, get_queue_db, get_reviews_db, get_synced_prs_db,
+        get_automation_dispatches_db, get_queue_db, get_review_requests_db, get_reviews_db,
+        get_synced_prs_db,
     )
 
     if dispatch_rows is None:
@@ -179,6 +180,8 @@ def build_rows(dispatch_rows: Optional[List[Dict[str, Any]]] = None) -> List[Dic
     audits = get_audits_db().get_audits_for_prs(pairs)
     verdicts = get_auto_verdicts_db().get_for_prs(pairs)
     arming = get_auto_verdict_arming_db().get_for_prs(pairs)
+    requests = get_review_requests_db().get_for_prs(pairs)
+    login = _cached_login()
     queue_db = get_queue_db()
     queue = {(q["repo"], q["pr_number"]): q for q in queue_db.get_queue()}
     notes_counts = queue_db.get_notes_counts() if queue else {}
@@ -188,10 +191,21 @@ def build_rows(dispatch_rows: Optional[List[Dict[str, Any]]] = None) -> List[Dic
         _build_row(
             d, synced.get(pair), reviews.get(pair, []), audits.get(pair, []),
             verdicts.get(pair, []), arming.get(pair), queue.get(pair), notes_counts,
-            pair in running,
+            pair in running, requests.get(pair), login,
         )
         for d, pair in zip(dispatch_rows, pairs)
     ]
+
+
+def _cached_login() -> Optional[str]:
+    """The authenticated login for the review-request badge. github_service
+    caches it for the process lifetime, so this is one gh call ever — and a
+    failure just hides the badge rather than breaking the snapshot."""
+    try:
+        from backend.services.github_service import get_authenticated_login
+        return get_authenticated_login()
+    except Exception:
+        return None
 
 
 def build_row_for(repo: str, pr_number: int) -> Optional[Dict[str, Any]]:
@@ -205,8 +219,9 @@ def build_row_for(repo: str, pr_number: int) -> Optional[Dict[str, Any]]:
 
 
 def _build_row(dispatch, pr, pr_reviews, pr_audits, pr_verdicts, arming_row, queue_row,
-               notes_counts, is_running) -> Dict[str, Any]:
+               notes_counts, is_running, request_row=None, login=None) -> Dict[str, Any]:
     from backend.services.pr_service import get_ci_status, get_current_reviewers, get_review_status
+    from backend.services.review_request_service import review_requested_from
     from backend.services.queue_enrichment import (
         _format_auto_verdict, build_rev_log, format_auto_verdict_state,
         format_automation_state, summarize_reviews,
@@ -287,6 +302,13 @@ def _build_row(dispatch, pr, pr_reviews, pr_audits, pr_verdicts, arming_row, que
         "onBoard": queue_row is not None,
         "queueItemId": queue_row["id"] if queue_row else None,
         "notesCount": notes_counts.get(queue_row["id"], 0) if queue_row else 0,
+        "reviewRequest": ({
+            "status": request_row["status"],
+            "detail": request_row.get("detail"),
+            "requestedAt": request_row.get("requested_at"),
+            "attempts": request_row.get("attempts") or 0,
+        } if request_row else None),
+        "reviewRequestedFromMe": review_requested_from(pr, login) if pr else False,
     }
 
 

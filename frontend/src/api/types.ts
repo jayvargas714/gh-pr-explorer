@@ -73,6 +73,8 @@ export interface PullRequest {
   // Automation pipeline state (null/absent when the PR was never enrolled).
   // Drives the pipeline badge + add/remove control on PR list cards.
   automation?: AutomationDispatchState | null
+  // The gh-authenticated user is a currently requested reviewer on GitHub.
+  reviewRequestedFromMe?: boolean
   // Merge-queue auto-verdict arming (null/absent when not armed). Drives the
   // armed checkmark badge on PR list cards.
   autoVerdict?: {
@@ -403,6 +405,7 @@ export interface MergeQueueItem {
   notesCount: number
   prState: string
   hasNewCommits: boolean
+  reviewRequestedFromMe?: boolean
   lastReviewedSha: string | null
   currentSha: string | null
   hasReview: boolean
@@ -577,6 +580,15 @@ export interface PipelineRow {
   onBoard: boolean                // exists in merge_queue
   queueItemId: number | null
   notesCount: number              // 0 when not on board
+  reviewRequest: PipelineReviewRequest | null   // follow-up demand from a GitHub review request
+  reviewRequestedFromMe: boolean  // the gh-authenticated user is a currently requested reviewer
+}
+
+export interface PipelineReviewRequest {
+  status: 'pending' | 'fulfilled' | 'skipped' | 'failed'
+  detail: string | null
+  requestedAt: string | null
+  attempts: number
 }
 
 export interface PipelineSnapshotResponse {
@@ -678,9 +690,13 @@ export interface ReviewScoreJSON {
   summary?: string
 }
 
+export type ResolutionStatus =
+  | 'resolved' | 'partially_addressed' | 'not_addressed' | 'wont_fix'
+  | 'withdrawn' | 'disputed'
+
 export interface ReviewFollowup {
   previous_review_id: number | null
-  resolution_status: { issue: string; status: string; notes?: string }[]
+  resolution_status: { issue: string; status: ResolutionStatus | string; notes?: string }[]
 }
 
 export interface ReviewJSON {

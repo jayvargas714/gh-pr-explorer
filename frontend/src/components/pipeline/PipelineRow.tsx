@@ -169,6 +169,16 @@ export function PipelineRow({ row, selected, expanded }: PipelineRowProps) {
               {row.repo}#{row.prNumber}
             </a>
             {row.isDraft && <Badge variant="warning" size="sm">Draft</Badge>}
+            {row.reviewRequest?.status === 'pending' && (
+              <span data-tooltip={row.reviewRequest.detail ?? 'Follow-up review queued by a GitHub review request'}>
+                <Badge variant="info" size="sm">🙋 Follow-up requested</Badge>
+              </span>
+            )}
+            {row.reviewRequestedFromMe && row.reviewRequest?.status !== 'pending' && (
+              <span data-tooltip="A review is currently requested from the PR Explorer account on GitHub">
+                <Badge variant="info" size="sm">🙋 Review requested</Badge>
+              </span>
+            )}
             {row.baseRefName && (
               <span className="mx-pipe-pr__base" data-tooltip="Base branch">→ {row.baseRefName}</span>
             )}

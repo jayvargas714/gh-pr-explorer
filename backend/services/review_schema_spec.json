@@ -134,7 +134,7 @@
               "issue": { "type": "string" },
               "status": {
                 "type": "string",
-                "enum": ["resolved", "partially_addressed", "not_addressed", "wont_fix"]
+                "enum": ["resolved", "partially_addressed", "not_addressed", "wont_fix", "withdrawn", "disputed"]
               },
               "notes": { "type": "string" }
             }

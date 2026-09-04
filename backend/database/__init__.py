@@ -14,6 +14,7 @@ from backend.database.swimlanes import SwimlanesDB
 from backend.database.settings import SettingsDB
 from backend.database.reviewers import ReviewersDB
 from backend.database.automation_dispatches import AutomationDispatchesDB
+from backend.database.review_requests import ReviewRequestsDB
 from backend.database.synced_prs import SyncedPRsDB
 from backend.database.dev_stats import DeveloperStatsDB
 from backend.database.cache_stores import (
@@ -49,6 +50,7 @@ _timeline_cache_db: Optional[TimelineCacheDB] = None
 _synced_prs_db: Optional[SyncedPRsDB] = None
 _reviewers_db: Optional[ReviewersDB] = None
 _automation_dispatches_db: Optional[AutomationDispatchesDB] = None
+_review_requests_db: Optional[ReviewRequestsDB] = None
 
 
 def get_database() -> Database:
@@ -250,12 +252,23 @@ def get_automation_dispatches_db() -> AutomationDispatchesDB:
     return _automation_dispatches_db
 
 
+def get_review_requests_db() -> ReviewRequestsDB:
+    global _review_requests_db
+    if _review_requests_db is None:
+        db = get_database()
+        with _db_lock:
+            if _review_requests_db is None:
+                _review_requests_db = ReviewRequestsDB(db)
+    return _review_requests_db
+
+
 __all__ = [
     "Database", "ReviewsDB", "ReviewEventsDB", "AuditsDB", "AutoVerdictsDB", "MergeQueueDB", "SwimlanesDB", "SettingsDB",
     "AutoVerdictArmingDB", "get_auto_verdict_arming_db",
     "SyncedPRsDB", "get_synced_prs_db",
     "ReviewersDB", "get_reviewers_db",
     "AutomationDispatchesDB", "get_automation_dispatches_db",
+    "ReviewRequestsDB", "get_review_requests_db",
     "DeveloperStatsDB", "LifecycleCacheDB", "WorkflowCacheDB",
     "ContributorTimeSeriesCacheDB", "CodeActivityCacheDB",
     "RepoStatsCacheDB", "RepoLOCCacheDB", "TimelineCacheDB",

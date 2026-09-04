@@ -6,6 +6,7 @@ resource-limit prefix, the stale-workspace sweeper, and the dispatch-window
 expiry. Only the process-group test spawns real processes (two sleeps).
 """
 
+import json
 import os
 import signal
 import subprocess
@@ -353,3 +354,120 @@ def test_dispatch_window_expiry():
 
     never_enrolled = {"enrolled_at": None}
     assert _dispatch_window_expired(never_enrolled, {"dispatchTimeoutHours": 72}) is False
+
+
+# --- follow-up prompt: conversation + dispositions ------------------------------
+
+PREV_CONTENT = json.dumps({
+    "schema_version": "1.0.0", "metadata": {"pr_number": PR, "repository": f"{OWNER}/{REPO}"},
+    "summary": "Prior summary.", "score": {"overall": 5},
+    "sections": [{"type": "critical", "display_name": "Critical Issues", "issues": [
+        {"title": "Null check missing", "location": {"file": "a.py", "start_line": 1, "end_line": 2},
+         "problem": "p", "fix": "f"}]}],
+})
+
+
+def test_followup_prompt_carries_conversation_and_disposition_rules(spawn_env):
+    review_service.start_review_process(
+        PR_URL, OWNER, REPO, PR, is_followup=True, previous_review_content=PREV_CONTENT,
+        head_sha="abc123", conversation="- @alice replied: guarded upstream",
+    )
+    prompt = _prompt_of(spawn_env)
+    assert "---PR CONVERSATION SINCE PREVIOUS REVIEW---" in prompt
+    assert "@alice replied: guarded upstream" in prompt
+    assert "---END PR CONVERSATION---" in prompt
+    assert "DISPOSITION" in prompt
+    for status in ("resolved", "partially_addressed", "not_addressed", "wont_fix", "withdrawn", "disputed"):
+        assert status in prompt
+    assert "never silently drop" in prompt.lower()
+    assert "No new commits since the previous review" not in prompt
+
+
+def test_followup_prompt_flags_unchanged_head(spawn_env):
+    review_service.start_review_process(
+        PR_URL, OWNER, REPO, PR, is_followup=True, previous_review_content=PREV_CONTENT,
+        head_sha="abc123", conversation="x", head_unchanged=True,
+    )
+    assert "No new commits since the previous review" in _prompt_of(spawn_env)
+
+
+def test_followup_prompt_without_conversation_says_unavailable(spawn_env):
+    review_service.start_review_process(
+        PR_URL, OWNER, REPO, PR, is_followup=True, previous_review_content=PREV_CONTENT,
+        head_sha="abc123", conversation=None,
+    )
+    prompt = _prompt_of(spawn_env)
+    assert "---PR CONVERSATION SINCE PREVIOUS REVIEW---" in prompt
+    assert "conversation unavailable" in prompt.lower()
+
+
+def test_initial_prompt_has_no_conversation_block(spawn_env):
+    review_service.start_review_process(PR_URL, OWNER, REPO, PR, head_sha="abc123")
+    assert "PR CONVERSATION" not in _prompt_of(spawn_env)
+
+
+@pytest.fixture
+def followup_env(budget, monkeypatch, tmp_path):
+    """begin_review with a real reviews DB holding one parent review, and a
+    captured start_review_process."""
+    from backend.database.base import Database
+    from backend.database.reviews import ReviewsDB
+    reviews_db = ReviewsDB(Database(tmp_path / "followup.db"))
+    parent_id = reviews_db.save_review(
+        pr_number=PR, repo=f"{OWNER}/{REPO}", status="completed", pr_url=PR_URL,
+        pr_title="t", pr_author="alice", content_json=PREV_CONTENT, head_commit_sha="old",
+    )
+    captured = {}
+    monkeypatch.setattr(
+        review_service, "start_review_process",
+        lambda *a, **kw: (captured.update(kw) or object(), "/tmp/review.md", kw.get("is_followup", False)),
+    )
+    monkeypatch.setattr(review_service, "get_authenticated_login", lambda: "me")
+    monkeypatch.setattr(review_service, "fetch_pr_state", lambda *a, **kw: "OPEN")
+    return {"reviews_db": reviews_db, "parent_id": parent_id, "captured": captured}
+
+
+def test_begin_review_fetches_conversation_since_parent(followup_env, monkeypatch):
+    calls = []
+
+    def fake_fetch(owner, repo, pr_number, since, exclude_login=None):
+        calls.append({"since": since, "exclude_login": exclude_login})
+        return [{"kind": "comment", "author": "alice", "created_at": "2026-09-02T10:00:00Z",
+                 "body": "guarded upstream"}]
+    monkeypatch.setattr(review_service, "fetch_conversation_since", fake_fetch)
+
+    payload, status = review_service.begin_review(
+        OWNER, REPO, PR, PR_URL, followup_env["reviews_db"], is_followup=True, head_unchanged=True,
+    )
+
+    assert status == 201, payload
+    parent = followup_env["reviews_db"].get_review(followup_env["parent_id"])
+    assert calls == [{"since": parent["review_timestamp"], "exclude_login": "me"}]
+    kw = followup_env["captured"]
+    assert kw["is_followup"] is True
+    assert "guarded upstream" in kw["conversation"]
+    assert kw["head_unchanged"] is True
+    spawn = active_reviews[KEY]["spawn"]
+    assert spawn["conversation"] == kw["conversation"]
+    assert spawn["head_unchanged"] is True
+
+
+def test_begin_review_survives_conversation_fetch_failure(followup_env, monkeypatch):
+    def boom(*a, **kw):
+        raise RuntimeError("gh exploded")
+    monkeypatch.setattr(review_service, "fetch_conversation_since", boom)
+
+    payload, status = review_service.begin_review(
+        OWNER, REPO, PR, PR_URL, followup_env["reviews_db"], is_followup=True,
+    )
+
+    assert status == 201, payload
+    assert followup_env["captured"]["conversation"] is None
+
+
+def test_initial_review_does_not_fetch_conversation(followup_env, monkeypatch):
+    def boom(*a, **kw):
+        raise AssertionError("must not fetch for an initial review")
+    monkeypatch.setattr(review_service, "fetch_conversation_since", boom)
+    payload, status = review_service.begin_review(OWNER, REPO, PR, PR_URL, followup_env["reviews_db"])
+    assert status == 201, payload

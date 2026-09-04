@@ -120,3 +120,21 @@ def test_fetch_pr_behind_by_propagates_errors():
     with patch("backend.services.github_service.run_gh_command", side_effect=RuntimeError("boom")):
         with pytest.raises(RuntimeError):
             fetch_pr_behind_by("acme", "widgets", "main", "feature-x")
+
+
+def test_fetch_pr_queue_data_includes_review_requests(monkeypatch):
+    import json
+    from backend.services import github_service as gs
+    captured = {}
+
+    def fake(args, **kwargs):
+        captured["args"] = args
+        return json.dumps({"state": "OPEN", "headRefOid": "abc", "reviewDecision": None,
+                           "statusCheckRollup": [], "isDraft": False, "reviews": [],
+                           "reviewRequests": [{"__typename": "User", "login": "me"}]})
+    monkeypatch.setattr(gs, "run_gh_command", fake)
+
+    data = gs.fetch_pr_queue_data("acme", "widgets", 7)
+
+    assert "reviewRequests" in captured["args"][captured["args"].index("--json") + 1]
+    assert data["reviewRequests"] == [{"__typename": "User", "login": "me"}]

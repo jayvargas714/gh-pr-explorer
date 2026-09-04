@@ -382,3 +382,48 @@ def test_long_detail_is_truncated(gh):
     )
 
     assert "x" * 301 not in gh.body
+
+
+# --- review requests ---------------------------------------------------------------
+
+def test_review_requested_enrolled_body(gh):
+    svc.post_review_requested_enrolled_comment(OWNER, REPO, PR, reenrolled=False)
+    body = gh.body
+    assert "review requested" in body.lower()
+    assert "enrolled" in body.lower()
+    assert "re-enrolled" not in body.lower()
+    assert "gates" in body.lower()
+
+
+def test_review_requested_reenrolled_body(gh):
+    svc.post_review_requested_enrolled_comment(OWNER, REPO, PR, reenrolled=True)
+    assert "re-enrolled" in gh.body.lower()
+
+
+def test_review_requested_followup_queued_body(gh):
+    svc.post_review_requested_followup_queued_comment(OWNER, REPO, PR)
+    body = gh.body
+    assert "follow-up" in body.lower()
+    assert "review requested" in body.lower()
+    assert "same conditions" in body.lower() or "gates" in body.lower()
+    assert "dispositions" in body.lower() or "replies" in body.lower()
+
+
+def test_review_requested_unidentified_body(gh):
+    svc.post_review_requested_unidentified_comment(OWNER, REPO, PR)
+    body = gh.body
+    assert "review requested" in body.lower()
+    assert "manual" in body.lower()
+    assert "reviewer" in body.lower()
+
+
+def test_waiting_comment_followup_flavour(gh):
+    svc.post_automation_waiting_comment(OWNER, REPO, PR, reason="CI pending", is_followup=True)
+    body = gh.body
+    assert "follow-up" in body.lower()
+    assert "CI pending" in body
+
+
+def test_waiting_comment_default_is_not_followup(gh):
+    svc.post_automation_waiting_comment(OWNER, REPO, PR, reason="CI pending")
+    assert "follow-up" not in gh.body.lower()

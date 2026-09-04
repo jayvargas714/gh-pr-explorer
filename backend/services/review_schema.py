@@ -15,6 +15,14 @@ SCHEMA_VERSION = "1.0.0"
 # Path to the formal JSON Schema spec (for external tools/agents)
 SCHEMA_SPEC_PATH = Path(__file__).parent / "review_schema_spec.json"
 
+# followup.resolution_status[].status vocabulary. The last two record author
+# dispositions: "withdrawn" = the reviewer accepted the author's rationale and
+# dropped the finding; "disputed" = the author pushed back, the reviewer holds,
+# and the issue stays in its section.
+RESOLUTION_STATUSES = (
+    "resolved", "partially_addressed", "not_addressed", "wont_fix", "withdrawn", "disputed",
+)
+
 # Default section display names (can be overridden in config.json)
 DEFAULT_SECTION_NAMES = {
     "critical": "Critical Issues",
@@ -164,6 +172,20 @@ def format_issue_lines(issues: List[Dict[str, Any]]) -> List[str]:
             lines.append(issue["code_snippet"])
             lines.append("```")
         lines.append("")
+    return lines
+
+
+def format_resolution_lines(resolution_status: List[Dict[str, Any]]) -> List[str]:
+    """One line per previous-issue resolution: `- **Status** — Issue: notes`."""
+    lines = []
+    for res in resolution_status or []:
+        label = res.get("issue") or res.get("title") or res.get("issue_title") or "Untitled issue"
+        status = str(res.get("status", "unknown")).replace("_", " ").strip().title() or "Unknown"
+        line = f"- **{status}** — {label}"
+        notes = res.get("notes") or res.get("details")
+        if notes:
+            line += f": {notes}"
+        lines.append(line)
     return lines
 
 
@@ -839,7 +861,7 @@ def _parse_followup(content: str, metadata: Optional[Dict[str, Any]] = None) -> 
 
     # Look for resolution items: "- **Issue text**: Resolved" or similar
     res_pattern = re.compile(
-        r'-\s*\*\*(.+?)\*\*:\s*(resolved|partially[\s_]addressed|not[\s_]addressed|wont[\s_]fix)(?:\s*[-–]\s*(.+))?',
+        r'-\s*\*\*(.+?)\*\*:\s*(resolved|partially[\s_]addressed|not[\s_]addressed|wont[\s_]fix|withdrawn|disputed)(?:\s*[-–]\s*(.+))?',
         re.IGNORECASE
     )
     for m in res_pattern.finditer(content):

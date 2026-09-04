@@ -11,7 +11,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from backend.config import get_pr_sync_config
-from backend.services.github_service import fetch_full_pr, fetch_pr_numbers
+from backend.services.github_service import (
+    fetch_full_pr, fetch_pr_numbers, get_authenticated_login,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +81,35 @@ def incremental_sync_repo(store, repo_full, history_days):
     new_numbers = [n for n in numbers if n not in known]
     _hydrate(store, repo_full, numbers)
     _record_automation_candidates(store, repo_full, new_numbers)
+    _record_review_requests(store, repo_full, numbers, known)
     store.prune_old(repo_full, _window_cutoff(history_days).strftime("%Y-%m-%dT%H:%M:%SZ"))
     store.update_last_synced(repo_full)
+
+
+def _record_review_requests(store, repo_full, numbers, old_rows):
+    """Route GitHub review requests newly addressed to the authenticated user.
+
+    Diffs the pre-hydration rows against the fresh ones, so detection costs no
+    gh calls and is restart-safe (the old state is the persisted blob). Only
+    called from incremental sync — never from backfill. Must never raise into
+    the sync cycle.
+    """
+    if not numbers:
+        return
+    try:
+        from backend.services.review_request_service import (
+            detect_new_review_requests, handle_review_request,
+        )
+
+        login = get_authenticated_login()
+        if not login:
+            return
+        new_rows = store.get_prs_by_numbers(repo_full, numbers)
+        for number in detect_new_review_requests(old_rows, new_rows, login):
+            logger.info(f"Review request for {login} detected on {repo_full}#{number}")
+            handle_review_request(repo_full, number, new_rows[number])
+    except Exception:
+        logger.exception(f"Review request detection failed for {repo_full}")
 
 
 def _record_automation_candidates(store, repo_full, new_numbers):

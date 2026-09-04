@@ -260,6 +260,11 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
           <div className="mx-queue-item__badges">
             {item.isFollowup && <Badge variant="info">Follow-up</Badge>}
             {item.hasNewCommits && <Badge variant="warning">New Commits</Badge>}
+            {item.reviewRequestedFromMe && (
+              <span data-tooltip="A review is currently requested from the PR Explorer account on GitHub">
+                <Badge variant="info">🙋 Review requested</Badge>
+              </span>
+            )}
             {item.autoVerdict?.last && <AutoVerdictBadge record={item.autoVerdict.last} />}
             {!!item.inlineCommentsPosted && (item.criticalFoundCount ?? 0) > 0 && (
               <span data-tooltip={buildInlineTooltip('Critical', item.criticalIssueTitles, item.criticalPostedCount, item.criticalFoundCount)}>

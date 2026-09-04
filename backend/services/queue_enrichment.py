@@ -53,10 +53,12 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db, auto_verd
     current_reviewers: List[Dict[str, Any]] = []
     rev_log: List[Dict[str, Any]] = []
     auto_verdict_last: Optional[Dict[str, Any]] = None
+    review_requested_from_me = False
 
     if len(repo_parts) == 2:
         owner, repo = repo_parts
         queue_data = fetch_pr_queue_data(owner, repo, item["pr_number"])
+        review_requested_from_me = _review_requested_from_me(queue_data)
         pr_state = queue_data["state"]
         current_sha = queue_data["headRefOid"]
         queue_reviews = queue_data.get("reviews")
@@ -115,6 +117,7 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db, auto_verd
         "notesCount": notes_count,
         "prState": pr_state or item.get("pr_state"),
         "hasNewCommits": has_new_commits,
+        "reviewRequestedFromMe": review_requested_from_me,
         "lastReviewedSha": last_reviewed_sha,
         "currentSha": current_sha,
         "hasReview": review_summary is not None,
@@ -316,3 +319,13 @@ def _extract_issue_titles(content_json_raw):
         )
     except (json.JSONDecodeError, TypeError, AttributeError):
         return None, None, None
+
+
+def _review_requested_from_me(queue_data) -> bool:
+    """Badge flag from the per-card gh fetch; a login lookup failure hides it."""
+    try:
+        from backend.services.github_service import get_authenticated_login
+        from backend.services.review_request_service import review_requested_from
+        return review_requested_from(queue_data, get_authenticated_login())
+    except Exception:
+        return False

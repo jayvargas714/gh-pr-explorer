@@ -234,3 +234,67 @@ def test_backfill_records_no_candidates(store, dispatches, monkeypatch):
          patch(f"{WORKER}.fetch_full_pr", side_effect=lambda o, r, n: _pr(n)):
         backfill_repo(store, "acme/widgets", history_days=180)
     assert dispatches.get_pending(10) == []
+
+
+# ----- review-request detection hook -----
+
+ME = "jayvargas714"
+
+
+def _pr_with_requests(number, *logins, updated="2026-08-20T00:00:00Z"):
+    pr = _pr(number, updated=updated)
+    pr["reviewRequests"] = [{"__typename": "User", "login": l} for l in logins]
+    return pr
+
+
+@pytest.fixture
+def review_request_hook(monkeypatch):
+    calls = []
+    monkeypatch.setattr(f"{WORKER}.get_authenticated_login", lambda: ME)
+    monkeypatch.setattr(
+        "backend.services.review_request_service.handle_review_request",
+        lambda repo, number, pr_row: calls.append((repo, number)),
+    )
+    return calls
+
+
+def test_incremental_detects_new_review_request_for_me(store, review_request_hook):
+    _synced_repo(store)
+    store.upsert_pr("acme/widgets", _pr_with_requests(1))
+    store.upsert_pr("acme/widgets", _pr_with_requests(2, ME))  # already requested
+
+    _run_incremental(store, [1, 2, 3], {
+        1: _pr_with_requests(1, ME, updated="2026-08-21T00:00:00Z"),   # newly requested
+        2: _pr_with_requests(2, ME, updated="2026-08-21T00:00:00Z"),   # unchanged
+        3: _pr_with_requests(3, ME),                                    # first seen, requested
+    })
+
+    assert sorted(review_request_hook) == [("acme/widgets", 1), ("acme/widgets", 3)]
+
+
+def test_incremental_detects_nothing_without_login(store, review_request_hook, monkeypatch):
+    monkeypatch.setattr(f"{WORKER}.get_authenticated_login", lambda: None)
+    _synced_repo(store)
+    _run_incremental(store, [1], {1: _pr_with_requests(1, ME)})
+    assert review_request_hook == []
+
+
+def test_backfill_detects_no_review_requests(store, review_request_hook):
+    store.register_repo("acme/widgets")
+    with patch(f"{WORKER}.fetch_pr_numbers", side_effect=[[1], []]), \
+         patch(f"{WORKER}.fetch_full_pr", side_effect=lambda o, r, n: _pr_with_requests(n, ME)):
+        backfill_repo(store, "acme/widgets", history_days=180)
+    assert review_request_hook == []
+
+
+def test_review_request_hook_failure_does_not_break_sync(store, monkeypatch):
+    _synced_repo(store)
+    monkeypatch.setattr(f"{WORKER}.get_authenticated_login", lambda: ME)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("router exploded")
+    monkeypatch.setattr("backend.services.review_request_service.handle_review_request", boom)
+
+    _run_incremental(store, [1], {1: _pr_with_requests(1, ME)})
+    assert 1 in store.get_prs_by_numbers("acme/widgets", [1])
+    assert store.get_repo("acme/widgets")["last_synced_at"] is not None

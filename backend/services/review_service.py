@@ -18,7 +18,10 @@ from backend.config import (
     get_review_workspace_config,
     get_reviews_dir,
 )
-from backend.services.github_service import fetch_pr_head_sha, fetch_pr_state
+from backend.services.github_service import (
+    fetch_pr_head_sha, fetch_pr_state, get_authenticated_login,
+)
+from backend.services.pr_conversation import fetch_conversation_since, render_conversation
 from backend.services.pipeline_snapshot import mark_dirty as mark_pipeline_dirty
 from backend.services.pr_status_comments import (
     delete_status_comments,
@@ -908,7 +911,8 @@ def _resolve_reviewer(reviewer_type):
 def begin_review(owner, repo, pr_number, pr_url, reviews_db,
                  is_followup=False, previous_review_id=None,
                  pr_title=None, pr_author=None, reviewer_type="default",
-                 auto_started=False, bypass_budget=False, comment_note=None):
+                 auto_started=False, bypass_budget=False, comment_note=None,
+                 head_unchanged=False):
     """Start a review and register it in active_reviews.
 
     Shared by the POST /api/reviews route and the auto follow-up review
@@ -955,6 +959,7 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
 
     previous_review_content = None
     parent_id = None
+    conversation = None
     if is_followup:
         full_repo = f"{owner}/{repo}"
         prev_review = None
@@ -979,6 +984,8 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
         if not previous_review_content:
             logger.warning(f"No previous review found for follow-up, proceeding as normal review")
             is_followup = False
+        else:
+            conversation = _conversation_since(owner, repo, pr_number, prev_review.get("review_timestamp"))
 
     # Snapshot the head SHA before spawning: the stale-review watcher compares
     # this baseline against the live head to stop and restart a review that new
@@ -993,6 +1000,8 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
         previous_review_content=previous_review_content,
         reviewer_type=reviewer_type,
         head_sha=head_sha_at_start,
+        conversation=conversation,
+        head_unchanged=head_unchanged,
     )
 
     if process is None:
@@ -1011,6 +1020,8 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
         "previous_review_content": previous_review_content,
         "reviewer_type": reviewer_type,
         "head_sha": head_sha_at_start,
+        "conversation": conversation,
+        "head_unchanged": head_unchanged,
     }
 
     run_id = new_run_id()
@@ -1070,11 +1081,39 @@ def begin_review(owner, repo, pr_number, pr_url, reviews_db,
     }, 201
 
 
-def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, previous_review_content=None, reviewer_type="default", head_sha=None):
+def _conversation_since(owner, repo, pr_number, since):
+    """Rendered PR conversation since the parent review, or None when it could
+    not be fetched. A GitHub hiccup must never block a follow-up: the prompt
+    then says the conversation was unavailable."""
+    try:
+        items = fetch_conversation_since(owner, repo, pr_number, since,
+                                         exclude_login=get_authenticated_login())
+        return render_conversation(items)
+    except Exception as e:
+        logger.warning(f"Could not fetch PR conversation for {owner}/{repo}#{pr_number}: {e}")
+        return None
+
+
+_DISPOSITION_INSTRUCTIONS = (
+    "Replies in the PR conversation that address a previous finding are the author's "
+    "DISPOSITIONS of it and must be processed: if the author's rationale holds, mark that "
+    "issue 'withdrawn' and do not re-report it; if it does not hold, mark it 'disputed', keep "
+    "the issue in its severity section, and in 'notes' state why the rationale fails. "
+    "Never silently drop a finding the author disputed. Findings the author did not address "
+    "keep the usual statuses (resolved / partially_addressed / not_addressed / wont_fix). "
+)
+
+
+def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, previous_review_content=None,
+                         reviewer_type="default", head_sha=None, conversation=None, head_unchanged=False):
     """Start a Claude CLI review process in the background.
 
     Args:
         previous_review_content: For follow-ups, the JSON string of the previous review's content_json.
+        conversation: For follow-ups, the rendered PR conversation since the previous
+            review (see pr_conversation), or None when it could not be fetched.
+        head_unchanged: For follow-ups, True when the PR head is the same commit the
+            previous review examined — the follow-up is then about dispositions.
         reviewer_type: Reviewer registry key (see backend/database/reviewers.py).
             Unknown keys fall back to "default".
         head_sha: The PR head SHA the review should examine, when the caller
@@ -1112,16 +1151,26 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
         except (json.JSONDecodeError, TypeError, Exception):
             pass  # Fall back to raw string if conversion fails
 
+        conversation_block = conversation if conversation is not None else "(conversation unavailable)"
+        head_note = (
+            "No new commits since the previous review; this follow-up was explicitly requested — "
+            "focus on the author's dispositions below. "
+            if head_unchanged else ""
+        )
         prompt = (
             f"Review PR #{pr_number} at {pr_url}. "
             f"{pb_context}"
             f"This is a FOLLOW-UP review. Previous review:\n\n"
             f"---PREVIOUS REVIEW---\n{previous_review_markdown[:8000]}\n---END PREVIOUS REVIEW---\n\n"
+            f"PR conversation since that review (author replies, threads on our inline comments, reviews):\n\n"
+            f"---PR CONVERSATION SINCE PREVIOUS REVIEW---\n{conversation_block}\n---END PR CONVERSATION---\n\n"
+            f"{head_note}"
             f"Focus on: changes since last review, whether previous issues were addressed. "
+            f"{_DISPOSITION_INSTRUCTIONS}"
             f"Include a 'followup' section with a 'resolution_status' array tracking each previous issue. "
             f"Each entry MUST be an object with exactly these fields: "
             f'"issue" (string — the human-readable title of the previous issue, copy it verbatim from the previous review), '
-            f'"status" (one of: resolved, partially_addressed, not_addressed, wont_fix), '
+            f'"status" (one of: resolved, partially_addressed, not_addressed, wont_fix, withdrawn, disputed), '
             f'"notes" (string — brief explanation of what changed or why). '
             f'Do NOT use "title", "details", or "id" as alternative field names. '
             f"Use the {agent_name} agent. "

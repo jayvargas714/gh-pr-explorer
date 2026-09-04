@@ -425,6 +425,28 @@ class Database:
                 )
                 logger.info("Added column enrolled_at to automation_dispatches table")
 
+            # Review requests: follow-up demand created when a human requests a
+            # review from the authenticated user on an already-dispatched PR.
+            # One row per PR; re-requests reset the row to pending.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS review_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo TEXT NOT NULL,
+                    pr_number INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    requested_at DATETIME NOT NULL,
+                    detail TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(repo, pr_number)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_review_requests_status
+                ON review_requests(status)
+            """)
+
             # Reviewer registry: configurable reviewer agents (seeded by ReviewersDB.ensure_builtins)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS reviewers (
