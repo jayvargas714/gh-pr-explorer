@@ -679,11 +679,6 @@ export interface ReviewSectionJSON {
   issues: ReviewIssueJSON[]
 }
 
-export interface ReviewRecommendation {
-  priority: 'must_fix' | 'high' | 'medium' | 'low'
-  text: string
-}
-
 export interface ReviewScoreJSON {
   overall: number
   breakdown?: { category: string; score: number; comment?: string }[]
@@ -705,7 +700,6 @@ export interface ReviewJSON {
   summary: string
   sections: ReviewSectionJSON[]
   highlights?: string[]
-  recommendations?: ReviewRecommendation[]
   score: ReviewScoreJSON
   followup?: ReviewFollowup
 }

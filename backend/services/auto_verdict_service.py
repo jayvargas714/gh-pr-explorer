@@ -36,7 +36,6 @@ from backend.services.review_schema import (
     SEVERITIES,
     count_issues,
     format_issue_lines,
-    format_recommendation_lines,
     format_resolution_lines,
     get_section_display_names,
 )
@@ -92,8 +91,8 @@ def evaluate_criteria(
 def compose_report_body(content_json: Dict[str, Any]) -> str:
     """Compose the verdict body the same way the manual verdict modal does.
 
-    Summary, each severity section that has issues, and recommendations —
-    joined with horizontal rules. Deliberately excludes the report title,
+    Summary and each severity section that has issues — joined with
+    horizontal rules. Deliberately excludes the report title,
     metadata block, highlights, and the 0-10 score so auto-posted verdicts
     match manually posted ones.
     """
@@ -112,11 +111,6 @@ def compose_report_body(content_json: Dict[str, Any]) -> str:
         display_name = section.get("display_name") or section_names.get(sec_type, sec_type.title())
         content = "\n".join(format_issue_lines(issues)).strip()
         parts.append(f"**{display_name}**\n\n{content}")
-
-    recs = content_json.get("recommendations") or []
-    if recs:
-        content = "\n".join(format_recommendation_lines(recs)).strip()
-        parts.append(f"**Recommendations**\n\n{content}")
 
     # Follow-ups: tell the author how each previous finding was resolved —
     # including which pushback was accepted (withdrawn) and which was held

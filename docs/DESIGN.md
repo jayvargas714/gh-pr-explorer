@@ -1743,7 +1743,6 @@ The modal parses the completed review content to extract named sections:
 | Critical Issues | Critical bugs or security issues |
 | Major Concerns | Significant design or logic concerns |
 | Minor Issues | Style, naming, or minor code issues |
-| Recommendations | Suggested improvements |
 
 Each section can be individually toggled on/off and previewed before submission. Clicking **Edit** on a row opens `SectionEditModal` — a floating, draggable, resizable editor for that section's content (or per-issue Problem/Fix fields when the section is marked Inline).
 
@@ -1784,7 +1783,7 @@ Auto verdicts remove the manual click-path for the mechanical case: a PR card is
 - **Verdict mode** (the default) — the review's issue counts are compared against configurable thresholds and the verdict (`REQUEST_CHANGES`, `APPROVE`, or nothing) is posted to GitHub.
 - **Comment mode** — thresholds are ignored and every completed review's findings are posted as a `COMMENT` review, clean reviews included. This is the self-review path: GitHub rejects both `APPROVE` and `REQUEST_CHANGES` on your own PR (422), so comment mode is how an armed self-authored PR reliably gets its report onto GitHub — and it doubles as an audit trail that the review happened.
 
-The comment body is composed the same way a manually posted verdict is (summary, issue sections, recommendations — no score or metadata). Every auto-generated verdict is badged in the UI so it can be audited after the fact.
+The comment body is composed the same way a manually posted verdict is (summary, issue sections — no score or metadata). Every auto-generated verdict is badged in the UI so it can be audited after the fact.
 
 #### How It Works
 
@@ -1849,7 +1848,7 @@ GitHub rejects `APPROVE` on your own PR with a 422, so in verdict mode a self-au
 
 #### Verdict Body
 
-The body is composed by `compose_report_body(content_json)` to match what the manual verdict modal posts by default: the summary, each severity section that has issues (with Location/Problem/Fix per issue), recommendations, and — for follow-ups with a `followup.resolution_status` — a **Dispositions** section (`- **Status** — issue: notes`, via `format_resolution_lines`) so the author sees which pushback was accepted (`withdrawn`) and which was held (`disputed`), joined with horizontal rules. The frontend composer (`sectionsFromJSON` in `frontend/src/utils/reviewSections.ts`) offers the same Dispositions section. The report title, metadata block, positive highlights, and the 0-10 score are deliberately excluded so auto-posted verdicts are indistinguishable in format from manually posted ones. It is truncated at 60 000 characters (GitHub's cap is 65 536) with a trailing notice. No inline comments are posted, and no auto-generated header is injected into the body; the auto-generated marker lives in the UI badge instead.
+The body is composed by `compose_report_body(content_json)` to match what the manual verdict modal posts by default: the summary, each severity section that has issues (with Location/Problem/Fix per issue), and — for follow-ups with a `followup.resolution_status` — a **Dispositions** section (`- **Status** — issue: notes`, via `format_resolution_lines`) so the author sees which pushback was accepted (`withdrawn`) and which was held (`disputed`), joined with horizontal rules. The frontend composer (`sectionsFromJSON` in `frontend/src/utils/reviewSections.ts`) offers the same Dispositions section. The report title, metadata block, positive highlights, and the 0-10 score are deliberately excluded so auto-posted verdicts are indistinguishable in format from manually posted ones. It is truncated at 60 000 characters (GitHub's cap is 65 536) with a trailing notice. No inline comments are posted, and no auto-generated header is injected into the body; the auto-generated marker lives in the UI badge instead.
 
 Note there is no per-issue resolved/dismissed state anywhere in the system, so "remaining issues" necessarily means *the issues in the latest review*. For a follow-up review that is already the remaining set.
 
@@ -4102,8 +4101,7 @@ Returns a single review with full content in both structured JSON and generated 
       { "type": "critical", "display_name": "Critical Issues", "issues": [] },
       { "type": "major", "display_name": "Major Concerns", "issues": [] },
       { "type": "minor", "display_name": "Minor Issues", "issues": [] }
-    ],
-    "recommendations": []
+    ]
   },
   "content": "# Code Review for PR #123\n\n## Summary\n...",
   "is_followup": false,
@@ -4782,10 +4780,6 @@ Reviews are stored as structured JSON in the `content_json` column. The schema i
   "highlights": [
     "Good test coverage for the new endpoint.",
     "Clean separation of concerns in the service layer."
-  ],
-  "recommendations": [
-    { "priority": "must_fix", "text": "Fix the race condition before merge." },
-    { "priority": "medium", "text": "Consider extracting the validation logic into a shared helper." }
   ]
 }
 ```
@@ -4802,7 +4796,6 @@ Reviews are stored as structured JSON in the `content_json` column. The schema i
 | `score.breakdown` | array | No | Optional array of `{category, score, comment}` |
 | `sections` | array | Yes | Array of `{type, display_name, issues}` objects |
 | `highlights` | array | No | Positive aspects of the PR |
-| `recommendations` | array | No | Array of `{priority, text}` objects |
 | `followup` | object | No | Follow-ups only: `{previous_review_id, resolution_status[]}` |
 | `followup.resolution_status[]` | array | No | `{issue, status, notes}` per previous finding; `status` ∈ `resolved`, `partially_addressed`, `not_addressed`, `wont_fix`, `withdrawn` (author rationale accepted, finding dropped), `disputed` (author pushback rejected, issue kept) — `RESOLUTION_STATUSES` in `review_schema.py` |
 

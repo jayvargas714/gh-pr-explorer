@@ -62,7 +62,6 @@ _SCHEMA_INSTRUCTIONS = (
     '"summary" (string), '
     '"sections" (array of objects with type=critical|major|minor, display_name, and issues array), '
     '"highlights" (array of strings), '
-    '"recommendations" (array of {priority: must_fix|high|medium|low, text}), '
     '"score" (object with overall 0-10, optional breakdown array of {category, score, comment}, optional summary). '
     "Each issue MUST have: title (string), location (object with file, start_line, end_line), "
     "problem (string), and optionally principle (string — the engineering principle violated, "
@@ -449,7 +448,6 @@ def save_review_to_db(key, review, status, reviews_db):
                     "summary": "",
                     "sections": [],
                     "highlights": [],
-                    "recommendations": [],
                     "score": {"overall": 0},
                 }
 

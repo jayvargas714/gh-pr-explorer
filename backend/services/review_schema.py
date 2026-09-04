@@ -189,29 +189,6 @@ def format_resolution_lines(resolution_status: List[Dict[str, Any]]) -> List[str
     return lines
 
 
-def format_recommendation_lines(recs: List[Dict[str, Any]]) -> List[str]:
-    """Render recommendations as markdown lines grouped by priority."""
-    lines: List[str] = []
-    priority_labels = {
-        "must_fix": "Must Fix Before Merge:",
-        "high": "High Priority:",
-        "medium": "Medium Priority:",
-        "low": "Low Priority:",
-    }
-    current_priority = None
-    rec_num = 1
-    for rec in recs:
-        p = rec.get("priority", "medium")
-        label = priority_labels.get(p, f"{p.title()}:")
-        if p != current_priority:
-            if current_priority is not None:
-                lines.append("")
-            lines.append(f"**{label}**")
-            current_priority = p
-        lines.append(f"{rec_num}. {rec.get('text', '')}")
-        rec_num += 1
-    return lines
-
 
 def json_to_markdown(review: Dict[str, Any]) -> str:
     """Convert a structured review JSON dict to clean markdown.
@@ -293,16 +270,6 @@ def json_to_markdown(review: Dict[str, Any]) -> str:
         lines.append("")
         for i, h in enumerate(highlights, 1):
             lines.append(f"{i}. {h}")
-        lines.append("")
-
-    # Recommendations
-    recs = review.get("recommendations", [])
-    if recs:
-        lines.append("---")
-        lines.append("")
-        lines.append("**Recommendations**")
-        lines.append("")
-        lines.extend(format_recommendation_lines(recs))
         lines.append("")
 
     # Score
@@ -395,7 +362,6 @@ def markdown_to_json(content: str, metadata: Optional[Dict[str, Any]] = None) ->
         "summary": _parse_summary(content),
         "sections": _parse_sections(content),
         "highlights": _parse_highlights(content),
-        "recommendations": _parse_recommendations(content),
         "score": _parse_score(content),
     }
 
@@ -422,7 +388,6 @@ def _empty_review(metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             {"type": "minor", "display_name": "Minor Issues", "issues": []},
         ],
         "highlights": [],
-        "recommendations": [],
         "score": {"overall": 0},
     }
 
@@ -740,63 +705,6 @@ def _parse_highlights(content: str) -> List[str]:
 
     return highlights
 
-
-def _parse_recommendations(content: str) -> List[Dict[str, str]]:
-    """Parse the Recommendations section into prioritized list."""
-    m = re.search(
-        r'\*\*Recommendations\*\*\s*\n+(.*?)(?=\n---|\n\*\*(?:Score|Positive)\*\*|\Z)',
-        content, re.DOTALL | re.IGNORECASE
-    )
-    if not m:
-        return []
-
-    recs = []
-    current_priority = "medium"
-    text = m.group(1).strip()
-
-    priority_map = {
-        "must fix": "must_fix",
-        "must fix before merge": "must_fix",
-        "high priority": "high",
-        "high": "high",
-        "medium priority": "medium",
-        "medium": "medium",
-        "low priority": "low",
-        "low": "low",
-    }
-
-    for line in text.split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-
-        # Check for priority header: **Must Fix Before Merge:**
-        priority_match = re.match(r'\*\*(.+?)(?::|\*\*)', line)
-        if priority_match:
-            label = priority_match.group(1).strip().rstrip(":").lower()
-            if label in priority_map:
-                current_priority = priority_map[label]
-                # Check if there's text after the priority on the same line
-                remainder = line[priority_match.end():].strip().lstrip(":").lstrip("*").strip()
-                if remainder:
-                    # It might be a numbered item
-                    item_m = re.match(r'^\d+\.\s*(.*)', remainder)
-                    if item_m:
-                        recs.append({"priority": current_priority, "text": item_m.group(1).strip()})
-                continue
-
-        # Numbered item: "1. Fix the thing"
-        item_m = re.match(r'^\d+\.\s*(.*)', line)
-        if item_m:
-            recs.append({"priority": current_priority, "text": item_m.group(1).strip()})
-            continue
-
-        # Bullet item: "- Fix the thing"
-        item_m = re.match(r'^[-*]\s+(.*)', line)
-        if item_m:
-            recs.append({"priority": current_priority, "text": item_m.group(1).strip()})
-
-    return recs
 
 
 def _parse_score(content: str) -> Dict[str, Any]:

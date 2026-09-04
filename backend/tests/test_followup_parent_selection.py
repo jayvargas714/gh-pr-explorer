@@ -75,7 +75,6 @@ def findings_content(summary):
             {"title": "Something real", "location": {"file": "a.go", "start_line": 1,
                                                      "end_line": 2}, "problem": "x"}]}],
         "highlights": [],
-        "recommendations": [],
         "score": {"overall": 8.0},
     })
 
@@ -87,7 +86,6 @@ STUB_CONTENT = json.dumps({
     "summary": "",
     "sections": [],
     "highlights": [],
-    "recommendations": [],
     "score": {"overall": 0},
 })
 

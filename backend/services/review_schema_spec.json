@@ -83,20 +83,6 @@
       "items": { "type": "string" },
       "description": "Positive aspects of the code under review"
     },
-    "recommendations": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["priority", "text"],
-        "properties": {
-          "priority": {
-            "type": "string",
-            "enum": ["must_fix", "high", "medium", "low"]
-          },
-          "text": { "type": "string" }
-        }
-      }
-    },
     "score": {
       "type": "object",
       "required": ["overall"],

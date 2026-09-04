@@ -1,4 +1,4 @@
-import type { ReviewJSON, ReviewRecommendation, ReviewSectionJSON } from '../api/types'
+import type { ReviewJSON, ReviewSectionJSON } from '../api/types'
 
 export interface ReviewSection {
   key: string
@@ -10,13 +10,14 @@ const SECTION_HEADINGS = [
   'Critical Issues',
   'Major Concerns',
   'Minor Issues',
-  'Recommendations',
 ]
 
 // All known review headings that act as section terminators
+// ('Recommendations' only so legacy reports that still carry one terminate cleanly)
 const ALL_KNOWN_HEADINGS = [
   ...SECTION_HEADINGS,
   'Positive Highlights',
+  'Recommendations',
   'Summary',
   'Score',
 ]
@@ -80,35 +81,6 @@ function formatSectionToMarkdown(section: ReviewSectionJSON): string {
 }
 
 /**
- * Convert structured recommendations into markdown text for display.
- */
-function formatRecommendationsToMarkdown(recs: ReviewRecommendation[]): string {
-  const priorityLabels: Record<string, string> = {
-    must_fix: 'Must Fix Before Merge:',
-    high: 'High Priority:',
-    medium: 'Medium Priority:',
-    low: 'Low Priority:',
-  }
-
-  const lines: string[] = []
-  let currentPriority: string | null = null
-  let num = 1
-
-  for (const rec of recs) {
-    const p = rec.priority || 'medium'
-    if (p !== currentPriority) {
-      if (currentPriority !== null) lines.push('')
-      lines.push(`**${priorityLabels[p] || `${p}:`}**`)
-      currentPriority = p
-    }
-    lines.push(`${num}. ${rec.text}`)
-    num++
-  }
-
-  return lines.join('\n')
-}
-
-/**
  * Extract sections from structured JSON review data (preferred path).
  */
 export function sectionsFromJSON(reviewJson: ReviewJSON): ReviewSection[] {
@@ -133,14 +105,6 @@ export function sectionsFromJSON(reviewJson: ReviewJSON): ReviewSection[] {
         content: formatSectionToMarkdown(section),
       })
     }
-  }
-
-  if (reviewJson.recommendations?.length) {
-    sections.push({
-      key: 'recommendations',
-      heading: 'Recommendations',
-      content: formatRecommendationsToMarkdown(reviewJson.recommendations),
-    })
   }
 
   // Follow-ups: how each previous finding was resolved, incl. author
