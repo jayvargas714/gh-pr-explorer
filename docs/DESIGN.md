@@ -4695,7 +4695,14 @@ process = subprocess.Popen(
 **Lifecycle**:
 1. Request received → process spawned
 2. Process reference stored in `active_reviews`
-3. Frontend polls `/api/reviews` every 5 seconds
+3. Frontend (`ReviewPollingManager`) polls `/api/reviews` every 5 seconds while the
+   tab is visible, plus once on load and on regaining visibility. The poll is not
+   gated on the client already knowing of a running review: reviews are also
+   started server-side (automation dispatch, review requests, auto follow-ups),
+   and a client that only polled while *it* had a running review would never
+   learn about those until a page refresh. Every card surface (PR list, merge
+   queue, swimlanes, pipeline) reads the same `useReviewStore`, so one poll
+   keeps all of them in step.
 4. On poll, backend calls `poll()` on each process
 5. When `poll()` returns exit code, the attempt is judged (see below) and the status updated
 6. stderr captured for failed reviews
@@ -4735,8 +4742,8 @@ Design notes:
 
 - **The reported status stays `running` across retries.** The frontend's
   `ActiveReview.status` is a closed union of `running | completed | failed`, and
-  `ReviewPollingManager` stops polling once nothing is `running`; a distinct
-  `retrying` status would stall the UI. Retries are an internal detail — the
+  every card surface renders its spinner from that status; a distinct
+  `retrying` status would drop the spinner mid-review. Retries are an internal detail — the
   review is genuinely still in progress. The attempt number is surfaced as the
   `attempt` field on `GET /api/reviews` for visibility.
 - **The backoff never sleeps under the lock.** A retry arms a `retry_at`

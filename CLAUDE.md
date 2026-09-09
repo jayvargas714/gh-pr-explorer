@@ -81,7 +81,7 @@ Keep `docs/DESIGN.md` updated whenever any design aspect changes, and update the
 | — Pipeline Management (Pipeline overlay) | 2638 | Header 🤖 overlay: DB-only in-memory snapshot (`pipeline_snapshot.py`, version-based cheap polling, dirty-flag rebuilds), derived `stage` (incl. sticky `mediation`), sortable/filterable table w/ Rounds + rev-log hover, expandable detail panel, bulk actions, Watch on board, per-row refresh, freshness indicator |
 | **API Endpoints** | 2710 | All REST routes, grouped by domain (auth → cache); Auto Verdicts at 3374, Automation/Reviewers (incl. `/api/automation/pipeline`) at 3482, Review Logs at 4250 |
 | **Configuration** | 4368 | `config.json` options, incl. review retry + log retention, `log_retention_days`, `pr_sync` block; DB-backed settings keys note |
-| **Technical Details** | 4440 | gh CLI integration, caching, parallel fetch, logging (4646: UTC per-run files + error.log), attempt outcome + retry policy (4704), follow-up parent selection (4757), Review JSON Schema (4790: incl. `disputed`/`deferred` sections, per-issue `severity`/`disposition`) |
-| **Future Considerations** | 4960 | Improvements, known limitations |
-| **Appendix** | 5022 | Dependencies, file structure, run instructions |
+| **Technical Details** | 4440 | gh CLI integration, caching, parallel fetch, logging (4646: UTC per-run files + error.log), attempt outcome + retry policy (4711), follow-up parent selection (4764), Review JSON Schema (4797: incl. `disputed`/`deferred` sections, per-issue `severity`/`disposition`) |
+| **Future Considerations** | 4967 | Improvements, known limitations |
+| **Appendix** | 5029 | Dependencies, file structure, run instructions |
 
