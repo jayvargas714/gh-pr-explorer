@@ -11,7 +11,6 @@ import threading
 from backend import (
     create_app,
     startup_refresh_workflow_caches,
-    startup_refresh_stats_caches,
     startup_purge_review_events,
 )
 from backend.config import get_config, get_pr_sync_config
@@ -34,7 +33,6 @@ if __name__ == "__main__":
 
     # Refresh stale caches in background on startup
     threading.Thread(target=startup_refresh_workflow_caches, daemon=True).start()
-    threading.Thread(target=startup_refresh_stats_caches, daemon=True).start()
     threading.Thread(target=startup_purge_review_events, daemon=True).start()
 
     # Watch for review completions so auto verdicts fire without a browser attached.

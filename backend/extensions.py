@@ -33,18 +33,6 @@ audits_lock = threading.Lock()
 workflow_refresh_in_progress = set()
 workflow_refresh_lock = threading.Lock()
 
-contributor_ts_refresh_in_progress = set()
-contributor_ts_refresh_lock = threading.Lock()
-
-activity_refresh_in_progress = set()
-activity_refresh_lock = threading.Lock()
-
-stats_refresh_in_progress = set()
-stats_refresh_lock = threading.Lock()
-
-lifecycle_refresh_in_progress = set()
-lifecycle_refresh_lock = threading.Lock()
-
 repo_stats_refresh_in_progress = set()
 repo_stats_refresh_lock = threading.Lock()
 

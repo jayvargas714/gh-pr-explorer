@@ -1,144 +1,66 @@
 import { create } from 'zustand'
-import {
-  DeveloperStats,
-  CodeActivity,
-  LifecycleMetrics,
-  ReviewResponsiveness,
-  ContributorTimeSeries,
-  CacheMeta,
-} from '../api/types'
-
-interface AnalyticsCacheMeta {
-  lastUpdated: string | null
-  stale: boolean
-  refreshing: boolean
-}
-
-const emptyCacheMeta: AnalyticsCacheMeta = { lastUpdated: null, stale: false, refreshing: false }
-
-type AnalyticsTab = 'stats' | 'lifecycle' | 'responsiveness' | 'activity' | 'contributors'
+import { AnalyticsDailyResponse } from '../api/types'
+import { AnalyticsWindow, YMode, MetricKey, TEAM_ID } from '../utils/analyticsSeries'
 
 interface AnalyticsState {
-  // Developer stats
-  developerStats: DeveloperStats[]
-  statsLoading: boolean
-  statsError: string | null
+  // ==========================================================================
+  // Daily rollup
+  // ==========================================================================
+  window: AnalyticsWindow
+  base: string
+  setWindow: (w: AnalyticsWindow) => void
+  setBase: (b: string) => void
+
+  daily: AnalyticsDailyResponse | null
+  dailyKey: string | null
+  dailyLoading: boolean
+  dailyError: string | null
+  setDaily: (d: AnalyticsDailyResponse, key: string) => void
+  setDailyLoading: (loading: boolean) => void
+  setDailyError: (error: string | null) => void
+  resetForRepo: () => void
+
+  statsView: 'table' | 'series'
   statsSortBy: string
   statsSortDirection: 'asc' | 'desc'
-
-  // Code activity
-  codeActivity: CodeActivity | null
-  activityLoading: boolean
-  activityError: string | null
-  activityTimeframe: number
-
-  // Lifecycle metrics
-  lifecycleMetrics: LifecycleMetrics | null
-  lifecycleLoading: boolean
-  lifecycleError: string | null
-  lifecycleSortBy: string
-  lifecycleSortDirection: 'asc' | 'desc'
-
-  // Review responsiveness
-  reviewResponsiveness: ReviewResponsiveness | null
-  responsivenessLoading: boolean
-  responsivenessError: string | null
-  responsivenessSortBy: string
-  responsivenessSortDirection: 'asc' | 'desc'
-
-  // Contributor time series
-  contributorTimeSeries: ContributorTimeSeries[]
-  contributorTSLoading: boolean
-  contributorTSError: string | null
-  contributorTSTimeframe: number
-  contributorTSMetric: 'commits' | 'additions' | 'deletions'
-
-  // Cache metadata per sub-tab
-  cacheMeta: Record<AnalyticsTab, AnalyticsCacheMeta>
-
-  // Actions
-  setDeveloperStats: (stats: DeveloperStats[]) => void
-  setStatsLoading: (loading: boolean) => void
-  setStatsError: (error: string | null) => void
+  statsYMode: YMode
+  statsMetrics: MetricKey[]
+  statsPeople: string[]
+  setStatsView: (view: 'table' | 'series') => void
   sortStats: (column: string) => void
+  setStatsYMode: (mode: YMode) => void
+  toggleStatsMetric: (m: MetricKey) => void
+  toggleStatsPerson: (id: string) => void
 
-  setCodeActivity: (activity: CodeActivity | null) => void
-  setActivityLoading: (loading: boolean) => void
-  setActivityError: (error: string | null) => void
-  setActivityTimeframe: (timeframe: number) => void
-
-  setLifecycleMetrics: (metrics: LifecycleMetrics | null) => void
-  setLifecycleLoading: (loading: boolean) => void
-  setLifecycleError: (error: string | null) => void
-  sortLifecycle: (column: string) => void
-
-  setReviewResponsiveness: (responsiveness: ReviewResponsiveness | null) => void
-  setResponsivenessLoading: (loading: boolean) => void
-  setResponsivenessError: (error: string | null) => void
-  sortResponsiveness: (column: string) => void
-
-  setContributorTimeSeries: (data: ContributorTimeSeries[]) => void
-  setContributorTSLoading: (loading: boolean) => void
-  setContributorTSError: (error: string | null) => void
-  setContributorTSTimeframe: (timeframe: number) => void
-  setContributorTSMetric: (metric: 'commits' | 'additions' | 'deletions') => void
-
-  setCacheMeta: (tab: AnalyticsTab, meta: CacheMeta) => void
-
-  // Computed
-  getSortedStats: () => DeveloperStats[]
-  getSortedLifecyclePRs: () => any[]
-  getSortedReviewerLeaderboard: () => any[]
+  contribMetric: 'commits' | 'additions' | 'deletions' | 'prs_merged' | 'reviews'
+  setContribMetric: (metric: 'commits' | 'additions' | 'deletions' | 'prs_merged' | 'reviews') => void
 }
 
-export const useAnalyticsStore = create<AnalyticsState>((set, get) => ({
-  // Developer stats
-  developerStats: [],
-  statsLoading: false,
-  statsError: null,
+export const useAnalyticsStore = create<AnalyticsState>((set) => ({
+  // ==========================================================================
+  // Daily rollup
+  // ==========================================================================
+  window: { preset: '3m', from: '', to: '' },
+  base: 'main',
+  setWindow: (w) => set({ window: w }),
+  setBase: (b) => set({ base: b }),
+
+  daily: null,
+  dailyKey: null,
+  dailyLoading: false,
+  dailyError: null,
+  setDaily: (d, key) => set({ daily: d, dailyKey: key }),
+  setDailyLoading: (loading) => set({ dailyLoading: loading }),
+  setDailyError: (error) => set({ dailyError: error }),
+  resetForRepo: () => set({ daily: null, dailyKey: null, dailyError: null, base: 'main' }),
+
+  statsView: 'table',
   statsSortBy: 'commits',
   statsSortDirection: 'desc',
-
-  // Code activity
-  codeActivity: null,
-  activityLoading: false,
-  activityError: null,
-  activityTimeframe: 52,
-
-  // Lifecycle metrics
-  lifecycleMetrics: null,
-  lifecycleLoading: false,
-  lifecycleError: null,
-  lifecycleSortBy: '',
-  lifecycleSortDirection: 'desc',
-
-  // Review responsiveness
-  reviewResponsiveness: null,
-  responsivenessLoading: false,
-  responsivenessError: null,
-  responsivenessSortBy: '',
-  responsivenessSortDirection: 'desc',
-
-  // Contributor time series
-  contributorTimeSeries: [],
-  contributorTSLoading: false,
-  contributorTSError: null,
-  contributorTSTimeframe: 52,
-  contributorTSMetric: 'commits',
-
-  // Cache metadata per sub-tab
-  cacheMeta: {
-    stats: { ...emptyCacheMeta },
-    lifecycle: { ...emptyCacheMeta },
-    responsiveness: { ...emptyCacheMeta },
-    activity: { ...emptyCacheMeta },
-    contributors: { ...emptyCacheMeta },
-  },
-
-  // Actions
-  setDeveloperStats: (stats) => set({ developerStats: stats }),
-  setStatsLoading: (loading) => set({ statsLoading: loading }),
-  setStatsError: (error) => set({ statsError: error }),
+  statsYMode: 'daily',
+  statsMetrics: ['prs_merged'],
+  statsPeople: [TEAM_ID],
+  setStatsView: (view) => set({ statsView: view }),
   sortStats: (column) =>
     set((state) => ({
       statsSortBy: column,
@@ -147,103 +69,26 @@ export const useAnalyticsStore = create<AnalyticsState>((set, get) => ({
           ? 'asc'
           : 'desc',
     })),
-
-  setCodeActivity: (activity) => set({ codeActivity: activity }),
-  setActivityLoading: (loading) => set({ activityLoading: loading }),
-  setActivityError: (error) => set({ activityError: error }),
-  setActivityTimeframe: (timeframe) => set({ activityTimeframe: timeframe }),
-
-  setLifecycleMetrics: (metrics) => set({ lifecycleMetrics: metrics }),
-  setLifecycleLoading: (loading) => set({ lifecycleLoading: loading }),
-  setLifecycleError: (error) => set({ lifecycleError: error }),
-  sortLifecycle: (column) =>
-    set((state) => ({
-      lifecycleSortBy: column,
-      lifecycleSortDirection:
-        state.lifecycleSortBy === column && state.lifecycleSortDirection === 'desc'
-          ? 'asc'
-          : 'desc',
-    })),
-
-  setReviewResponsiveness: (responsiveness) =>
-    set({ reviewResponsiveness: responsiveness }),
-  setResponsivenessLoading: (loading) => set({ responsivenessLoading: loading }),
-  setResponsivenessError: (error) => set({ responsivenessError: error }),
-  sortResponsiveness: (column) =>
-    set((state) => ({
-      responsivenessSortBy: column,
-      responsivenessSortDirection:
-        state.responsivenessSortBy === column &&
-        state.responsivenessSortDirection === 'desc'
-          ? 'asc'
-          : 'desc',
-    })),
-
-  setContributorTimeSeries: (data) => set({ contributorTimeSeries: data }),
-  setContributorTSLoading: (loading) => set({ contributorTSLoading: loading }),
-  setContributorTSError: (error) => set({ contributorTSError: error }),
-  setContributorTSTimeframe: (timeframe) => set({ contributorTSTimeframe: timeframe }),
-  setContributorTSMetric: (metric) => set({ contributorTSMetric: metric }),
-
-  setCacheMeta: (tab, meta) =>
-    set((state) => ({
-      cacheMeta: {
-        ...state.cacheMeta,
-        [tab]: {
-          lastUpdated: meta.last_updated,
-          stale: meta.stale,
-          refreshing: meta.refreshing,
-        },
-      },
-    })),
-
-  // Computed
-  getSortedStats: () => {
-    const { developerStats, statsSortBy, statsSortDirection } = get()
-    if (!statsSortBy) return developerStats
-
-    return [...developerStats].sort((a, b) => {
-      const aVal = (a as any)[statsSortBy] || 0
-      const bVal = (b as any)[statsSortBy] || 0
-      return statsSortDirection === 'asc' ? aVal - bVal : bVal - aVal
-    })
-  },
-
-  getSortedLifecyclePRs: () => {
-    const { lifecycleMetrics, lifecycleSortBy, lifecycleSortDirection } = get()
-    if (!lifecycleMetrics || !lifecycleSortBy) return lifecycleMetrics?.pr_table || []
-
-    return [...lifecycleMetrics.pr_table].sort((a, b) => {
-      const aVal = (a as any)[lifecycleSortBy]
-      const bVal = (b as any)[lifecycleSortBy]
-
-      // Handle nulls
-      if (aVal === null && bVal === null) return 0
-      if (aVal === null) return 1
-      if (bVal === null) return -1
-
-      if (typeof aVal === 'number' && typeof bVal === 'number') {
-        return lifecycleSortDirection === 'asc' ? aVal - bVal : bVal - aVal
+  setStatsYMode: (mode) => set({ statsYMode: mode }),
+  toggleStatsMetric: (m) =>
+    set((state) => {
+      const has = state.statsMetrics.includes(m)
+      if (has) {
+        if (state.statsMetrics.length <= 1) return {}
+        return { statsMetrics: state.statsMetrics.filter((x) => x !== m) }
       }
-      return lifecycleSortDirection === 'asc'
-        ? String(aVal).localeCompare(String(bVal))
-        : String(bVal).localeCompare(String(aVal))
-    })
-  },
+      return { statsMetrics: [...state.statsMetrics, m] }
+    }),
+  toggleStatsPerson: (id) =>
+    set((state) => {
+      const has = state.statsPeople.includes(id)
+      if (has) {
+        if (state.statsPeople.length <= 1) return {}
+        return { statsPeople: state.statsPeople.filter((x) => x !== id) }
+      }
+      return { statsPeople: [...state.statsPeople, id] }
+    }),
 
-  getSortedReviewerLeaderboard: () => {
-    const {
-      reviewResponsiveness,
-      responsivenessSortBy,
-      responsivenessSortDirection,
-    } = get()
-    if (!reviewResponsiveness || !responsivenessSortBy)
-      return reviewResponsiveness?.leaderboard || []
-
-    return [...reviewResponsiveness.leaderboard].sort((a, b) => {
-      const aVal = (a as any)[responsivenessSortBy] || 0
-      const bVal = (b as any)[responsivenessSortBy] || 0
-      return responsivenessSortDirection === 'asc' ? aVal - bVal : bVal - aVal
-    })
-  },
+  contribMetric: 'commits',
+  setContribMetric: (metric) => set({ contribMetric: metric }),
 }))

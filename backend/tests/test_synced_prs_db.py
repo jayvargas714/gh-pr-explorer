@@ -105,3 +105,141 @@ def test_delete_pr(store):
     store.upsert_pr("a/b", _pr(1))
     store.delete_pr("a/b", 1)
     assert store.count_prs("a/b") == 0
+
+
+# -- history state -----------------------------------------------------------
+
+def test_history_state_defaults_for_unregistered_repo(store):
+    state = store.get_history_state("nope/nope")
+    assert state == {
+        "repo_created_at": None, "history_cursor": None,
+        "history_done": False, "history_error": None,
+    }
+
+
+def test_history_state_round_trip(store):
+    store.register_repo("a/b")
+    store.set_repo_created_at("a/b", "2020-01-01T00:00:00Z")
+    store.set_history_cursor("a/b", "2020-06-01")
+    state = store.get_history_state("a/b")
+    assert state["repo_created_at"] == "2020-01-01T00:00:00Z"
+    assert state["history_cursor"] == "2020-06-01"
+    assert state["history_done"] is False
+    assert state["history_error"] is None
+
+    store.set_history_error("a/b", "boom")
+    assert store.get_history_state("a/b")["history_error"] == "boom"
+
+    # setting a new cursor clears the error
+    store.set_history_cursor("a/b", "2020-07-01")
+    state = store.get_history_state("a/b")
+    assert state["history_cursor"] == "2020-07-01"
+    assert state["history_error"] is None
+
+    store.set_history_error("a/b", "boom again")
+    store.mark_history_done("a/b")
+    state = store.get_history_state("a/b")
+    assert state["history_done"] is True
+    assert state["history_error"] is None
+
+
+def test_repo_row_bools_history_done(store):
+    store.register_repo("a/b")
+    store.mark_history_done("a/b")
+    row = store.get_repo("a/b")
+    assert row["history_done"] is True
+    assert isinstance(row["history_done"], bool)
+
+
+# -- get_states_by_numbers ----------------------------------------------------
+
+def test_get_states_by_numbers(store):
+    store.upsert_pr("a/b", _pr(1, state="OPEN"))
+    store.upsert_pr("a/b", _pr(2, state="MERGED"))
+    result = store.get_states_by_numbers("a/b", [1, 2, 99])
+    assert result == {1: "OPEN", 2: "MERGED"}
+
+
+def test_get_states_by_numbers_chunks_over_500(store):
+    store.upsert_pr("a/b", _pr(1, state="OPEN"))
+    store.upsert_pr("a/b", _pr(600, state="MERGED"))
+    numbers = list(range(1, 601))  # 600 numbers, forces >1 chunk at 500
+    result = store.get_states_by_numbers("a/b", numbers)
+    assert result == {1: "OPEN", 600: "MERGED"}
+
+
+def test_get_states_by_numbers_empty(store):
+    assert store.get_states_by_numbers("a/b", []) == {}
+
+
+# -- get_pr_rollup_rows --------------------------------------------------------
+
+def _pr_with_reviews(number, base_ref="main", additions=None, deletions=None,
+                      is_bot=False, reviews=None, **extra):
+    pr = _pr(number, **extra)
+    pr["baseRefName"] = base_ref
+    if additions is not None:
+        pr["additions"] = additions
+    if deletions is not None:
+        pr["deletions"] = deletions
+    pr["author"] = {"login": pr["author"]["login"], "is_bot": is_bot}
+    if reviews is not None:
+        pr["reviews"] = reviews
+    return pr
+
+
+def test_get_pr_rollup_rows_shape(store):
+    store.upsert_pr("a/b", _pr_with_reviews(
+        1, base_ref="main", additions=10, deletions=3, is_bot=False,
+        reviews=[
+            {"author": {"login": "bob"}, "state": "APPROVED", "submittedAt": "2026-08-01T00:00:00Z"},
+            {"author": None, "state": "COMMENTED", "submittedAt": "2026-08-02T00:00:00Z"},
+        ],
+    ))
+    rows = store.get_pr_rollup_rows("a/b")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["number"] == 1
+    assert row["state"] == "OPEN"
+    assert row["author"] == "alice"
+    assert row["author_is_bot"] is False
+    assert row["created_at"] == "2026-07-01T00:00:00Z"
+    assert row["base_ref"] == "main"
+    assert row["additions"] == 10
+    assert row["deletions"] == 3
+    assert row["reviews"] == [
+        {"login": "bob", "state": "APPROVED", "submitted_at": "2026-08-01T00:00:00Z"},
+        {"login": None, "state": "COMMENTED", "submitted_at": "2026-08-02T00:00:00Z"},
+    ]
+
+
+def test_get_pr_rollup_rows_bot_author(store):
+    store.upsert_pr("a/b", _pr_with_reviews(1, is_bot=True))
+    rows = store.get_pr_rollup_rows("a/b")
+    assert rows[0]["author_is_bot"] is True
+
+
+def test_get_pr_rollup_rows_defaults_missing_fields(store):
+    pr = _pr(1)
+    pr["author"] = {"login": "alice"}  # no is_bot, no baseRefName/additions/deletions/reviews
+    store.upsert_pr("a/b", pr)
+    rows = store.get_pr_rollup_rows("a/b")
+    row = rows[0]
+    assert row["additions"] == 0
+    assert row["deletions"] == 0
+    assert row["reviews"] == []
+    assert row["author_is_bot"] is False
+    assert row["base_ref"] is None
+
+
+# -- earliest_created_at -------------------------------------------------------
+
+def test_earliest_created_at(store):
+    store.upsert_pr("a/b", _pr(1, **{"createdAt": "2026-03-01T00:00:00Z"}))
+    store.upsert_pr("a/b", _pr(2, **{"createdAt": "2026-01-01T00:00:00Z"}))
+    store.upsert_pr("a/b", _pr(3, **{"createdAt": "2026-05-01T00:00:00Z"}))
+    assert store.earliest_created_at("a/b") == "2026-01-01T00:00:00Z"
+
+
+def test_earliest_created_at_no_prs(store):
+    assert store.earliest_created_at("a/b") is None

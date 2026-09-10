@@ -22,10 +22,9 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
 
 - **Unified PR View**: Browse PRs across personal accounts and organizations from a single interface
 - **Advanced Filtering**: Comprehensive filter system supporting GitHub's full search syntax
-- **Developer Analytics**: Aggregated statistics showing contribution patterns and review activity
+- **Developer Analytics**: Windowed per-developer statistics and time series showing contribution patterns and review activity, backed by a local daily rollup
 - **CI/Workflow Monitoring**: View workflow runs, pass rates, and failure trends
-- **PR Lifecycle Insights**: Track time-to-merge, time-to-first-review, and stale PR detection
-- **Code Activity Visualization**: Weekly commit frequency, code churn, and owner vs. community participation
+- **Code Activity Visualization**: Daily commit frequency, code churn, and per-contributor overlays
 - **Zero Authentication Setup**: Leverages existing GitHub CLI (`gh`) authentication
 - **Lightweight Deployment**: React + Vite frontend with Flask API backend
 
@@ -67,7 +66,7 @@ GitHub PR Explorer is a lightweight web application designed for browsing, filte
         |                 |   (backend/db/)   |<----|   (code reviews)  |
         |                 |   - reviews       |     |                   |
         |                 |   - merge_queue   |     |                   |
-        |                 |   - lifecycle_cache|    |                   |
+        |                 |   - analytics_daily|    |                   |
         |                 |   - migrations    |     |                   |
         +---------------->+-------------------+     +-------------------+
                                   |
@@ -130,15 +129,13 @@ The backend is organized as a Python package with clear separation of concerns:
 
 | Module | Key Functions |
 |--------|--------------|
-| `github_service.py` | `run_gh_command()`, `parse_json_output()`, `fetch_github_stats_api()`, `fetch_pr_state()`, `fetch_pr_head_sha()`, `fetch_pr_state_and_sha()` |
+| `github_service.py` | `run_gh_command()`, `parse_json_output()`, `fetch_github_stats_api()`, `fetch_pr_state()`, `fetch_pr_head_sha()`, `fetch_pr_state_and_sha()`, `fetch_commits_page()`, `fetch_repo_created_at()`, `fetch_graphql_remaining()` |
 | `pr_service.py` | `get_review_status()`, `get_ci_status()` |
-| `stats_service.py` | `fetch_and_compute_stats()`, `add_avg_pr_scores()`, `stats_to_cache_format()`, `cached_stats_to_api_format()` |
+| `analytics_rollup.py` | `build_rows()`, `needs_rebuild()`, `rebuild_repo()` |
+| `bot_filter.py` | `normalize_login()`, `is_bot_login()` |
 | `review_service.py` | `save_review_to_db()`, `check_review_status()`, `start_review_process()` |
 | `inline_comments_service.py` | `parse_critical_issues()`, `post_inline_comments()` |
-| `lifecycle_service.py` | `fetch_pr_review_times()` |
 | `workflow_service.py` | `fetch_workflow_data()` |
-| `activity_service.py` | `fetch_code_activity_data()` |
-| `contributor_service.py` | `fetch_contributor_timeseries()` |
 | `timeline_service.py` | `normalize_timeline_events()`, `fetch_pr_timeline_from_api()`, `get_timeline()` |
 | `review_schema.py` | `validate_review_json()`, `json_to_markdown()`, `markdown_to_json()`, `get_section_display_names()`, `SCHEMA_VERSION` |
 
@@ -152,10 +149,7 @@ The backend is organized as a Python package with clear separation of concerns:
 
 | Module | Key Functions |
 |--------|--------------|
-| `activity_visualizer.py` | `compute_activity_summary()`, `slice_and_summarize()` |
 | `workflow_visualizer.py` | `filter_and_compute_stats()` |
-| `lifecycle_visualizer.py` | `compute_lifecycle_metrics()` |
-| `responsiveness_visualizer.py` | `compute_responsiveness_metrics()` |
 
 **Cache** (`backend/cache/`):
 
@@ -173,7 +167,7 @@ The backend is organized as a Python package with clear separation of concerns:
 | `auth_bp` | `/api/user`, `/api/orgs` |
 | `repo_bp` | `/api/repos`, contributors, labels, branches, milestones, teams |
 | `pr_bp` | `/api/repos/.../prs`, `/api/repos/.../prs/divergence` + /prs/:n/timeline |
-| `analytics_bp` | `/api/repos/.../stats`, lifecycle-metrics, review-responsiveness, code-activity, contributor-timeseries |
+| `analytics_bp` | `/api/repos/.../analytics/daily` — the precomputed per-developer, per-day rollup |
 | `workflow_bp` | `/api/repos/.../workflow-runs` |
 | `queue_bp` | `/api/merge-queue` CRUD, reorder, notes |
 | `swimlane_bp` | `/api/swimlanes` lane CRUD, reorder, default, board, cards/move |
@@ -202,11 +196,10 @@ The database module provides SQLite-based persistence for reviews and merge queu
 | `ReviewersDB` | Configurable reviewer registry (key → label, Claude agent name, prompt context); seeds and locks the three builtins |
 | `AutomationDispatchesDB` | Durable ledger of automation pipeline decisions; `UNIQUE(repo, pr_number)` is the auto-dispatch idempotence guard |
 | `AutoVerdictArmingDB` | Per-PR auto-verdict arming (armed flag, reviewer, mode, criteria override) keyed by `(repo, pr_number)`, independent of merge-queue membership |
-| `DevStatsDB` | Caches developer statistics with 4-hour TTL for improved performance |
-| `LifecycleCacheDB` | Caches PR lifecycle and review timing data with 2-hour TTL |
+| `SyncedPRsDB` | Registered-repo + full-PR-JSON store backing the DB-backed PR list; also the inception history-walk cursor/state and the rollup source rows |
+| `SyncedCommitsDB` | Per-branch commit backfill/incremental state and synced commit rows (REST-fetched), keyed by `(repo, branch, sha)` |
+| `AnalyticsDailyDB` | Precomputed per-developer, per-day analytics rollup (`analytics_daily`) plus per-repo build metadata (`analytics_daily_meta`) |
 | `WorkflowCacheDB` | Caches workflow runs data with configurable TTL (default 1 hour) for stale-while-revalidate serving |
-| `ContributorTimeSeriesCacheDB` | Caches per-contributor weekly time series data with 24-hour TTL for stale-while-revalidate serving |
-| `CodeActivityCacheDB` | Caches full 52-week code activity data with 24-hour TTL for stale-while-revalidate serving |
 | `RepoStatsCacheDB` | Caches aggregated repository statistics with 4-hour TTL |
 | `RepoLOCCacheDB` | Caches lines-of-code analysis results with 24-hour TTL |
 | `TimelineCacheDB` | Caches per-PR timeline events with state-aware TTL (no TTL for closed/merged, 5-min for open) |
@@ -342,61 +335,89 @@ CREATE TABLE migrations (
     executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Developer stats table: Caches contributor statistics
-CREATE TABLE developer_stats (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+-- One-time migration 'drop_legacy_analytics_caches': DROPs developer_stats,
+-- stats_metadata, pr_lifecycle_cache, code_activity_cache, and
+-- contributor_timeseries_cache now that analytics reads from analytics_daily
+-- instead (tracked in `migrations`, runs once per database).
+
+-- synced_repos: inception-walk history tracking columns, added via a tracked
+-- ALTER TABLE migration (id, repo, registered_at, last_visited_at,
+-- last_synced_at, backfill_done, backfill_error are the pre-existing columns
+-- backing the PR List Sync feature; see that section for the base table).
+ALTER TABLE synced_repos ADD COLUMN repo_created_at TEXT;   -- repo's GitHub creation date, fetched once as the walk's floor
+ALTER TABLE synced_repos ADD COLUMN history_cursor TEXT;    -- inception-walk cursor ('YYYY-MM-DD'), walks backward from tomorrow
+ALTER TABLE synced_repos ADD COLUMN history_done INTEGER NOT NULL DEFAULT 0;  -- true once the walk reaches repo_created_at
+ALTER TABLE synced_repos ADD COLUMN history_error TEXT;     -- last history-slice error, if any
+
+-- Commit sync: per-branch backfill/incremental state
+CREATE TABLE IF NOT EXISTS synced_commit_branches (
     repo TEXT NOT NULL,
-    username TEXT NOT NULL,
-    total_prs INTEGER DEFAULT 0,
-    open_prs INTEGER DEFAULT 0,
-    merged_prs INTEGER DEFAULT 0,
-    closed_prs INTEGER DEFAULT 0,
-    total_additions INTEGER DEFAULT 0,
-    total_deletions INTEGER DEFAULT 0,
-    avg_pr_score REAL,
-    reviewed_pr_count INTEGER DEFAULT 0,
-    commits INTEGER DEFAULT 0,
-    avatar_url TEXT,
-    reviews_given INTEGER DEFAULT 0,
-    approvals INTEGER DEFAULT 0,
-    changes_requested INTEGER DEFAULT 0,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(repo, username)
+    branch TEXT NOT NULL,
+    backfill_until TEXT,
+    backfill_done INTEGER NOT NULL DEFAULT 0,
+    last_committed_at TEXT,
+    last_synced_at TEXT,
+    error TEXT,
+    PRIMARY KEY (repo, branch)
 );
 
--- Stats metadata table: Tracks last update times for stats cache
-CREATE TABLE stats_metadata (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    repo TEXT NOT NULL UNIQUE,
-    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+-- Commit sync: synced commit rows, fetched via REST (repos/{o}/{r}/commits)
+CREATE TABLE IF NOT EXISTS synced_commits (
+    repo TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    author_login TEXT,
+    author_name TEXT,
+    author_email TEXT,
+    authored_at TEXT,
+    committed_at TEXT NOT NULL,
+    parent_count INTEGER NOT NULL DEFAULT 1,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (repo, branch, sha)
 );
+CREATE INDEX IF NOT EXISTS idx_synced_commits_repo_branch_day
+ON synced_commits(repo, branch, committed_at);
 
--- PR lifecycle cache table: Caches enriched PR data for lifecycle/review metrics
-CREATE TABLE pr_lifecycle_cache (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    repo TEXT NOT NULL UNIQUE,
-    data TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+-- Analytics daily rollup: precomputed per-developer, per-day metrics,
+-- rebuilt by backend/services/analytics_rollup.py from synced_prs + synced_commits
+CREATE TABLE IF NOT EXISTS analytics_daily (
+    repo TEXT NOT NULL,
+    day TEXT NOT NULL,
+    login TEXT NOT NULL,
+    base_ref TEXT NOT NULL,
+    is_bot INTEGER NOT NULL DEFAULT 0,
+    prs_created INTEGER NOT NULL DEFAULT 0,
+    prs_merged INTEGER NOT NULL DEFAULT 0,
+    prs_closed INTEGER NOT NULL DEFAULT 0,
+    reviews INTEGER NOT NULL DEFAULT 0,
+    approvals INTEGER NOT NULL DEFAULT 0,
+    changes_requested INTEGER NOT NULL DEFAULT 0,
+    comments INTEGER NOT NULL DEFAULT 0,
+    additions INTEGER NOT NULL DEFAULT 0,
+    deletions INTEGER NOT NULL DEFAULT 0,
+    commits INTEGER NOT NULL DEFAULT 0,
+    merge_hours_sum REAL NOT NULL DEFAULT 0,
+    merge_hours_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (repo, day, login, base_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_analytics_daily_repo_day
+ON analytics_daily(repo, day);
+
+-- Analytics daily rollup metadata: one row per repo, tracks build freshness
+-- and coverage; drives the route's `stale`/`syncing`/`coverage` fields
+CREATE TABLE IF NOT EXISTS analytics_daily_meta (
+    repo TEXT PRIMARY KEY,
+    built_at TEXT NOT NULL,
+    schema_version INTEGER NOT NULL,
+    pr_count INTEGER,
+    review_count INTEGER,
+    commit_count INTEGER,
+    earliest_pr_day TEXT,
+    earliest_commit_day TEXT
 );
 
 -- Workflow cache table: Caches unfiltered workflow runs for fast filtered queries
 CREATE TABLE workflow_cache (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    repo TEXT NOT NULL UNIQUE,
-    data TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- Contributor time series cache table: Caches per-contributor weekly stats
-CREATE TABLE contributor_timeseries_cache (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    repo TEXT NOT NULL UNIQUE,
-    data TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- Code activity cache table: Caches full 52-week code activity data
-CREATE TABLE code_activity_cache (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     repo TEXT NOT NULL UNIQUE,
     data TEXT NOT NULL,
@@ -527,22 +548,41 @@ CREATE INDEX idx_review_requests_status ON review_requests(status);
 | `reorder_queue()` | Moves an item from one position to another |
 | `is_in_queue()` | Checks if a PR is already in the queue |
 
-#### DevStatsDB Methods
+#### SyncedPRsDB Methods (new for the inception walk + rollup)
+
+The pre-existing CRUD methods (`register_repo()`, `get_repo()`, `list_repos()`, `mark_backfill_done()`, `set_backfill_error()`, `update_last_synced()`, `upsert_pr()`, `get_prs()`, `get_prs_by_numbers()`, `delete_pr()`, `prune_old()`, `count_prs()`) back the DB-backed PR list (see [PR List Sync](#pr-list-sync)). This task added:
 
 | Method | Description |
 |--------|-------------|
-| `get_stats()` | Returns cached stats for a repository |
-| `save_stats()` | Saves developer stats with timestamp |
-| `get_last_updated()` | Gets the last update timestamp for a repo |
-| `is_stale()` | Checks if cached stats are older than TTL (4 hours) |
+| `set_repo_created_at()` | Stores the repo's GitHub creation date (fetched once, floors the inception walk) |
+| `get_history_state()` | Returns `{repo_created_at, history_cursor, history_done, history_error}` for a repo |
+| `set_history_cursor()` | Advances the inception-walk cursor to a day and clears any prior error |
+| `mark_history_done()` | Marks the inception walk complete (cursor reached `repo_created_at`) |
+| `set_history_error()` | Records the last history-slice failure |
+| `get_states_by_numbers()` | Batch lookup of PR state by number, chunked at 500 to stay under SQLite's bound-variable limit |
+| `get_pr_rollup_rows()` | One row per synced PR shaped for `analytics_rollup.build_rows()` (author, dates, base ref, additions/deletions, bot flag, parsed reviews); uses one multi-path `json_extract()` per query on SQLite ≥ 3.9.0, falling back to four single-path extracts otherwise |
 
-#### LifecycleCacheDB Methods
+#### SyncedCommitsDB Methods
 
 | Method | Description |
 |--------|-------------|
-| `get_cached()` | Returns cached lifecycle data (JSON blob) for a repository |
-| `save_cache()` | Saves enriched PR lifecycle data with upsert (INSERT ON CONFLICT UPDATE) |
-| `is_stale()` | Checks if cached data is older than TTL (default 2 hours) |
+| `get_branch_state()` | Returns a branch's backfill/incremental state (`backfill_until`, `backfill_done`, `last_committed_at`, `last_synced_at`, `error`) |
+| `upsert_branch_state()` | Inserts or updates a branch state row, touching only the given fields; stamps `last_synced_at` unless `touch=False` |
+| `upsert_commits()` | Inserts or updates commit rows (upsert on `(repo, branch, sha)`) |
+| `count()` | Counts synced commits for a repo, optionally scoped to one branch |
+| `get_rollup_rows()` | Rows shaped for `analytics_rollup.build_rows()`: `branch`, `login` (`COALESCE(author_login, author_name, 'unknown')`), `committed_at`, `parent_count` |
+| `earliest_committed_at()` | Earliest `committed_at` for a repo across all branches |
+
+#### AnalyticsDailyDB Methods
+
+| Method | Description |
+|--------|-------------|
+| `replace_repo()` | Replaces a repo's rollup rows and `analytics_daily_meta` row in one transaction (full delete + reinsert) |
+| `get_meta()` | Returns the repo's build metadata row, or `None` if never built |
+| `query()` | Rows in `[day_from, day_to]`; with `base_ref` given returns raw per-(day, login, base_ref) rows, otherwise sums across base refs and groups by (day, login) |
+| `earliest_day()` | Earliest rollup day for a repo, optionally scoped to one `base_ref` |
+| `base_refs()` | Distinct base refs for a repo, most-rows-first |
+| `clear()` | Deletes rollup rows and metadata, for one repo or (with `repo=None`) all repos |
 
 #### WorkflowCacheDB Methods
 
@@ -553,24 +593,6 @@ CREATE INDEX idx_review_requests_status ON review_requests(status);
 | `is_stale()` | Checks if cached data is older than configurable TTL (default 60 minutes) |
 | `get_all_repos()` | Returns list of all repos with cached data (used by startup refresh and seed script) |
 | `clear()` | Removes all workflow cache entries (called by clear-cache endpoint) |
-
-#### ContributorTimeSeriesCacheDB Methods
-
-| Method | Description |
-|--------|-------------|
-| `get_cached()` | Returns cached per-contributor weekly time series data (JSON blob) for a repository |
-| `save_cache()` | Saves contributor time series data with upsert (INSERT ON CONFLICT UPDATE) |
-| `is_stale()` | Checks if cached data is older than TTL (default 24 hours) |
-| `clear()` | Removes all contributor time series cache entries |
-
-#### CodeActivityCacheDB Methods
-
-| Method | Description |
-|--------|-------------|
-| `get_cached()` | Returns cached code activity data (JSON blob with weekly_commits, code_changes, owner_commits, community_commits) for a repository |
-| `save_cache()` | Saves code activity data with upsert (INSERT ON CONFLICT UPDATE) |
-| `is_stale()` | Checks if cached data is older than TTL (default 24 hours) |
-| `clear()` | Removes all code activity cache entries |
 
 #### TimelineCacheDB Methods
 
@@ -633,7 +655,7 @@ Analytics, CI/Workflows, Repo Stats, Review Logs, Automation):
 | Tab | View Key | Description |
 |-----|----------|-------------|
 | Pull Requests | `prs` | PR list with filters, pagination, and action buttons |
-| Analytics | `analytics` | 5 sub-tabs for developer and repository analytics |
+| Analytics | `analytics` | 3 sub-tabs for developer and repository analytics |
 | CI/Workflows | `workflows` | Workflow run history with filters and aggregate stats |
 | Repo Stats | `repo-stats` | Repository-level statistics, language breakdown, LOC analysis |
 | Review Logs | `review-logs` | Review lifecycle event log: starts, attempts, failures and reasons |
@@ -642,11 +664,9 @@ Analytics, CI/Workflows, Repo Stats, Review Logs, Automation):
 
 | Sub-tab | Tab Key | Description |
 |---------|---------|-------------|
-| Stats | `stats` | Developer contribution statistics table |
-| Lifecycle | `lifecycle` | PR lifecycle metrics, merge time distribution, stale PR detection |
-| Activity | `activity` | Code activity charts: commits, code changes, top 5 contributors |
-| Reviews | `responsiveness` | Per-reviewer response times, leaderboard, bottleneck detection |
-| Contributors | `contributors` | Interactive per-contributor time series charts (commits, additions, deletions) |
+| Stats | `stats` | Developer contribution table / time series, from the daily rollup |
+| Activity | `activity` | Team-wide daily code activity charts: commits, lines, PR counts |
+| Contributors | `contributors` | Per-contributor daily time series, one metric at a time |
 
 ### Styling
 
@@ -658,8 +678,7 @@ The CSS uses a modern design system with:
 - **Dark/Light Mode**: Full theme support via `.dark-mode` class
 - **Responsive Design**: Mobile-first with breakpoint at 768px
 - **Component Styles**: Modular styling for cards, buttons, tables, modals
-- **CSS-only Charts**: Bar charts and stacked charts using pure CSS with native tooltips
-- **Recharts Line Charts**: Interactive line charts for contributor time series and top-5 activity view
+- **Recharts Everywhere in Analytics**: Stats/Activity/Contributors all render via recharts (bar, stacked-bar, and line charts) with interactive tooltips and legends — no CSS-only chart rendering remains
 - **Column Tooltips**: `th[title]` cursor set to `help` for non-sortable headers; sortable headers use `pointer` cursor
 - **Reusable `.stat-cards` Grid**: 4-column responsive grid for summary stat cards
 - **Divergence Badges**: Color-coded branch behind indicators (green/yellow/red)
@@ -775,157 +794,103 @@ The filter panel is organized into five tabs:
 
 ### Analytics Tab
 
-The Analytics tab provides four sub-views for repository and team analytics. Data is lazy-loaded when each sub-tab is first selected.
+The Analytics tab has three sub-tabs — Stats, Activity, Contributors — that all render from one shared dataset: the precomputed `analytics_daily` rollup, fetched from a single endpoint, `GET /api/repos/<owner>/<repo>/analytics/daily` (see [Analytics Daily](#analytics-daily)). Switching sub-tabs re-renders already-loaded data; there is no per-sub-tab fetch or lazy-load. A fetch is keyed by repo + window + base, so changing any of the three re-queries.
+
+#### WindowPicker (shared controls)
+
+A `WindowPicker` sits above all three sub-tabs and drives every fetch:
+
+- **Preset chips**: All, 1D, 1W, 1M, 3M, 6M, 1Y. All resolves to the repo's earliest known day (clamped, see [Analytics Daily](#analytics-daily)); the others resolve to a rolling window ending today (UTC).
+- **Custom range**: begin/end date inputs; selecting either switches the preset to `custom`. Both are bounded by today and by the earliest day the rollup reports (`coverage.earliest_pr_day`).
+- **Base-branch select**: options come from the response's `base_branches` (most-rows-first); defaults to `main`.
+- **Status strip**: a `CacheTimestamp` showing "Updated Xs ago" plus, while `syncing` is true, a spinner and "Syncing…" label.
+
+The view renders instantly from whatever rollup the backend already has — there is no spinner-gated wait for GitHub. While `syncing` is true (history/commit backfill still running for the repo), the hook silently re-polls the same endpoint every 15 seconds and swaps in fresh data without disturbing scroll position or open UI state; polling stops once `syncing` goes false.
 
 ### Developer Stats (Analytics > Stats)
 
-The Stats view provides aggregated metrics for all contributors to a repository.
+The Stats sub-tab shows per-developer totals for the selected window/base, either as a table or as a time series.
 
-#### Metrics Displayed
+#### Table view
 
-| Metric | Description |
+| Column | Description |
 |--------|-------------|
-| Commits | Total commits to the repository |
-| PRs | Total PRs authored |
+| Developer | GitHub username and avatar |
+| PRs | PRs created targeting the selected base |
 | Merged | Number of merged PRs |
 | Closed | Number of closed (not merged) PRs |
-| Merge % | Percentage of authored PRs that were merged |
+| Merge % | `merge_rate` — merged / (merged + closed); "N/A" when the denominator is zero |
 | Reviews | Total reviews given |
 | Approvals | Number of approval reviews |
 | Changes Req. | Number of "changes requested" reviews |
 | Lines + | Total lines added |
 | Lines - | Total lines deleted |
+| Commits | Total commits |
+| Avg merge | `avg_merge_hours` — average PR-open-to-merge time, in hours |
 
-#### Features
+Columns are click-to-sort (ascending/descending, visual indicators) and tooltipped. A **Team** row is pinned as the table footer, summing every metric across all contributors. Rows and the Team row all come from the same `people`/`team` totals the backend already computed — no client-side aggregation beyond sorting.
 
-- **Sortable Columns**: Click any column header to sort ascending/descending with visual indicators (▼/▲/⇅)
-- **Column Tooltips**: Hover any column header for a description of the metric
-- **Sticky Developer Column**: First column stays visible while scrolling horizontally
-- **Formatted Numbers**: Large numbers displayed with K/M suffixes
-- **Color-coded Values**: Merge rate and stat types use semantic colors
-- **Avatar Display**: Developer avatars shown inline
+#### Time series view
 
-### PR Lifecycle Metrics (Analytics > Lifecycle)
+A **Table ⇄ Time series** toggle switches the sub-tab into a chart:
 
-The Lifecycle sub-tab shows how long PRs take to move through the review and merge pipeline.
-
-#### Summary Cards
-
-| Metric | Description |
-|--------|-------------|
-| Median Time to Merge | Median hours from PR creation to merge |
-| Avg Time to Merge | Average hours from PR creation to merge |
-| Median Time to First Review | Median hours from PR creation to first review |
-| Avg Time to First Review | Average hours from PR creation to first review |
-
-#### Merge Time Distribution
-
-A bucket-based histogram showing the distribution of time-to-merge values:
-
-| Bucket | Range |
-|--------|-------|
-| < 1h | Merged within 1 hour |
-| 1-4h | Merged within 1-4 hours |
-| 4-24h | Merged within 4-24 hours |
-| 1-3d | Merged within 1-3 days |
-| 3-7d | Merged within 3-7 days |
-| > 7d | Merged after more than 7 days |
-
-#### Stale PR Detection
-
-Identifies open PRs with no activity in the last 14 days. Displays a warning list with PR number, title, author, and age in days.
-
-#### PR Lifecycle Table
-
-Fully sortable table of all analyzed PRs. All six columns (PR#, Author, State, Time to Review, Time to Merge, First Reviewer) support click-to-sort with ascending/descending toggle and visual sort indicators. Column headers include tooltips describing each metric. Null values are pushed to the bottom of sorted results. Sorting is performed client-side.
+- **Per-day / Cumulative** toggle controls whether each metric plots as its daily value or a running total.
+- **Metric chips** (multi-select): all Stats table metrics plus `avg_merge_hours`, which is hours-denominated (weighted daily/cumulative average of `merge_hours_sum`/`merge_hours_count`, not summed).
+- **Person chips** (multi-select): Team plus every contributor, sorted by commit count.
+- Selected metrics × selected people form the plotted series (one line per pair); options grey out once **16 series** are selected (`MAX_SERIES`), and a hint explains the cap. A mixed metric selection spanning hours and non-hours metrics gets a "avg merge time is in hours" hint since they share one y-axis.
+- Legend entries toggle a series on/off; a single-day window shows one dot per series with a hint to widen the range.
 
 ### Code Activity (Analytics > Activity)
 
-The Activity sub-tab visualizes repository code activity over a configurable timeframe using CSS-only bar charts and a recharts line chart.
-
-#### Timeframe Toggle
-
-Users can select the analysis window: 1 month (4 weeks), 3 months (13 weeks), 6 months (26 weeks), or 1 year (52 weeks).
+The Activity sub-tab summarizes team-wide code activity for the selected window/base as daily charts, all built from the same `team.series` the Stats Team row uses.
 
 #### Summary Cards
 
 | Metric | Description |
 |--------|-------------|
-| Total Commits | Total commits in the selected timeframe |
-| Avg Weekly Commits | Average commits per week |
-| Lines Added | Total lines added across all weeks |
-| Lines Deleted | Total lines deleted across all weeks |
-| Peak Week | Week with the highest commit count |
-| Owner % | Percentage of commits from repository owner |
+| Total Commits | Sum of daily commits in the window |
+| Avg Commits/Day | Total commits ÷ number of days in the window |
+| Lines Added | Sum of daily lines added |
+| Lines Deleted | Sum of daily lines deleted |
+| Peak Day | Day with the highest commit count, with that day's commit count |
+| PRs Merged | Sum of daily merged PRs |
 
-#### Visualizations
+#### Charts
+
+Three daily (not weekly) recharts charts, all sharing the window's day axis:
 
 | Chart | Type | Description |
-|-------|------|-------------|
-| Weekly Commits | Bar chart (CSS) | Vertical bars showing commit count per week |
-| Code Changes | Stacked bar chart (CSS) | Additions (green) and deletions (red) per week |
-| Top 5 Contributors | Line chart (recharts) | Weekly commit counts for the top 5 contributors by total commits |
-
-Weekly Commits and Code Changes charts are implemented with pure CSS. The Top 5 Contributors chart uses recharts `LineChart` with interactive tooltip and legend.
-
-#### Data Sources
-
-Uses three GitHub Stats API endpoints fetched via the `fetch_github_stats_api()` helper:
-
-| Endpoint | Data Provided |
-|----------|---------------|
-| `stats/code_frequency` | Weekly additions and deletions |
-| `stats/commit_activity` | Weekly commit totals and per-day breakdowns |
-| `stats/participation` | Owner vs. all-contributor weekly commit counts |
-
-Data is cached in SQLite with a 24-hour TTL using stale-while-revalidate. The full 52-week dataset is cached once; the `?weeks=N` parameter slices the cached data in Python, so switching timeframes does not trigger re-fetches.
+|-------|------|--------------|
+| Commits per day | Bar | One bar per day, team-wide commit count |
+| Lines added vs deleted | Stacked bar | Additions and deletions per day; tooltip notes lines come from PRs merged into the selected base, attributed on merge day |
+| PRs created / merged / closed | Line (time series) | Three toggleable lines, one per PR-count metric |
 
 ### Per-Contributor Time Series (Analytics > Contributors)
 
-The Contributors sub-tab provides interactive line charts showing per-contributor weekly activity over time. Data is sourced from the GitHub `stats/contributors` API and cached in SQLite with a 24-hour TTL using stale-while-revalidate.
+The Contributors sub-tab overlays one line per contributor for a single chosen metric, letting per-person trends be compared directly.
 
 #### Controls
 
-- **Timeframe Selector**: 1 month (4 weeks), 3 months (13 weeks), 6 months (26 weeks), 1 year (52 weeks)
-- **Metric Selector**: Commits, Lines Added, Lines Deleted
-- **Legend Toggle**: Click a contributor in the legend to show/hide their line
+- **Metric chips** (single-select): Commits, Lines added, Lines deleted, Merges, Reviews.
+- **Show all / Hide all** buttons toggle every contributor's line at once; the legend also toggles individual lines.
+- Contributors are ordered by their total for the selected metric (highest first), and each gets a distinct color from the series palette.
 
 #### Chart
 
-A recharts `LineChart` at 400px height with:
-- One `Line` per contributor with distinct colors from a 10-color palette
-- `CartesianGrid`, `XAxis` (week dates), `YAxis`, interactive `Tooltip`, and clickable `Legend`
-- Theme-aware colors adapting to dark/light mode
+A `TimeSeriesChart` at 400px height with `CartesianGrid`, a day-formatted `XAxis`, `YAxis`, interactive `Tooltip`, and a clickable `Legend`. A single-day window renders one point per contributor with a hint to widen the window to see a trend; an empty window shows "No contributors in this window".
 
-### Review Responsiveness (Analytics > Reviews)
+#### Metric Semantics
 
-The Reviews sub-tab shows per-reviewer response times and identifies review bottlenecks.
+The rules the `analytics_rollup` service applies when aggregating `synced_prs`/`synced_commits` rows into the `analytics_daily` rollup (see [PR List Sync](#pr-list-sync) for how those source rows are populated):
 
-#### Team Summary
-
-| Metric | Description |
-|--------|-------------|
-| Avg Team Response | Average response time across all reviewers |
-| Fastest Reviewer | Reviewer with the lowest average response time |
-| PRs Awaiting Review | Count of open PRs with no reviews |
-
-#### Reviewer Leaderboard
-
-Fully sortable table of all reviewers. All columns support click-to-sort with ascending/descending toggle, visual sort indicators, and active column highlighting. Column headers include tooltips. Sorting is performed client-side. Columns:
-
-| Column | Description |
-|--------|-------------|
-| Reviewer | GitHub username |
-| Avg Response Time | Average hours from PR creation to review submission |
-| Median Response Time | Median hours from PR creation to review submission |
-| Total Reviews | Number of reviews given |
-| Approvals | Number of approval reviews |
-| Changes Requested | Number of "changes requested" reviews |
-| Approval Rate | Percentage of reviews that are approvals |
-
-#### Bottleneck Detection
-
-Lists the top 10 open PRs that have been waiting longest for a review, sorted by wait time in descending order. Each bottleneck entry shows PR number, title, author, and hours waiting.
+- **Day bucketing** is always the UTC calendar day of the relevant timestamp (`YYYY-MM-DD`); there is no per-viewer timezone conversion.
+- **PR attribution**: a PR contributes to `prs_created` on its created day, to `prs_merged` (plus `additions`/`deletions`/merge-hours) on its merged day, and to `prs_closed` on its closed day — never more than one of merged/closed for the same PR. All three are bucketed under the PR's author and its `base_ref`.
+- **Reviews**: every review with a `submitted_at` timestamp counts toward `reviews` on its submitted day, under the *reviewer's* login and the PR's `base_ref`. Of the review states, `APPROVED` additionally increments `approvals`, `CHANGES_REQUESTED` increments `changes_requested`, and `COMMENTED` increments `comments`; `DISMISSED` (and any other state) counts only toward the `reviews` total, with no breakdown bucket.
+- **Commits**: bucketed by **committer date** (not author date), under `COALESCE(author_login, author_name, 'unknown')` — a commit with no GitHub-linked login falls back to the raw git author name before falling back to `unknown`. Merge commits (more than one parent) are skipped entirely. Commits bucket under the branch they were synced from, in the `base_ref` slot.
+- **Lines** (`additions`/`deletions`) are PR-level totals from the PR object, attributed on the PR's merge day — there is no per-commit line-stat tracking (see [Known Limitations](#known-limitations)).
+- **`merge_rate`** = `prs_merged / (prs_merged + prs_closed)`, or `null` when both are zero.
+- **`avg_merge_hours`** = `merge_hours_sum / merge_hours_count`, or `null` when no PRs in the window have both a created and merged timestamp.
+- **Bot exclusion** happens at query time in the route (not baked into the rollup), via `is_bot_login()`: a login counts as a bot when the row's stored `is_bot` flag is set (from the PR/commit author's `author.is_bot`), when the login starts with `app/` or ends with `[bot]`, or when its normalized form matches an entry in `analytics.bot_logins` (config-driven, case-insensitive).
 
 ### CI/Workflows Tab
 
@@ -2353,29 +2318,102 @@ from SQLite.
 - `synced_repos` — one row per registered repo (`repo` is the full `"owner/name"`
   string, matching the DB-wide convention): `last_visited_at`, `last_synced_at`,
   `backfill_done`, `backfill_error`. A repo registers itself the first time its
-  PR list is requested.
+  PR list is requested. Also carries the inception-walk state: `repo_created_at`
+  (fetched once, floors the walk), `history_cursor` (the walk's current
+  `YYYY-MM-DD` position), `history_done` (separate from `backfill_done` — the
+  fast backfill only gates the PR-list DB path; the walk keeps going after it),
+  and `history_error`.
 - `synced_prs` — one row per PR, PK `(repo, pr_number)`: scalar columns for cheap
   SQL narrowing (`state`, `is_draft`, `author`, created/updated/closed/merged
   timestamps), the **full PR JSON blob** (every field the live path fetches — no
   data is dropped), and `fetched_at`. `reviewStatus` / `ciStatus` /
   `currentReviewers` are never stored; they are computed at serve time by the same
-  `pr_service` helpers as the live path.
+  `pr_service` helpers as the live path. `get_pr_rollup_rows()` reads this table
+  for the analytics rollup (see [Analytics Daily](#analytics-daily)).
+- `synced_commit_branches` / `synced_commits` (`backend/database/synced_commits.py`)
+  — per-branch commit sync state and rows; see **Commit sync** below.
 
 **Sync worker** (`backend/services/pr_sync_worker.py`, daemon thread started from
-`app.py` behind the `pr_sync.enabled` flag and the WERKZEUG reloader guard):
+`app.py` behind the `pr_sync.enabled` flag and the WERKZEUG reloader guard). One
+cycle per eligible repo runs four exception-isolated stages in order —
+**incremental PR sync → history backfill slice → commit sync → rollup
+rebuild** (skipped on a fresh repo's first cycle, which runs backfill instead of
+the first two stages):
 
 - **Backfill** (first visit): fetch PR *numbers only* (open, then
   `is:closed updated:>=<180-day cutoff>`), then hydrate each number with one
   `gh pr view` (full field set) in a small thread pool — open PRs first so the
   main view fills within seconds. Every request is single-PR-sized; a single PR's
   failure is logged and skipped; a failed backfill records `backfill_error` and
-  retries next cycle (hydration is idempotent upserts).
+  retries next cycle (hydration is idempotent upserts). On success, the
+  history-walk cursor (`history_cursor`) is stamped to tomorrow (UTC) so the
+  inception walk's first window ends today.
 - **Incremental** (each cycle, default 120s): numbers-only query for PRs
   `updated:>=` the last sync minus a 10-minute slack, re-hydrate just those
-  (state transitions are picked up naturally), prune CLOSED/MERGED rows older
-  than the window, stamp `last_synced_at`.
+  (state transitions are picked up naturally), stamp `last_synced_at`. Rows are
+  pruned only when `retain_days > 0` (cutoff = `retain_days` back from now);
+  `retain_days` defaults to `0`, meaning **keep forever** — this replaced an
+  earlier unconditional prune against the `history_days` window.
+- **History backfill slice** (inception walk, `history_backfill_slice`): once
+  the fast backfill is done, walks `history_cursor` backward from tomorrow to
+  the repo's `repo_created_at` (or a `2008-01-01` fallback if that fetch
+  failed), hydrating the closed/merged PRs the fast backfill's 180-day window
+  skipped. Each cycle processes one slice:
+  - Best-effort: skips a slice (and logs) when `gh api rate_limit` reports
+    GraphQL remaining below `min_graphql_remaining` (default 1500), so the
+    walk can back off before starving other GraphQL consumers when the quota
+    check succeeds. The per-cycle `history_backfill_budget` is the hard bound
+    on hydrations regardless of whether the quota check runs.
+  - Windows are newest-first, `history_chunk_days` (default 30, clamped 1-90)
+    wide, searched as `is:closed created:<start>..<end>`. A window returning
+    ≥1000 results (GitHub's search cap) is halved and re-searched until it's
+    under the cap, so no PR in a dense window is silently dropped.
+  - Hydration is budgeted at `history_backfill_budget` (default 60) `gh pr
+    view` calls per cycle, across the whole repo's slice; a window not fully
+    hydrated within budget is left for the same window to resume next cycle
+    (the cursor only advances past a window once it's fully covered).
+  - `history_done` is set once the cursor reaches `repo_created_at`; a repo
+    whose fast backfill completed *before* this feature shipped has no
+    `history_cursor` yet, so `history_backfill_slice` self-initializes it to
+    tomorrow (UTC) on its first call, and the walk continues in that same
+    cycle.
+- **Commit sync** (`sync_commits`, per `commit_branches`, default `["main"]`):
+  see **Commit sync** below.
 - Eligible repos: registered minus `exclude_repos`, most-recently-visited first,
-  capped at `max_synced_repos`. Each repo's cycle is exception-isolated.
+  capped at `max_synced_repos`. Each repo's cycle is exception-isolated, and so
+  is each stage within a repo — one stage failing never blocks the next.
+
+**Commit sync** (`backend/database/synced_commits.py`,
+`pr_sync_worker.sync_commits`): syncs commits per configured branch via the REST
+`repos/{owner}/{repo}/commits?sha=<branch>` endpoint (manual `page=` paging —
+deliberately not `--paginate`, so a per-cycle page budget and a resumable
+checkpoint are possible). Per-commit line-stat totals are **not** fetched (see
+[Known Limitations](#known-limitations)); analytics lines come from PR-level
+`additions`/`deletions` instead.
+
+- **Backfill** (`backfill_until` checkpoint): pages backward from HEAD,
+  `commit_pages_per_cycle` (default 40) pages of 100 commits per cycle. The
+  first page (per branch, ever) observes the branch's true HEAD and fixes that
+  as the cycle's `until` anchor for every later page, so a push mid-walk can't
+  shift already-paged commits; only the checkpoint written for the *next*
+  cycle moves. `backfill_done` is set on the first short page (<100 rows).
+- **Incremental** (once `backfill_done`): re-fetches with
+  `since = last_committed_at − 10 min` (the same clock-skew slack as PR sync),
+  up to `commit_pages_per_cycle` pages. If the backlog exceeds
+  `commit_pages_per_cycle × 100` commits, the loop exits by exhausting its page
+  budget rather than hitting a short page — `last_committed_at` still advances
+  to whatever was seen, but a WARNING is logged so the gap is observable; a
+  backlog past that size needs a manual resync to close (see [Known
+  Limitations](#known-limitations)).
+- Each branch is isolated: one branch's fetch failure never blocks the others,
+  and is recorded on that branch's state row (`error`).
+
+**Rollup rebuild**: at the end of a repo's cycle, `analytics_rollup.rebuild_repo()`
+runs whenever `analytics_rollup.needs_rebuild()` is true (missing rollup, stale
+schema version, or a sync newer than the last build). In practice this is
+effectively unconditional for a synced repo: incremental sync stamps
+`last_synced_at` every cycle regardless of whether any data changed, so the
+rollup is rebuilt after every cycle (cost ≈ 0.1–0.3 s per repo).
 
 **Route dispatch** (`GET /api/repos/<owner>/<repo>/prs`, three-way):
 
@@ -2411,9 +2449,16 @@ flips to local data without a manual refresh.
 
 **Configuration** (`pr_sync` block, all defaults internal — the block is optional):
 `enabled` (true; false is a clean kill switch back to live fetching),
-`poll_interval_seconds` (120), `history_days` (180), `max_synced_repos` (10,
-least-recently-visited repos beyond the cap fall back to the live path),
-`exclude_repos` ([]).
+`poll_interval_seconds` (120), `history_days` (180), `retain_days` (0 — never
+prune; a positive value prunes CLOSED/MERGED rows older than that many days),
+`max_synced_repos` (10, least-recently-visited repos beyond the cap fall back
+to the live path), `exclude_repos` ([]), `history_backfill_budget` (60,
+`gh pr view` hydrations per cycle for the inception walk), `history_chunk_days`
+(30, clamped 1-90), `min_graphql_remaining` (1500, best-effort: the history
+slice skips when `gh api rate_limit` reports GraphQL remaining below this;
+`history_backfill_budget` is the hard bound on hydrations), `commit_branches`
+(`["main"]`), `commit_pages_per_cycle` (40).
+See [Configuration](#configuration) for the full defaults/sanitization table.
 
 ### Automation (Full Auto Review Pipeline)
 
@@ -2968,35 +3013,6 @@ Returns teams with repository access.
 }
 ```
 
-### Developer Statistics
-
-**GET** `/api/repos/<owner>/<repo>/stats`
-
-Returns aggregated developer statistics.
-
-**Response**:
-```json
-{
-  "stats": [
-    {
-      "login": "developer1",
-      "avatar_url": "https://...",
-      "commits": 245,
-      "lines_added": 15000,
-      "lines_deleted": 8000,
-      "prs_authored": 45,
-      "prs_merged": 42,
-      "prs_closed": 2,
-      "prs_open": 1,
-      "reviews_given": 120,
-      "approvals": 95,
-      "changes_requested": 15,
-      "comments": 10
-    }
-  ]
-}
-```
-
 ### Branch Divergence
 
 **POST** `/api/repos/<owner>/<repo>/prs/divergence`
@@ -3120,148 +3136,79 @@ Returns GitHub Actions workflow runs with optional filters and aggregate statist
 
 ---
 
-### Code Activity
+### Analytics Daily
 
-**GET** `/api/repos/<owner>/<repo>/code-activity`
+**GET** `/api/repos/<owner>/<repo>/analytics/daily`
 
-Returns code activity statistics including commit frequency, code changes, and owner/community participation. Cached with a 10-minute TTL.
+The single endpoint backing all three Analytics sub-tabs (Stats, Activity, Contributors): the precomputed per-developer, per-day `analytics_daily` rollup for a window/base. **Never calls GitHub** — it is DB-only. When the repo's rollup is missing or older than its last sync (`analytics_rollup.needs_rebuild()`), it is rebuilt synchronously in-request (`rebuild_repo()`) before the query runs; this reads only rows the PR sync worker already wrote, so it's fast even though it's synchronous.
 
 **Query Parameters**:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `weeks` | integer | 52 | Number of weeks to analyze (1-52) |
+| `from` | string (`YYYY-MM-DD`) | earliest known day, clamped | Window start (inclusive). Omitted ⇒ "All time": the repo's earliest rollup day, clamped to `MAX_RANGE_DAYS` (1830) back from `to` if the repo is older than that. |
+| `to` | string (`YYYY-MM-DD`) | today (UTC) | Window end (inclusive) |
+| `base` | string | none (all bases) | Base branch to scope to; omitted returns rows summed across all base refs |
+
+**Error Responses** (`400`):
+- Malformed `from` or `to` (not `YYYY-MM-DD`)
+- `from` after `to`
+- An **explicit** `from` whose range exceeds `MAX_RANGE_DAYS` (1830 days) — the all-time default clamps instead of erroring
 
 **Response**:
 ```json
 {
-  "weekly_commits": [
-    { "week": "2024-01-08", "total": 15, "days": [2, 3, 4, 1, 2, 3, 0] }
+  "from": "2026-06-01",
+  "to": "2026-09-01",
+  "base": "main",
+  "days": ["2026-06-01", "2026-06-02", "..."],
+  "people": [
+    {
+      "login": "developer1",
+      "avatar_url": "https://github.com/developer1.png",
+      "series": {
+        "prs_created": [1, 0, "..."], "prs_merged": [0, 1, "..."], "prs_closed": [0, 0, "..."],
+        "reviews": [2, 0, "..."], "approvals": [1, 0, "..."], "changes_requested": [0, 0, "..."],
+        "comments": [1, 0, "..."], "additions": [0, 120, "..."], "deletions": [0, 40, "..."],
+        "commits": [3, 5, "..."], "merge_hours_sum": [0, 6.5, "..."], "merge_hours_count": [0, 1, "..."]
+      },
+      "totals": {
+        "prs_created": 12, "prs_merged": 10, "prs_closed": 1, "reviews": 30, "approvals": 22,
+        "changes_requested": 4, "comments": 4, "additions": 3400, "deletions": 900, "commits": 88,
+        "merge_hours_sum": 65.0, "merge_hours_count": 10, "merge_rate": 0.909, "avg_merge_hours": 6.5
+      }
+    }
   ],
-  "code_changes": [
-    { "week": "2024-01-08", "additions": 500, "deletions": 200 }
-  ],
-  "owner_commits": [10, 12, 8],
-  "community_commits": [5, 3, 7],
-  "summary": {
-    "total_commits": 150,
-    "avg_weekly_commits": 11.5,
-    "total_additions": 15000,
-    "total_deletions": 8000,
-    "peak_week": "2024-01-08",
-    "peak_commits": 25,
-    "owner_percentage": 65.3
+  "team": {
+    "series": { "...": "sum of every person's series, same columns as above" },
+    "totals": { "...": "sum of every person's totals, plus merge_rate/avg_merge_hours recomputed from the summed columns" }
+  },
+  "base_branches": ["main", "release"],
+  "last_updated": "2026-09-10T14:02:11Z",
+  "stale": false,
+  "syncing": false,
+  "coverage": {
+    "earliest_pr_day": "2022-03-01",
+    "earliest_commit_day": "2022-03-01",
+    "pr_count": 640,
+    "review_count": 1820,
+    "commit_count": 9100,
+    "backfill_done": true,
+    "history_done": true,
+    "commit_history_done": true
   }
 }
 ```
 
----
+**Field semantics**:
 
-### Contributor Time Series
+| Field | Meaning |
+|-------|---------|
+| `stale` | `true` when the rollup's `built_at` is older than `3 * poll_interval_seconds` — a hint the UI hasn't seen the latest sync cycle yet, not an error |
+| `syncing` | `true` while any of PR backfill, the inception history walk, or commit history backfill (across all `commit_branches`) is still in progress for the repo; drives the WindowPicker's "Syncing…" indicator and the 15s poll |
+| `coverage` | Rollup provenance: earliest day the rollup has data for (PRs and commits separately), row counts, and the three `*_done` flags that combine into `syncing` |
 
-**GET** `/api/repos/<owner>/<repo>/contributor-timeseries`
-
-Returns per-contributor weekly time series data (commits, additions, deletions). Cached in SQLite with 24-hour TTL using stale-while-revalidate pattern.
-
-**Query Parameters**:
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `refresh` | string | - | Set to "true" to force a synchronous refresh |
-
-**Response**:
-```json
-{
-  "contributors": [
-    {
-      "login": "developer1",
-      "avatar_url": "https://...",
-      "total": 150,
-      "weeks": [
-        {
-          "week": "2025-01-06",
-          "commits": 5,
-          "additions": 100,
-          "deletions": 50
-        }
-      ]
-    }
-  ]
-}
-```
-
----
-
-### PR Lifecycle Metrics
-
-**GET** `/api/repos/<owner>/<repo>/lifecycle-metrics`
-
-Returns PR lifecycle metrics including time-to-merge, time-to-first-review, stale PR detection, and merge time distribution. Uses `fetch_pr_review_times()` shared helper with SQLite cache (2-hour TTL).
-
-**Response**:
-```json
-{
-  "median_time_to_merge": 18.5,
-  "avg_time_to_merge": 42.3,
-  "median_time_to_first_review": 4.2,
-  "avg_time_to_first_review": 8.7,
-  "stale_prs": [
-    { "number": 45, "title": "Old feature", "author": "developer", "age_days": 21.3 }
-  ],
-  "stale_count": 3,
-  "distribution": {
-    "<1h": 5,
-    "1-4h": 12,
-    "4-24h": 18,
-    "1-3d": 8,
-    "3-7d": 4,
-    ">7d": 3
-  },
-  "pr_table": [
-    {
-      "number": 123,
-      "title": "Add new feature",
-      "author": "developer",
-      "created_at": "2024-01-10T08:00:00Z",
-      "state": "MERGED",
-      "time_to_first_review_hours": 2.5,
-      "time_to_merge_hours": 18.3,
-      "first_reviewer": "reviewer1"
-    }
-  ]
-}
-```
-
----
-
-### Review Responsiveness
-
-**GET** `/api/repos/<owner>/<repo>/review-responsiveness`
-
-Returns per-reviewer response time metrics, a ranked leaderboard, and bottleneck detection for unreviewed PRs. Shares the `fetch_pr_review_times()` cached data with the lifecycle endpoint.
-
-**Response**:
-```json
-{
-  "leaderboard": [
-    {
-      "reviewer": "fast-reviewer",
-      "avg_response_time_hours": 2.5,
-      "median_response_time_hours": 1.8,
-      "total_reviews": 45,
-      "approvals": 38,
-      "changes_requested": 5,
-      "approval_rate": 84.4
-    }
-  ],
-  "bottlenecks": [
-    { "number": 99, "title": "Waiting PR", "author": "developer", "wait_hours": 120.5 }
-  ],
-  "avg_team_response_hours": 8.3,
-  "fastest_reviewer": "fast-reviewer",
-  "prs_awaiting_review": 5
-}
-```
+Bot accounts (per `analytics.bot_logins`, `app/`-prefixed and `[bot]`-suffixed logins, and any row flagged `is_bot`) are filtered out of `people` at query time, after the rollup is read — they never reach the response. See [Metric Semantics](#metric-semantics) for the exact bucketing rules baked into the rollup itself.
 
 ---
 
@@ -4384,7 +4331,6 @@ and validated server-side; see those feature sections for their shapes.
 | `cache_ttl_seconds` | integer | 300 | Cache time-to-live in seconds (5 minutes) |
 | `workflow_cache_ttl_minutes` | integer | 60 | Workflow cache TTL in minutes (stale-while-revalidate) |
 | `workflow_cache_max_runs` | integer | 1000 | Maximum unfiltered workflow runs to cache per repo |
-| `review_sample_limit` | integer | 250 | Maximum PRs to sample for review statistics and lifecycle metrics |
 | `review_section_names` | object | `{"critical": "Critical Issues", "major": "Major Concerns", "minor": "Minor Issues"}` | Custom display names for review sections |
 | `reviews_dir` | string | `~/code-reviews` | Directory where Claude code reviews (`.md`/`.json`) are written. Supports `~` and `$VAR` expansion so it stays machine-agnostic. Falls back to `~/code-reviews` if omitted. |
 | `post_review_started_comment` | boolean | true | Master switch for all PR status comments (the name is historical): review started/retry/gave-up, stale-stop, orphan-requeued, verdict suppressed/deferred/error/skipped, and the automation enrolled/waiting/expired/failed/unidentified comments, plus the supersede-deletes. Set to `false` to suppress everything. See "PR Status Comments". |
@@ -4397,7 +4343,8 @@ and validated server-side; see those feature sections for their shapes.
 | `review_log_retention_days` | integer | 90 | How long review lifecycle events are kept. Purged once on startup; `0` disables purging. |
 | `log_retention_days` | integer | 30 | How long per-run process log files (`logs/pr-explorer_*.log`) are kept. Pruned once on startup; `0` disables pruning. `logs/error.log` is never pruned. See "Logging" under Technical Details. |
 | `past_reviews_dir` | string | `<reviews_dir>/past-reviews` | Legacy reviews directory used only by the one-time `migrate_data.py` import. Supports `~`/`$VAR` expansion. |
-| `pr_sync` | object | see below | PR List Sync worker settings. Optional block; every key has an internal default. `enabled` (bool, true) — master switch; `false` reverts the PR list to live fetching. `poll_interval_seconds` (int, 120) — worker cycle interval. `history_days` (int, 180) — how far back closed/merged PRs are synced and kept. `max_synced_repos` (int, 10) — most-recently-visited repos kept in sync; the rest fall back to the live path. `exclude_repos` (list, `[]`) — `"owner/name"` strings never synced. |
+| `pr_sync` | object | see below | PR List Sync worker settings. Optional block; every key has an internal default. `enabled` (bool, true) — master switch; `false` reverts the PR list to live fetching. `poll_interval_seconds` (int, 120) — worker cycle interval. `history_days` (int, 180) — fast-backfill window for closed/merged PRs. `retain_days` (int, 0) — prune CLOSED/MERGED rows older than this; `0` = keep forever. `max_synced_repos` (int, 10) — most-recently-visited repos kept in sync; the rest fall back to the live path. `exclude_repos` (list, `[]`) — `"owner/name"` strings never synced. `history_backfill_budget` (int, 60) — max `gh pr view` hydrations per cycle for the inception history walk. `history_chunk_days` (int, 30, clamped 1-90) — created-date window width per history search. `min_graphql_remaining` (int, 1500) — best-effort: skips a slice when `gh api rate_limit` reports GraphQL remaining below this threshold; `history_backfill_budget` is the hard bound on hydrations. `commit_branches` (list, `["main"]`) — branches whose commits are synced via REST. `commit_pages_per_cycle` (int, 40) — REST pages (100 commits each) per cycle per branch. |
+| `analytics` | object | see below | Analytics settings. Optional block. `bot_logins` (list of str, see [Configuration](#configuration) example) — logins excluded from Analytics tab attribution, in addition to the `app/`-prefix and `[bot]`-suffix checks that always apply. |
 
 ### Example Configuration
 
@@ -4411,7 +4358,6 @@ and validated server-side; see those feature sections for their shapes.
   "cache_ttl_seconds": 300,
   "workflow_cache_ttl_minutes": 60,
   "workflow_cache_max_runs": 1000,
-  "review_sample_limit": 250,
   "reviews_dir": "~/code-reviews",
   "review_max_attempts": 3,
   "review_retry_delay_seconds": 30,
@@ -4431,6 +4377,25 @@ and validated server-side; see those feature sections for their shapes.
     "critical": "Critical Issues",
     "major": "Major Concerns",
     "minor": "Minor Issues"
+  },
+  "pr_sync": {
+    "enabled": true,
+    "poll_interval_seconds": 120,
+    "history_days": 180,
+    "retain_days": 0,
+    "max_synced_repos": 10,
+    "exclude_repos": [],
+    "history_backfill_budget": 60,
+    "history_chunk_days": 30,
+    "min_graphql_remaining": 1500,
+    "commit_branches": ["main"],
+    "commit_pages_per_cycle": 40
+  },
+  "analytics": {
+    "bot_logins": [
+      "github-actions", "coderabbitai", "greptile-apps", "cursor", "claude",
+      "copilot-pull-request-reviewer", "dependabot", "scalazack"
+    ]
   }
 }
 ```
@@ -4540,9 +4505,11 @@ All cached endpoints include metadata fields so the frontend can show data fresh
 | `stale` | boolean | Whether the cached data has exceeded its TTL |
 | `refreshing` | boolean | Whether a background refresh is currently in progress |
 
-**Endpoints with cache metadata**: `/stats`, `/lifecycle-metrics`, `/review-responsiveness`, `/code-activity`, `/contributor-timeseries`, `/workflow-runs`
+**Endpoints with cache metadata**: `/workflow-runs`
 
 The frontend displays a subtle "Updated X ago" indicator on each cached view using the `CacheTimestamp` component. When data is stale and a background refresh is in progress, the indicator shows "Updated X ago · refreshing..."
+
+Analytics (`/analytics/daily`) does not go through this TTL cache decorator — it reads the precomputed `analytics_daily` rollup directly (see [Analytics Daily](#analytics-daily)) and reports its own `last_updated`/`stale`/`syncing` fields, sourced from the rollup's `built_at` and the PR sync worker's progress, not from an in-memory cache entry. The `WindowPicker`'s status strip uses the same `CacheTimestamp` component to render them.
 
 ### Workflow Cache (SQLite + Stale-While-Revalidate)
 
@@ -4614,8 +4581,9 @@ def fetch_github_stats_api(owner, repo, endpoint, jq_query=None, max_retries=3, 
 ```
 
 This helper is used by:
-- `fetch_contributor_stats()` for developer statistics
-- `get_code_activity()` for commit frequency, code churn, and participation data
+- `repo_stats_service._fetch_contributors_stats()` (`stats/contributors`) for the Repo Stats tab's total commits / contributor count
+
+The Analytics tab (Stats/Activity/Contributors sub-tabs) no longer uses this helper — it reads the local `analytics_daily` rollup instead (see [Analytics Daily](#analytics-daily)).
 
 ### Parallel API Fetching
 
@@ -4624,7 +4592,7 @@ The application uses `concurrent.futures.ThreadPoolExecutor` for parallel API ca
 | Usage | Max Workers | Description |
 |-------|-------------|-------------|
 | Branch divergence | 5 | Batch compare API calls for all open PRs |
-| PR review times | 5 | Fetch reviews for each PR in lifecycle/responsiveness endpoints |
+| PR hydration (PR sync) | 4 | `gh pr view` per PR number, in `pr_sync_worker._hydrate()` (backfill, incremental, and history-walk hydration) |
 
 ```python
 from concurrent.futures import ThreadPoolExecutor
@@ -4982,10 +4950,10 @@ Each **finding** requires `id`, `severity` (uppercase token: `CONTRADICTION`, `S
 3. **Export Functionality**: Export PR lists and stats to CSV/JSON
 4. **Notification Integration**: Browser notifications for PR updates
 5. **Multi-Repository View**: View PRs across multiple repositories simultaneously
-6. ~~**Custom Dashboards**: User-configurable dashboard widgets~~ **Implemented**: Analytics tab with 5 sub-tabs (Stats, Lifecycle, Activity, Reviews, Contributors) and CI/Workflows tab
+6. ~~**Custom Dashboards**: User-configurable dashboard widgets~~ **Implemented**: Analytics tab with 3 sub-tabs (Stats, Activity, Contributors), windowed over a local daily rollup, and CI/Workflows tab
 7. **PR Templates**: Quick filter templates (e.g., "My Open PRs", "Needs My Review")
 8. ~~**CI/Workflow Visibility**: View workflow run history and pass/fail rates~~ **Implemented**: CI/Workflows tab with filters, stats cards, and runs table
-9. ~~**PR Lifecycle Metrics**: Time-to-merge and review responsiveness tracking~~ **Implemented**: Lifecycle and Reviews sub-tabs in Analytics
+9. ~~**PR Lifecycle Metrics**: Time-to-merge and review responsiveness tracking~~ **Removed**: the Lifecycle and Reviews sub-tabs (and their five endpoints) were removed when Analytics was rebuilt around the daily rollup; avg merge time remains in the Stats sub-tab
 10. ~~**Branch Staleness Detection**: Show how far behind base branch a PR is~~ **Implemented**: Branch divergence badges on PR cards
 
 #### User Experience
@@ -5011,7 +4979,7 @@ Each **finding** requires `id`, `severity` (uppercase token: `CONTRADICTION`, `S
 3. **Rate Limits**: Subject to GitHub API rate limits via gh CLI
 4. **Large Repositories**: Stats fetching may be slow for repos with many PRs
 5. **Teams Endpoint**: May fail for personal repositories (non-fatal)
-6. **Review Stats Sampling**: Reviews fetched for a configurable number of PRs (default 250, set via `review_sample_limit` in config.json)
+6. **Per-Commit Line Stats**: Per-commit line stats are not tracked; Analytics lines come from merged PRs, attributed on merge day
 7. **Claude CLI Required**: Code review feature requires Claude CLI installed and authenticated
 8. **One Review Per PR**: Cannot run multiple concurrent reviews for the same PR
 9. **Active Review Volatility**: In-progress reviews lost if server restarts mid-review (completed reviews are persisted)
@@ -5019,10 +4987,9 @@ Each **finding** requires `id`, `severity` (uppercase token: `CONTRADICTION`, `S
 11. **Score Extraction Heuristic**: Score parsing relies on regex patterns; unusual formats may not be detected
 12. **Migration One-Time**: Data migration from legacy JSON/markdown runs once; subsequent manual additions to old format not auto-imported
 13. **Stats API Availability**: GitHub stats endpoints return 202 while computing; data may be unavailable for first request on cold repositories
-14. **Lifecycle PR Limit**: Lifecycle and review responsiveness metrics analyze the most recent PRs (default 250, configurable via `review_sample_limit`)
+14. **GitHub Stats API Retired from Analytics**: GitHub statistics endpoints (`stats/code_frequency`, `stats/commit_activity`, `stats/contributors`) are no longer used for the Analytics tab; it reads only from the local `analytics_daily` rollup (the Repo Stats tab still uses `stats/contributors`)
 15. **Divergence API Calls**: Branch divergence fetches one compare API call per open PR, which may be slow for repositories with many open PRs
-16. **Code Activity Max Range**: Code activity is limited to 52 weeks maximum (GitHub API limitation)
-17. **Mixed Chart Rendering**: Activity bar charts use CSS-only rendering (no click handlers, zoom, or drill-down); Contributor time series charts use recharts with interactive tooltips and legend toggling
+16. **Analytics Range Cap**: All Analytics windows (Stats, Activity, Contributors — 1D/1W/1M/3M/6M/1Y/All/custom) are bounded by `MAX_RANGE_DAYS` (1830 days, ~5 years); an explicit custom range beyond that returns `400`, while the "All time" default clamps automatically instead of erroring
 
 ---
 
@@ -5072,19 +5039,19 @@ gh-pr-explorer/
 │   │   ├── reviews.py              # ReviewsDB
 │   │   ├── merge_queue.py          # MergeQueueDB
 │   │   ├── settings.py             # SettingsDB
-│   │   ├── dev_stats.py            # DeveloperStatsDB
-│   │   └── cache_stores.py         # LifecycleCacheDB, WorkflowCacheDB, ContributorTSCacheDB, CodeActivityCacheDB, TimelineCacheDB
+│   │   ├── synced_prs.py           # SyncedPRsDB: PR list sync + inception history walk + rollup source rows
+│   │   ├── synced_commits.py       # SyncedCommitsDB: per-branch commit sync state + rows
+│   │   ├── analytics_daily.py      # AnalyticsDailyDB: precomputed per-developer, per-day rollup
+│   │   └── cache_stores.py         # WorkflowCacheDB, RepoStatsCacheDB, RepoLOCCacheDB, TimelineCacheDB
 │   │
 │   ├── services/                   # Business logic layer
-│   │   ├── github_service.py       # gh CLI wrapper: run_command, parse_json, fetch_stats_api
+│   │   ├── github_service.py       # gh CLI wrapper: run_command, parse_json, fetch_stats_api, fetch_commits_page, fetch_repo_created_at
 │   │   ├── pr_service.py           # PR post-processing: review_status, ci_status
-│   │   ├── stats_service.py        # Dev stats aggregation from 3 sources
+│   │   ├── analytics_rollup.py     # Pure rollup builder (build_rows) + needs_rebuild/rebuild_repo orchestration
+│   │   ├── bot_filter.py           # is_bot_login/normalize_login for analytics attribution
 │   │   ├── review_service.py       # Claude CLI subprocess management
 │   │   ├── inline_comments_service.py  # Critical issue parsing + posting to GitHub
-│   │   ├── lifecycle_service.py    # PR review times fetch (ThreadPoolExecutor)
 │   │   ├── workflow_service.py     # Parallel batch workflow data fetching
-│   │   ├── activity_service.py     # Code activity data from 3 stats APIs
-│   │   ├── contributor_service.py  # Contributor time series transform
 │   │   ├── timeline_service.py     # PR timeline: normalize + fetch + cache-aware get
 │   │   ├── review_schema.py        # Review JSON schema, validation, JSON<->markdown conversion
 │   │   ├── review_schema_spec.json # Formal JSON Schema file for external tools/agents
@@ -5098,10 +5065,7 @@ gh-pr-explorer/
 │   │   └── memory_cache.py         # In-memory TTL cache decorator (@cached)
 │   │
 │   ├── visualizers/                # Data transformation for charts/tables
-│   │   ├── activity_visualizer.py  # Slice 52-week data by timeframe, compute summary stats
-│   │   ├── workflow_visualizer.py  # Apply filters to cached runs, compute aggregate stats
-│   │   ├── lifecycle_visualizer.py # Merge time distribution, stale PR detection, pr_table
-│   │   └── responsiveness_visualizer.py  # Reviewer leaderboard, bottleneck detection
+│   │   └── workflow_visualizer.py  # Apply filters to cached runs, compute aggregate stats
 │   │
 │   └── routes/                     # Flask Blueprints (12 blueprints)
 │       ├── __init__.py             # register_blueprints(app)
@@ -5109,7 +5073,7 @@ gh-pr-explorer/
 │       ├── auth_routes.py          # /api/user, /api/orgs
 │       ├── repo_routes.py          # /api/repos, contributors, labels, branches, milestones, teams
 │       ├── pr_routes.py            # /api/repos/.../prs, prs/divergence
-│       ├── analytics_routes.py     # /api/repos/.../stats, lifecycle, responsiveness, activity, contributors
+│       ├── analytics_routes.py     # /api/repos/.../analytics/daily — precomputed rollup
 │       ├── workflow_routes.py      # /api/repos/.../workflow-runs
 │       ├── queue_routes.py         # /api/merge-queue CRUD + reorder + notes
 │       ├── review_routes.py        # /api/reviews CRUD + status + inline-comments + check-new-commits

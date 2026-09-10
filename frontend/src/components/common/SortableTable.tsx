@@ -16,6 +16,8 @@ interface SortableTableProps<T> {
   onSort?: (column: string) => void
   keyExtractor: (item: T) => string | number
   className?: string
+  footerRow?: T
+  footerClassName?: string
 }
 
 export function SortableTable<T>({
@@ -26,6 +28,8 @@ export function SortableTable<T>({
   onSort,
   keyExtractor,
   className = '',
+  footerRow,
+  footerClassName,
 }: SortableTableProps<T>) {
   const handleHeaderClick = (column: Column<T>) => {
     if (column.sortable && onSort) {
@@ -70,6 +74,19 @@ export function SortableTable<T>({
             </tr>
           ))}
         </tbody>
+        {footerRow && (
+          <tfoot>
+            <tr className={`mx-table__footer ${footerClassName ?? ''}`}>
+              {columns.map((column) => (
+                <td key={column.key}>
+                  {column.render
+                    ? column.render(footerRow)
+                    : String((footerRow as Record<string, unknown>)[column.key] ?? '')}
+                </td>
+              ))}
+            </tr>
+          </tfoot>
+        )}
       </table>
     </div>
   )

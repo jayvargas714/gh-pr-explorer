@@ -135,26 +135,6 @@ export interface Team {
 }
 
 // ============================================================================
-// Developer Stats Types
-// ============================================================================
-
-export interface DeveloperStats {
-  login: string
-  avatar_url: string
-  commits: number
-  lines_added: number
-  lines_deleted: number
-  prs_authored: number
-  prs_merged: number
-  prs_closed: number
-  prs_open: number
-  reviews_given: number
-  approvals: number
-  changes_requested: number
-  comments: number
-}
-
-// ============================================================================
 // Branch Divergence Types
 // ============================================================================
 
@@ -215,109 +195,51 @@ export interface Workflow {
 // Analytics Types
 // ============================================================================
 
-export interface ContributorWeek {
-  week: string
-  commits: number
-  additions: number
-  deletions: number
+export type DailyRawKey =
+  | 'prs_created'
+  | 'prs_merged'
+  | 'prs_closed'
+  | 'reviews'
+  | 'approvals'
+  | 'changes_requested'
+  | 'comments'
+  | 'additions'
+  | 'deletions'
+  | 'commits'
+  | 'merge_hours_sum'
+  | 'merge_hours_count'
+export type DailySeries = Record<DailyRawKey, number[]>
+export type DailyTotals = Record<DailyRawKey, number> & {
+  merge_rate: number | null
+  avg_merge_hours: number | null
 }
-
-export interface ContributorTimeSeries {
+export interface DailyPerson {
   login: string
-  avatar_url: string
-  total: number
-  weeks: ContributorWeek[]
+  avatar_url?: string
+  series: DailySeries
+  totals: DailyTotals
 }
-
-export interface CodeActivity {
-  weekly_commits: WeeklyCommit[]
-  code_changes: CodeChange[]
-  owner_commits: number[]
-  community_commits: number[]
-  summary: ActivitySummary
-}
-
-export interface WeeklyCommit {
-  week: string
-  total: number
-  days: number[]
-}
-
-export interface CodeChange {
-  week: string
-  additions: number
-  deletions: number
-}
-
-export interface ActivitySummary {
-  total_commits: number
-  avg_weekly_commits: number
-  total_additions: number
-  total_deletions: number
-  peak_week: string
-  peak_commits: number
-  owner_percentage: number
-}
-
-export interface LifecycleMetrics {
-  median_time_to_merge: number
-  avg_time_to_merge: number
-  median_time_to_first_review: number
-  avg_time_to_first_review: number
-  stale_prs: StalePR[]
-  stale_count: number
-  distribution: {
-    '<1h': number
-    '1-4h': number
-    '4-24h': number
-    '1-3d': number
-    '3-7d': number
-    '>7d': number
+export interface AnalyticsDailyResponse {
+  from: string
+  to: string
+  base: string
+  days: string[]
+  people: DailyPerson[]
+  team: { series: DailySeries; totals: DailyTotals }
+  base_branches: string[]
+  last_updated: string | null
+  stale: boolean
+  syncing: boolean
+  coverage: {
+    earliest_pr_day: string | null
+    earliest_commit_day: string | null
+    pr_count: number
+    review_count: number
+    commit_count: number
+    backfill_done: boolean
+    history_done: boolean
+    commit_history_done: boolean
   }
-  pr_table: LifecyclePR[]
-}
-
-export interface StalePR {
-  number: number
-  title: string
-  author: string
-  age_days: number
-}
-
-export interface LifecyclePR {
-  number: number
-  title: string
-  author: string
-  created_at: string
-  state: string
-  time_to_first_review_hours: number | null
-  time_to_merge_hours: number | null
-  first_reviewer: string | null
-}
-
-export interface ReviewResponsiveness {
-  leaderboard: ReviewerStats[]
-  bottlenecks: Bottleneck[]
-  avg_team_response_hours: number
-  fastest_reviewer: string
-  prs_awaiting_review: number
-}
-
-export interface ReviewerStats {
-  reviewer: string
-  avg_response_time_hours: number
-  median_response_time_hours: number
-  total_reviews: number
-  approvals: number
-  changes_requested: number
-  approval_rate: number
-}
-
-export interface Bottleneck {
-  number: number
-  title: string
-  author: string
-  wait_hours: number
 }
 
 // ============================================================================
@@ -936,10 +858,6 @@ export interface TeamsResponse {
   teams: Team[]
 }
 
-export interface StatsResponse extends CacheMeta {
-  stats: DeveloperStats[]
-}
-
 export interface DivergenceResponse {
   divergence: DivergenceMap
 }
@@ -949,16 +867,6 @@ export interface WorkflowRunsResponse extends CacheMeta {
   stats: WorkflowStats
   workflows: Workflow[]
 }
-
-export interface ContributorTimeSeriesResponse extends CacheMeta {
-  contributors: ContributorTimeSeries[]
-}
-
-export interface CodeActivityResponse extends CodeActivity, CacheMeta {}
-
-export interface LifecycleMetricsResponse extends LifecycleMetrics, CacheMeta {}
-
-export interface ReviewResponsivenessResponse extends ReviewResponsiveness, CacheMeta {}
 
 export interface MergeQueueResponse {
   queue: MergeQueueItem[]

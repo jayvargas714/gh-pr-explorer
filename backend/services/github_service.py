@@ -4,6 +4,7 @@ import json
 import logging
 import subprocess
 import time
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -385,3 +386,45 @@ def fetch_open_prs_head_shas(owner, repo, limit=1000):
         for row in rows
         if isinstance(row, dict) and isinstance(row.get("number"), int) and row.get("headRefOid")
     }
+
+
+def fetch_repo_created_at(owner, repo):
+    """Repo creation timestamp (ISO 8601), or None on failure."""
+    try:
+        output = run_gh_command(["api", f"repos/{owner}/{repo}", "--jq", ".created_at"])
+        return output.strip() or None
+    except RuntimeError as e:
+        logger.warning(f"Failed to fetch repo created_at for {owner}/{repo}: {e}")
+        return None
+
+
+def fetch_graphql_remaining():
+    """Remaining GraphQL quota (shared with any other gh users), or None on any error."""
+    try:
+        output = run_gh_command(["api", "rate_limit", "--jq", ".resources.graphql.remaining"])
+        return int(output.strip())
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+_COMMIT_FIELDS_JQ = (
+    "[.[] | {sha, login: .author.login, name: .commit.author.name, "
+    "email: .commit.author.email, authored_at: .commit.author.date, "
+    "committed_at: .commit.committer.date, parents: (.parents|length)}]"
+)
+
+
+def fetch_commits_page(owner, repo, branch, page, since=None, until=None, per_page=100):
+    """One page of commit metadata for a branch via the REST commits endpoint.
+
+    Manual `page=` paging on purpose (per-cycle budget + resumable checkpoint,
+    the sync worker's job) — do not switch this to `--paginate`. Raises
+    RuntimeError on failure, like the other fetchers here.
+    """
+    url = f"repos/{owner}/{repo}/commits?sha={quote(branch, safe='')}&per_page={per_page}&page={page}"
+    if since:
+        url += f"&since={quote(since, safe='')}"
+    if until:
+        url += f"&until={quote(until, safe='')}"
+    output = run_gh_command(["api", url, "--jq", _COMMIT_FIELDS_JQ])
+    return parse_json_output(output)

@@ -198,9 +198,21 @@ def get_log_retention_days() -> int:
 DEFAULT_PR_SYNC = {
     "enabled": True,
     "poll_interval_seconds": 120,
-    "history_days": 180,
+    "history_days": 180,             # unchanged meaning: fast initial window (open + recently-updated closed)
+    "retain_days": 0,                # prune CLOSED/MERGED older than N days; 0 = keep forever
     "max_synced_repos": 10,
     "exclude_repos": [],
+    "history_backfill_budget": 60,   # max gh pr view hydrations per cycle for the inception walk
+    "history_chunk_days": 30,        # created-date window per search (1..90)
+    "min_graphql_remaining": 1500,   # skip the history slice below this GraphQL quota
+    "commit_branches": ["main"],     # branches whose commits are synced via REST
+    "commit_pages_per_cycle": 40,    # REST pages (100 commits) per cycle per branch
+}
+
+# Analytics defaults; overridable via config.json's "analytics" block.
+DEFAULT_ANALYTICS = {
+    "bot_logins": ["github-actions", "coderabbitai", "greptile-apps", "cursor", "claude",
+                   "copilot-pull-request-reviewer", "dependabot", "scalazack"],
 }
 
 
@@ -232,6 +244,75 @@ def get_pr_sync_config() -> Dict[str, Any]:
     if not isinstance(merged["exclude_repos"], list):
         merged["exclude_repos"] = []
     merged["exclude_repos"] = [str(r) for r in merged["exclude_repos"]]
+
+    try:
+        retain_days = int(merged["retain_days"])
+        if retain_days < 0:
+            raise ValueError
+        merged["retain_days"] = retain_days
+    except (TypeError, ValueError):
+        merged["retain_days"] = DEFAULT_PR_SYNC["retain_days"]
+
+    try:
+        budget = int(merged["history_backfill_budget"])
+        if budget < 1:
+            raise ValueError
+        merged["history_backfill_budget"] = budget
+    except (TypeError, ValueError):
+        merged["history_backfill_budget"] = DEFAULT_PR_SYNC["history_backfill_budget"]
+
+    try:
+        chunk_days = int(merged["history_chunk_days"])
+        merged["history_chunk_days"] = max(1, min(90, chunk_days))
+    except (TypeError, ValueError):
+        merged["history_chunk_days"] = DEFAULT_PR_SYNC["history_chunk_days"]
+
+    try:
+        min_remaining = int(merged["min_graphql_remaining"])
+        if min_remaining < 0:
+            raise ValueError
+        merged["min_graphql_remaining"] = min_remaining
+    except (TypeError, ValueError):
+        merged["min_graphql_remaining"] = DEFAULT_PR_SYNC["min_graphql_remaining"]
+
+    try:
+        pages = int(merged["commit_pages_per_cycle"])
+        if pages < 1:
+            raise ValueError
+        merged["commit_pages_per_cycle"] = pages
+    except (TypeError, ValueError):
+        merged["commit_pages_per_cycle"] = DEFAULT_PR_SYNC["commit_pages_per_cycle"]
+
+    if isinstance(merged["commit_branches"], list):
+        merged["commit_branches"] = [
+            b for b in merged["commit_branches"] if isinstance(b, str) and b
+        ]
+    else:
+        merged["commit_branches"] = list(DEFAULT_PR_SYNC["commit_branches"])
+
+    return merged
+
+
+def get_analytics_config() -> Dict[str, Any]:
+    """Get the analytics settings, merged over defaults and sanitized.
+
+    Reads config.json's "analytics" block. "bot_logins" must be a list of str
+    (lowercased on the way out); a malformed value falls back to the default
+    list.
+    """
+    config = get_config()
+    raw = config.get("analytics")
+    merged = dict(DEFAULT_ANALYTICS)
+    if isinstance(raw, dict):
+        for key in DEFAULT_ANALYTICS:
+            if key in raw:
+                merged[key] = raw[key]
+
+    bot_logins = merged.get("bot_logins")
+    if isinstance(bot_logins, list) and all(isinstance(b, str) for b in bot_logins):
+        merged["bot_logins"] = [b.lower() for b in bot_logins]
+    else:
+        merged["bot_logins"] = list(DEFAULT_ANALYTICS["bot_logins"])
 
     return merged
 

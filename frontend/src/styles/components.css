@@ -671,6 +671,12 @@
   color: var(--mx-color-text-primary);
 }
 
+.mx-table .mx-table__footer {
+  border-top: 2px solid var(--mx-color-border);
+  background: var(--mx-color-bg-secondary);
+  font-weight: var(--mx-font-weight-semibold);
+}
+
 /* ============================================================================
    Info Tooltip
    ============================================================================ */

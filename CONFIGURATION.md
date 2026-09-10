@@ -217,6 +217,34 @@ All available frontend environment variables:
 
 ---
 
+## PR Sync & Analytics (config.json)
+
+These optional `config.json` blocks control the background PR/commit sync worker and the Analytics tab's bot filtering. Every key has an internal default, so the blocks can be omitted entirely.
+
+### `pr_sync`
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `enabled` | `true` | Master switch for the background sync worker; `false` reverts the PR list to live GitHub fetching |
+| `poll_interval_seconds` | `120` | Seconds between sync worker cycles |
+| `history_days` | `180` | How far back the fast initial backfill syncs closed/merged PRs |
+| `retain_days` | `0` | Prune CLOSED/MERGED rows older than this many days; `0` = keep forever |
+| `max_synced_repos` | `10` | Most-recently-visited repos kept in sync; repos beyond the cap fall back to live fetching |
+| `exclude_repos` | `[]` | List of `"owner/name"` strings never synced |
+| `history_backfill_budget` | `60` | Max `gh pr view` hydrations per cycle for the inception history walk (syncing PRs older than `history_days`) |
+| `history_chunk_days` | `30` | Width (days, clamped 1-90) of each created-date window the history walk searches |
+| `min_graphql_remaining` | `1500` | Best-effort: the history walk skips a slice when `gh api rate_limit` reports the shared GraphQL quota below this; `history_backfill_budget` is the hard bound on hydrations |
+| `commit_branches` | `["main"]` | Branches whose commit history is synced via the REST commits API |
+| `commit_pages_per_cycle` | `40` | REST pages (100 commits each) fetched per cycle, per branch |
+
+### `analytics`
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `bot_logins` | `["github-actions", "coderabbitai", "greptile-apps", "cursor", "claude", "copilot-pull-request-reviewer", "dependabot", "scalazack"]` | Logins excluded from Analytics tab attribution, in addition to the always-applied `app/`-prefix and `[bot]`-suffix checks |
+
+---
+
 ## Troubleshooting
 
 ### Can't access from other devices

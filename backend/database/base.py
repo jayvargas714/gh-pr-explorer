@@ -136,77 +136,9 @@ class Database:
                 )
             """)
 
-            # Create developer_stats table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS developer_stats (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    repo TEXT NOT NULL,
-                    username TEXT NOT NULL,
-                    total_prs INTEGER DEFAULT 0,
-                    open_prs INTEGER DEFAULT 0,
-                    merged_prs INTEGER DEFAULT 0,
-                    closed_prs INTEGER DEFAULT 0,
-                    total_additions INTEGER DEFAULT 0,
-                    total_deletions INTEGER DEFAULT 0,
-                    avg_pr_score REAL,
-                    reviewed_pr_count INTEGER DEFAULT 0,
-                    commits INTEGER DEFAULT 0,
-                    avatar_url TEXT,
-                    reviews_given INTEGER DEFAULT 0,
-                    approvals INTEGER DEFAULT 0,
-                    changes_requested INTEGER DEFAULT 0,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(repo, username)
-                )
-            """)
-
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_developer_stats_repo
-                ON developer_stats(repo)
-            """)
-
-            # Create stats_metadata table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS stats_metadata (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    repo TEXT NOT NULL UNIQUE,
-                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-            # Create pr_lifecycle_cache table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS pr_lifecycle_cache (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    repo TEXT NOT NULL UNIQUE,
-                    data TEXT NOT NULL,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
             # Create workflow_cache table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS workflow_cache (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    repo TEXT NOT NULL UNIQUE,
-                    data TEXT NOT NULL,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-            # Create contributor_timeseries_cache table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS contributor_timeseries_cache (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    repo TEXT NOT NULL UNIQUE,
-                    data TEXT NOT NULL,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-            # Create code_activity_cache table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS code_activity_cache (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     repo TEXT NOT NULL UNIQUE,
                     data TEXT NOT NULL,
@@ -508,6 +440,100 @@ class Database:
                 ON synced_prs(repo, updated_at DESC)
             """)
 
+            # Migration: Add inception-walk history tracking columns to synced_repos
+            cursor.execute("PRAGMA table_info(synced_repos)")
+            synced_repos_columns = {row[1] for row in cursor.fetchall()}
+
+            synced_repos_new_columns = [
+                ("repo_created_at", "TEXT"),
+                ("history_cursor", "TEXT"),
+                ("history_done", "INTEGER NOT NULL DEFAULT 0"),
+                ("history_error", "TEXT"),
+            ]
+
+            for col_name, col_type in synced_repos_new_columns:
+                if col_name not in synced_repos_columns:
+                    try:
+                        cursor.execute(f"ALTER TABLE synced_repos ADD COLUMN {col_name} {col_type}")
+                        logger.info(f"Added column {col_name} to synced_repos table")
+                    except sqlite3.OperationalError:
+                        pass
+
+            # Commit sync: per-branch backfill/incremental state, and the commits themselves
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS synced_commit_branches (
+                    repo TEXT NOT NULL,
+                    branch TEXT NOT NULL,
+                    backfill_until TEXT,
+                    backfill_done INTEGER NOT NULL DEFAULT 0,
+                    last_committed_at TEXT,
+                    last_synced_at TEXT,
+                    error TEXT,
+                    PRIMARY KEY (repo, branch)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS synced_commits (
+                    repo TEXT NOT NULL,
+                    branch TEXT NOT NULL,
+                    sha TEXT NOT NULL,
+                    author_login TEXT,
+                    author_name TEXT,
+                    author_email TEXT,
+                    authored_at TEXT,
+                    committed_at TEXT NOT NULL,
+                    parent_count INTEGER NOT NULL DEFAULT 1,
+                    fetched_at TEXT NOT NULL,
+                    PRIMARY KEY (repo, branch, sha)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_synced_commits_repo_branch_day
+                ON synced_commits(repo, branch, committed_at)
+            """)
+
+            # Analytics daily rollup: precomputed per-developer, per-day metrics
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS analytics_daily (
+                    repo TEXT NOT NULL,
+                    day TEXT NOT NULL,
+                    login TEXT NOT NULL,
+                    base_ref TEXT NOT NULL,
+                    is_bot INTEGER NOT NULL DEFAULT 0,
+                    prs_created INTEGER NOT NULL DEFAULT 0,
+                    prs_merged INTEGER NOT NULL DEFAULT 0,
+                    prs_closed INTEGER NOT NULL DEFAULT 0,
+                    reviews INTEGER NOT NULL DEFAULT 0,
+                    approvals INTEGER NOT NULL DEFAULT 0,
+                    changes_requested INTEGER NOT NULL DEFAULT 0,
+                    comments INTEGER NOT NULL DEFAULT 0,
+                    additions INTEGER NOT NULL DEFAULT 0,
+                    deletions INTEGER NOT NULL DEFAULT 0,
+                    commits INTEGER NOT NULL DEFAULT 0,
+                    merge_hours_sum REAL NOT NULL DEFAULT 0,
+                    merge_hours_count INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (repo, day, login, base_ref)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_analytics_daily_repo_day
+                ON analytics_daily(repo, day)
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS analytics_daily_meta (
+                    repo TEXT PRIMARY KEY,
+                    built_at TEXT NOT NULL,
+                    schema_version INTEGER NOT NULL,
+                    pr_count INTEGER,
+                    review_count INTEGER,
+                    commit_count INTEGER,
+                    earliest_pr_day TEXT,
+                    earliest_commit_day TEXT
+                )
+            """)
+
             # Migration: Add auto-verdict arming columns to merge_queue for existing databases
             cursor.execute("PRAGMA table_info(merge_queue)")
             queue_columns = {row[1] for row in cursor.fetchall()}
@@ -615,25 +641,21 @@ class Database:
                     except sqlite3.OperationalError:
                         pass
 
-            # Migration: Add new columns to developer_stats for existing databases
-            cursor.execute("PRAGMA table_info(developer_stats)")
-            existing_columns = {row[1] for row in cursor.fetchall()}
-
-            new_columns = [
-                ("commits", "INTEGER DEFAULT 0"),
-                ("avatar_url", "TEXT"),
-                ("reviews_given", "INTEGER DEFAULT 0"),
-                ("approvals", "INTEGER DEFAULT 0"),
-                ("changes_requested", "INTEGER DEFAULT 0"),
-            ]
-
-            for col_name, col_type in new_columns:
-                if col_name not in existing_columns:
-                    try:
-                        cursor.execute(f"ALTER TABLE developer_stats ADD COLUMN {col_name} {col_type}")
-                        logger.info(f"Added column {col_name} to developer_stats table")
-                    except sqlite3.OperationalError:
-                        pass
+            # Migration (once): drop the legacy analytics cache tables now that
+            # analytics reads from the analytics_daily rollup instead.
+            cursor.execute(
+                "SELECT 1 FROM migrations WHERE name = 'drop_legacy_analytics_caches'"
+            )
+            if cursor.fetchone() is None:
+                for table in (
+                    "developer_stats", "stats_metadata", "pr_lifecycle_cache",
+                    "code_activity_cache", "contributor_timeseries_cache",
+                ):
+                    cursor.execute(f"DROP TABLE IF EXISTS {table}")
+                cursor.execute(
+                    "INSERT OR IGNORE INTO migrations (name) VALUES ('drop_legacy_analytics_caches')"
+                )
+                logger.info("Dropped legacy analytics cache tables")
 
             logger.info(f"Database initialized at {self.db_path}")
 

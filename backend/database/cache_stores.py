@@ -1,6 +1,6 @@
 """SQLite-backed cache stores for various data types.
 
-Contains: LifecycleCacheDB, WorkflowCacheDB, ContributorTimeSeriesCacheDB, CodeActivityCacheDB
+Contains: WorkflowCacheDB, RepoStatsCacheDB, RepoLOCCacheDB, TimelineCacheDB
 """
 
 import json
@@ -9,53 +9,6 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
-
-
-class LifecycleCacheDB:
-    """Cache for PR lifecycle/review timing data in SQLite."""
-
-    def __init__(self, db):
-        self.db = db
-
-    def get_cached(self, repo: str) -> Optional[Dict[str, Any]]:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT data, updated_at FROM pr_lifecycle_cache WHERE repo = ?",
-                (repo,)
-            )
-            row = cursor.fetchone()
-            if row:
-                return {
-                    "data": json.loads(row["data"]),
-                    "updated_at": row["updated_at"]
-                }
-            return None
-
-    def save_cache(self, repo: str, data: Any) -> None:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """INSERT INTO pr_lifecycle_cache (repo, data, updated_at)
-                   VALUES (?, ?, CURRENT_TIMESTAMP)
-                   ON CONFLICT(repo) DO UPDATE SET
-                   data = excluded.data, updated_at = CURRENT_TIMESTAMP""",
-                (repo, json.dumps(data))
-            )
-
-    def is_stale(self, repo: str, ttl_hours: int = 2) -> bool:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT updated_at FROM pr_lifecycle_cache WHERE repo = ?",
-                (repo,)
-            )
-            row = cursor.fetchone()
-            if not row:
-                return True
-            updated = datetime.strptime(row["updated_at"], "%Y-%m-%d %H:%M:%S")
-            age_hours = (datetime.now() - updated).total_seconds() / 3600
-            return age_hours > ttl_hours
 
 
 class WorkflowCacheDB:
@@ -118,118 +71,6 @@ class WorkflowCacheDB:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM workflow_cache")
-
-
-class ContributorTimeSeriesCacheDB:
-    """Cache for per-contributor weekly time series data in SQLite."""
-
-    def __init__(self, db):
-        self.db = db
-
-    def get_cached(self, repo: str) -> Optional[Dict[str, Any]]:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT data, updated_at FROM contributor_timeseries_cache WHERE repo = ?",
-                (repo,)
-            )
-            row = cursor.fetchone()
-            if row:
-                try:
-                    return {
-                        "data": json.loads(row["data"]),
-                        "updated_at": row["updated_at"]
-                    }
-                except json.JSONDecodeError:
-                    logger.warning(f"Corrupt contributor TS cache for {repo}, treating as miss")
-                    return None
-            return None
-
-    def save_cache(self, repo: str, data: Any) -> None:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """INSERT INTO contributor_timeseries_cache (repo, data, updated_at)
-                   VALUES (?, ?, CURRENT_TIMESTAMP)
-                   ON CONFLICT(repo) DO UPDATE SET
-                   data = excluded.data, updated_at = CURRENT_TIMESTAMP""",
-                (repo, json.dumps(data))
-            )
-
-    def is_stale(self, repo: str, ttl_hours: int = 24) -> bool:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT updated_at FROM contributor_timeseries_cache WHERE repo = ?",
-                (repo,)
-            )
-            row = cursor.fetchone()
-            if not row:
-                return True
-            updated = datetime.strptime(row["updated_at"], "%Y-%m-%d %H:%M:%S")
-            age_hours = (datetime.now() - updated).total_seconds() / 3600
-            return age_hours > ttl_hours
-
-    def clear(self) -> None:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM contributor_timeseries_cache")
-
-
-class CodeActivityCacheDB:
-    """Cache for code activity data in SQLite."""
-
-    def __init__(self, db):
-        self.db = db
-
-    def get_cached(self, repo: str) -> Optional[Dict[str, Any]]:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT data, updated_at FROM code_activity_cache WHERE repo = ?",
-                (repo,)
-            )
-            row = cursor.fetchone()
-            if row:
-                try:
-                    return {
-                        "data": json.loads(row["data"]),
-                        "updated_at": row["updated_at"]
-                    }
-                except json.JSONDecodeError:
-                    logger.warning(f"Corrupt code activity cache for {repo}, treating as miss")
-                    return None
-            return None
-
-    def save_cache(self, repo: str, data: Any) -> None:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """INSERT INTO code_activity_cache (repo, data, updated_at)
-                   VALUES (?, ?, CURRENT_TIMESTAMP)
-                   ON CONFLICT(repo) DO UPDATE SET
-                   data = excluded.data, updated_at = CURRENT_TIMESTAMP""",
-                (repo, json.dumps(data))
-            )
-
-    def is_stale(self, repo: str, ttl_hours: int = 24) -> bool:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT updated_at FROM code_activity_cache WHERE repo = ?",
-                (repo,)
-            )
-            row = cursor.fetchone()
-            if not row:
-                return True
-            updated = datetime.strptime(row["updated_at"], "%Y-%m-%d %H:%M:%S")
-            age_hours = (datetime.now() - updated).total_seconds() / 3600
-            return age_hours > ttl_hours
-
-    def clear(self) -> None:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM code_activity_cache")
 
 
 class RepoStatsCacheDB:

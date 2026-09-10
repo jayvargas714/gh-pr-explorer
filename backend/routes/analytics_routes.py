@@ -1,35 +1,30 @@
-"""Analytics routes: stats, lifecycle, responsiveness, code-activity, contributor-timeseries."""
+"""Analytics routes: the precomputed per-developer, per-day rollup."""
 
-import threading
+import logging
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, jsonify, request
 
-from backend.config import get_config
-from backend.extensions import (
-    logger,
-    activity_refresh_in_progress, activity_refresh_lock,
-    contributor_ts_refresh_in_progress, contributor_ts_refresh_lock,
-    lifecycle_refresh_in_progress, lifecycle_refresh_lock,
-    stats_refresh_in_progress, stats_refresh_lock,
-)
-from backend.database import (
-    get_reviews_db, get_dev_stats_db,
-    get_lifecycle_cache_db, get_code_activity_cache_db,
-    get_contributor_ts_cache_db,
-)
-from backend.services.stats_service import (
-    fetch_and_compute_stats, add_avg_pr_scores,
-    stats_to_cache_format, cached_stats_to_api_format,
-)
-from backend.services.lifecycle_service import fetch_pr_review_times, fetch_review_times_from_api
-from backend.services.activity_service import fetch_code_activity_data
-from backend.services.contributor_service import fetch_contributor_timeseries
-from backend.visualizers.lifecycle_visualizer import compute_lifecycle_metrics
-from backend.visualizers.responsiveness_visualizer import compute_responsiveness_metrics
-from backend.visualizers.activity_visualizer import slice_and_summarize
+from backend.config import get_analytics_config, get_pr_sync_config
+from backend.database import get_analytics_daily_db, get_synced_commits_db, get_synced_prs_db
 from backend.routes import error_response
+from backend.services.analytics_rollup import needs_rebuild, rebuild_repo
+from backend.services.bot_filter import is_bot_login
+
+logger = logging.getLogger(__name__)
 
 analytics_bp = Blueprint("analytics", __name__)
+
+METRIC_COLUMNS = (
+    "prs_created", "prs_merged", "prs_closed", "reviews", "approvals",
+    "changes_requested", "comments", "additions", "deletions", "commits",
+    "merge_hours_sum", "merge_hours_count",
+)
+
+# Upper bound on the requested window (~5 years), so a huge explicit range
+# (or an ancient repo's all-time default) can't force an O(days x people x
+# METRIC_COLUMNS) zero-fill that pins the server.
+MAX_RANGE_DAYS = 1830
 
 
 def _normalize_timestamp(ts):
@@ -44,339 +39,196 @@ def _normalize_timestamp(ts):
     return s
 
 
-# --- Developer Stats ---
-
-def _background_refresh_stats(owner, repo, full_repo):
-    """Background task to refresh stats for a repository."""
+def _parse_day(value):
+    """Parse a 'YYYY-MM-DD' string. Returns None on bad format."""
     try:
-        logger.info(f"Background refresh started for {full_repo}")
-        dev_stats_db = get_dev_stats_db()
-        stats_list = fetch_and_compute_stats(owner, repo)
-        if stats_list:
-            cache_data = stats_to_cache_format(stats_list)
-            dev_stats_db.save_stats(full_repo, cache_data)
-            logger.info(f"Background refresh completed for {full_repo}")
-        else:
-            logger.warning(f"Background refresh got empty stats for {full_repo}, keeping existing cache")
-    except Exception as e:
-        logger.error(f"Background refresh failed for {full_repo}: {e}")
-    finally:
-        with stats_refresh_lock:
-            stats_refresh_in_progress.discard(full_repo)
+        datetime.strptime(value, "%Y-%m-%d")
+        return value
+    except (TypeError, ValueError):
+        return None
 
 
-@analytics_bp.route("/api/repos/<owner>/<repo>/stats")
-def get_developer_stats(owner, repo):
-    """Get aggregated developer statistics for a repository."""
-    full_repo = f"{owner}/{repo}"
-    force_refresh = request.args.get("refresh", "").lower() == "true"
-    reviews_db = get_reviews_db()
-    dev_stats_db = get_dev_stats_db()
-
-    try:
-        is_stale = dev_stats_db.is_stale(full_repo)
-        last_updated = dev_stats_db.get_last_updated(full_repo)
-        cached_stats = dev_stats_db.get_stats(full_repo)
-
-        with stats_refresh_lock:
-            refreshing = full_repo in stats_refresh_in_progress
-
-        if force_refresh:
-            stats_list = fetch_and_compute_stats(owner, repo)
-            if stats_list:
-                cache_data = stats_to_cache_format(stats_list)
-                dev_stats_db.save_stats(full_repo, cache_data)
-                last_updated = dev_stats_db.get_last_updated(full_repo)
-            stats_with_scores = add_avg_pr_scores(stats_list, full_repo, reviews_db)
-            return jsonify({
-                "stats": stats_with_scores,
-                "last_updated": _normalize_timestamp(last_updated.isoformat()) if last_updated else None,
-                "cached": False,
-                "refreshing": False
-            })
-
-        if cached_stats:
-            if is_stale and not refreshing:
-                with stats_refresh_lock:
-                    if full_repo not in stats_refresh_in_progress:
-                        stats_refresh_in_progress.add(full_repo)
-                        thread = threading.Thread(
-                            target=_background_refresh_stats,
-                            args=(owner, repo, full_repo),
-                            daemon=True
-                        )
-                        thread.start()
-                        refreshing = True
-
-            transformed_stats = cached_stats_to_api_format(cached_stats)
-            stats_with_scores = add_avg_pr_scores(transformed_stats, full_repo, reviews_db)
-            return jsonify({
-                "stats": stats_with_scores,
-                "last_updated": _normalize_timestamp(last_updated.isoformat()) if last_updated else None,
-                "cached": True,
-                "stale": is_stale,
-                "refreshing": refreshing
-            })
-
-        # No cached data: fetch synchronously
-        stats_list = fetch_and_compute_stats(owner, repo)
-        if stats_list:
-            cache_data = stats_to_cache_format(stats_list)
-            dev_stats_db.save_stats(full_repo, cache_data)
-            last_updated = dev_stats_db.get_last_updated(full_repo)
-        stats_with_scores = add_avg_pr_scores(stats_list, full_repo, reviews_db)
-
-        return jsonify({
-            "stats": stats_with_scores,
-            "last_updated": _normalize_timestamp(last_updated.isoformat()) if last_updated else None,
-            "cached": False,
-            "refreshing": False
-        })
-
-    except RuntimeError as e:
-        return error_response("Internal server error", 500, f"Failed to fetch developer stats for {full_repo}: {e}")
+def _range_days(day_from, day_to):
+    """Inclusive day count between two 'YYYY-MM-DD' strings."""
+    start = datetime.strptime(day_from, "%Y-%m-%d")
+    end = datetime.strptime(day_to, "%Y-%m-%d")
+    return (end - start).days + 1
 
 
-# --- Lifecycle / Review Responsiveness (shared cache) ---
-
-def _background_refresh_lifecycle(owner, repo, repo_key):
-    """Background task to refresh lifecycle/review-responsiveness cache."""
-    try:
-        logger.info(f"Background lifecycle refresh started for {repo_key}")
-        lifecycle_cache_db = get_lifecycle_cache_db()
-        data = fetch_review_times_from_api(owner, repo)
-        if data:
-            lifecycle_cache_db.save_cache(repo_key, data)
-            logger.info(f"Background lifecycle refresh completed for {repo_key}: {len(data)} PRs")
-    except Exception as e:
-        logger.error(f"Background lifecycle refresh failed for {repo_key}: {e}")
-    finally:
-        with lifecycle_refresh_lock:
-            lifecycle_refresh_in_progress.discard(repo_key)
+def _day_range(day_from, day_to):
+    start = datetime.strptime(day_from, "%Y-%m-%d")
+    end = datetime.strptime(day_to, "%Y-%m-%d")
+    days = []
+    d = start
+    while d <= end:
+        days.append(d.strftime("%Y-%m-%d"))
+        d += timedelta(days=1)
+    return days
 
 
-def _get_lifecycle_data(owner, repo):
-    """Shared helper: return (prs, cache_meta) with stale-while-revalidate."""
+def _empty_series(n_days):
+    return {c: [0] * n_days for c in METRIC_COLUMNS}
+
+
+def _totals_from_series(series):
+    totals = {c: sum(series[c]) for c in METRIC_COLUMNS}
+    denom = totals["prs_merged"] + totals["prs_closed"]
+    totals["merge_rate"] = (totals["prs_merged"] / denom) if denom else None
+    count = totals["merge_hours_count"]
+    totals["avg_merge_hours"] = (totals["merge_hours_sum"] / count) if count else None
+    return totals
+
+
+def build_daily_shape(rows, days):
+    """Pure: bot-filtered rollup rows + the day list -> (people, team).
+
+    `rows` are dicts with `day`, `login`, plus the metric columns (already
+    summed/filtered by the caller). Rows whose day falls outside `days` are
+    dropped.
+    """
+    day_index = {d: i for i, d in enumerate(days)}
+    n_days = len(days)
+    people_series = {}
+
+    for row in rows:
+        idx = day_index.get(row["day"])
+        if idx is None:
+            continue
+        series = people_series.setdefault(row["login"], _empty_series(n_days))
+        for c in METRIC_COLUMNS:
+            series[c][idx] += row.get(c) or 0
+
+    people = []
+    team_series = _empty_series(n_days)
+    for login, series in people_series.items():
+        for c in METRIC_COLUMNS:
+            for i in range(n_days):
+                team_series[c][i] += series[c][i]
+        person = {"login": login, "series": series, "totals": _totals_from_series(series)}
+        if login and login != "unknown" and " " not in login:
+            person["avatar_url"] = f"https://github.com/{login}.png"
+        people.append(person)
+
+    people.sort(key=lambda p: (-(p["totals"]["prs_merged"] + p["totals"]["reviews"]), p["login"]))
+
+    team = {"series": team_series, "totals": _totals_from_series(team_series)}
+    return people, team
+
+
+@analytics_bp.route("/api/repos/<owner>/<repo>/analytics/daily")
+def get_analytics_daily(owner, repo):
+    """The precomputed per-developer, per-day rollup for a repo/window/base.
+
+    Never calls GitHub: rebuilds (when stale) are DB-only, driven by rows the
+    sync worker already wrote.
+    """
     repo_key = f"{owner}/{repo}"
-    lifecycle_cache_db = get_lifecycle_cache_db()
-    is_stale = lifecycle_cache_db.is_stale(repo_key)
-    cached = lifecycle_cache_db.get_cached(repo_key)
-    refreshing = False
+    base = request.args.get("base") or None
 
-    prs = fetch_pr_review_times(owner, repo, lifecycle_cache_db)
+    to_param = request.args.get("to")
+    if to_param:
+        day_to = _parse_day(to_param)
+        if day_to is None:
+            return error_response("Invalid 'to' date, expected YYYY-MM-DD", 400)
+    else:
+        day_to = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    if is_stale and prs:
-        with lifecycle_refresh_lock:
-            if repo_key not in lifecycle_refresh_in_progress:
-                lifecycle_refresh_in_progress.add(repo_key)
-                thread = threading.Thread(
-                    target=_background_refresh_lifecycle,
-                    args=(owner, repo, repo_key),
-                    daemon=True
-                )
-                thread.start()
-                refreshing = True
-            else:
-                refreshing = True
+    from_param = request.args.get("from")
+    day_from = None
+    if from_param:
+        day_from = _parse_day(from_param)
+        if day_from is None:
+            return error_response("Invalid 'from' date, expected YYYY-MM-DD", 400)
+        # Explicit params: validate ordering and the range cap up front, before
+        # registration/rebuild, so a malformed request never triggers a rebuild.
+        if day_from > day_to:
+            return error_response("'from' must not be after 'to'", 400)
+        if _range_days(day_from, day_to) > MAX_RANGE_DAYS:
+            return error_response(
+                f"Date range too large (max {MAX_RANGE_DAYS} days)", 400
+            )
 
-    cache_meta = {
-        "last_updated": _normalize_timestamp(cached["updated_at"]) if cached else None,
-        "cached": cached is not None,
-        "stale": is_stale if cached else False,
-        "refreshing": refreshing,
-    }
+    synced_prs_db = get_synced_prs_db()
+    synced_commits_db = get_synced_commits_db()
+    analytics_db = get_analytics_daily_db()
 
-    return prs, cache_meta
+    repo_row = synced_prs_db.get_repo(repo_key)
+    if repo_row is None:
+        synced_prs_db.register_repo(repo_key)
+        repo_row = synced_prs_db.get_repo(repo_key)
 
+    if needs_rebuild(repo_key):
+        try:
+            rebuild_repo(repo_key)
+        except Exception:
+            logger.exception("Rollup rebuild failed for %s; serving existing rollup", repo_key)
 
-@analytics_bp.route("/api/repos/<owner>/<repo>/lifecycle-metrics")
-def get_lifecycle_metrics(owner, repo):
-    """Get PR lifecycle metrics."""
-    try:
-        prs, cache_meta = _get_lifecycle_data(owner, repo)
-        metrics = compute_lifecycle_metrics(prs)
-        metrics.update(cache_meta)
-        return jsonify(metrics)
-    except Exception as e:
-        return error_response("Internal server error", 500, f"Failed to fetch lifecycle metrics: {e}")
+    if day_from is None:
+        # All-time default: the earliest known day may push the range past
+        # the cap on an old repo — clamp rather than error, so "All time"
+        # still works instead of 400ing on the user.
+        day_from = analytics_db.earliest_day(repo_key, base)
+        if day_from is None:
+            day_from = day_to
+        elif _range_days(day_from, day_to) > MAX_RANGE_DAYS:
+            day_from = (
+                datetime.strptime(day_to, "%Y-%m-%d") - timedelta(days=MAX_RANGE_DAYS - 1)
+            ).strftime("%Y-%m-%d")
 
+        if day_from > day_to:
+            return error_response("'from' must not be after 'to'", 400)
 
-@analytics_bp.route("/api/repos/<owner>/<repo>/review-responsiveness")
-def get_review_responsiveness(owner, repo):
-    """Get per-reviewer responsiveness metrics and bottleneck detection."""
-    try:
-        prs, cache_meta = _get_lifecycle_data(owner, repo)
-        metrics = compute_responsiveness_metrics(prs)
-        metrics.update(cache_meta)
-        return jsonify(metrics)
-    except Exception as e:
-        return error_response("Internal server error", 500, f"Failed to fetch review responsiveness: {e}")
+    rows = analytics_db.query(repo_key, day_from, day_to, base_ref=base)
+    bot_logins = get_analytics_config()["bot_logins"]
+    rows = [r for r in rows if not is_bot_login(r["login"], bool(r.get("is_bot")), bot_logins)]
 
+    days = _day_range(day_from, day_to)
+    people, team = build_daily_shape(rows, days)
 
-# --- Code Activity ---
+    meta = analytics_db.get_meta(repo_key)
+    sync_cfg = get_pr_sync_config()
+    stale = False
+    if meta and meta.get("built_at"):
+        built_at = datetime.fromisoformat(meta["built_at"].replace("Z", "+00:00"))
+        age_seconds = (datetime.now(timezone.utc) - built_at).total_seconds()
+        stale = age_seconds > 3 * sync_cfg["poll_interval_seconds"]
 
-def _background_refresh_code_activity(owner, repo, repo_key):
-    """Background task to refresh code activity cache."""
-    try:
-        logger.info(f"Background code activity refresh started for {repo_key}")
-        code_activity_cache_db = get_code_activity_cache_db()
-        data = fetch_code_activity_data(owner, repo)
-        if data:
-            code_activity_cache_db.save_cache(repo_key, data)
-            logger.info(f"Background code activity refresh completed for {repo_key}")
-    except Exception as e:
-        logger.error(f"Background code activity refresh failed for {repo_key}: {e}")
-    finally:
-        with activity_refresh_lock:
-            activity_refresh_in_progress.discard(repo_key)
+    history_state = synced_prs_db.get_history_state(repo_key)
+    commit_branches = sync_cfg["commit_branches"]
 
+    def _branch_done(b):
+        # A branch counts as done once it backfilled or hit a persistent
+        # error (e.g. a 404 on a branch that doesn't exist) -- the worker
+        # retries an errored branch forever, so treating it as pending would
+        # latch `syncing` true forever.
+        state = synced_commits_db.get_branch_state(repo_key, b) or {}
+        return bool(state.get("backfill_done")) or state.get("error") is not None
 
-@analytics_bp.route("/api/repos/<owner>/<repo>/code-activity")
-def get_code_activity(owner, repo):
-    """Get code activity stats with stale-while-revalidate caching."""
-    try:
-        weeks = int(request.args.get("weeks", 52))
-        weeks = min(max(weeks, 1), 52)
-        repo_key = f"{owner}/{repo}"
-        force_refresh = request.args.get("refresh", "").lower() == "true"
-        code_activity_cache_db = get_code_activity_cache_db()
+    commit_history_done = all(_branch_done(b) for b in commit_branches) if commit_branches else True
 
-        if force_refresh:
-            logger.info(f"Force refresh code activity for {repo_key}")
-            data = fetch_code_activity_data(owner, repo)
-            if data:
-                code_activity_cache_db.save_cache(repo_key, data)
-            else:
-                data = {"weekly_commits": [], "code_changes": [], "owner_commits": [], "community_commits": []}
-            fresh_cached = code_activity_cache_db.get_cached(repo_key)
-            result = slice_and_summarize(data, weeks)
-            result["last_updated"] = _normalize_timestamp(fresh_cached["updated_at"]) if fresh_cached else None
-            result["cached"] = False
-            result["stale"] = False
-            result["refreshing"] = False
-            return jsonify(result)
+    backfill_done = bool(repo_row and repo_row.get("backfill_done"))
+    history_done = bool(history_state.get("history_done"))
+    syncing = sync_cfg["enabled"] and not (backfill_done and history_done and commit_history_done)
 
-        cached = code_activity_cache_db.get_cached(repo_key)
-        is_stale = code_activity_cache_db.is_stale(repo_key)
-
-        if cached:
-            refreshing = False
-            if is_stale:
-                with activity_refresh_lock:
-                    if repo_key not in activity_refresh_in_progress:
-                        activity_refresh_in_progress.add(repo_key)
-                        thread = threading.Thread(
-                            target=_background_refresh_code_activity,
-                            args=(owner, repo, repo_key),
-                            daemon=True
-                        )
-                        thread.start()
-                        refreshing = True
-                    else:
-                        refreshing = True
-            result = slice_and_summarize(cached["data"], weeks)
-            result["last_updated"] = _normalize_timestamp(cached["updated_at"])
-            result["cached"] = True
-            result["stale"] = is_stale
-            result["refreshing"] = refreshing
-            return jsonify(result)
-
-        # No cache: synchronous fetch
-        data = fetch_code_activity_data(owner, repo)
-        if data:
-            code_activity_cache_db.save_cache(repo_key, data)
-        else:
-            data = {"weekly_commits": [], "code_changes": [], "owner_commits": [], "community_commits": []}
-        fresh_cached = code_activity_cache_db.get_cached(repo_key)
-        result = slice_and_summarize(data, weeks)
-        result["last_updated"] = _normalize_timestamp(fresh_cached["updated_at"]) if fresh_cached else None
-        result["cached"] = False
-        result["stale"] = False
-        result["refreshing"] = False
-        return jsonify(result)
-
-    except Exception as e:
-        return error_response("Internal server error", 500, f"Failed to fetch code activity: {e}")
-
-
-# --- Contributor Time Series ---
-
-def _background_refresh_contributor_ts(owner, repo, repo_key):
-    """Background task to refresh contributor time series cache."""
-    try:
-        logger.info(f"Background contributor TS refresh started for {repo_key}")
-        contributor_ts_cache_db = get_contributor_ts_cache_db()
-        data = fetch_contributor_timeseries(owner, repo)
-        if data:
-            contributor_ts_cache_db.save_cache(repo_key, data)
-            logger.info(f"Background contributor TS refresh completed for {repo_key}: {len(data)} contributors")
-    except Exception as e:
-        logger.error(f"Background contributor TS refresh failed for {repo_key}: {e}")
-    finally:
-        with contributor_ts_refresh_lock:
-            contributor_ts_refresh_in_progress.discard(repo_key)
-
-
-@analytics_bp.route("/api/repos/<owner>/<repo>/contributor-timeseries")
-def get_contributor_timeseries(owner, repo):
-    """Get per-contributor weekly time series data."""
-    repo_key = f"{owner}/{repo}"
-    force_refresh = request.args.get("refresh", "").lower() == "true"
-    contributor_ts_cache_db = get_contributor_ts_cache_db()
-
-    try:
-        if force_refresh:
-            logger.info(f"Force refresh contributor TS for {repo_key}")
-            data = fetch_contributor_timeseries(owner, repo)
-            if data:
-                contributor_ts_cache_db.save_cache(repo_key, data)
-            fresh_cached = contributor_ts_cache_db.get_cached(repo_key)
-            return jsonify({
-                "contributors": data,
-                "last_updated": _normalize_timestamp(fresh_cached["updated_at"]) if fresh_cached else None,
-                "cached": False,
-                "stale": False,
-                "refreshing": False,
-            })
-
-        cached = contributor_ts_cache_db.get_cached(repo_key)
-        is_stale = contributor_ts_cache_db.is_stale(repo_key)
-
-        if cached:
-            refreshing = False
-            if is_stale:
-                with contributor_ts_refresh_lock:
-                    if repo_key not in contributor_ts_refresh_in_progress:
-                        contributor_ts_refresh_in_progress.add(repo_key)
-                        thread = threading.Thread(
-                            target=_background_refresh_contributor_ts,
-                            args=(owner, repo, repo_key),
-                            daemon=True
-                        )
-                        thread.start()
-                        refreshing = True
-                    else:
-                        refreshing = True
-            return jsonify({
-                "contributors": cached["data"],
-                "last_updated": _normalize_timestamp(cached["updated_at"]),
-                "cached": True,
-                "stale": is_stale,
-                "refreshing": refreshing,
-            })
-
-        # No cache: synchronous fetch
-        data = fetch_contributor_timeseries(owner, repo)
-        if data:
-            contributor_ts_cache_db.save_cache(repo_key, data)
-        fresh_cached = contributor_ts_cache_db.get_cached(repo_key)
-        return jsonify({
-            "contributors": data,
-            "last_updated": _normalize_timestamp(fresh_cached["updated_at"]) if fresh_cached else None,
-            "cached": False,
-            "stale": False,
-            "refreshing": False,
-        })
-
-    except Exception as e:
-        return error_response("Internal server error", 500, f"Failed to fetch contributor timeseries for {repo_key}: {e}")
+    return jsonify({
+        "from": day_from,
+        "to": day_to,
+        "base": base,
+        "days": days,
+        "people": people,
+        "team": team,
+        "base_branches": analytics_db.base_refs(repo_key),
+        "last_updated": _normalize_timestamp(meta["built_at"]) if meta else None,
+        "stale": stale,
+        "syncing": syncing,
+        "coverage": {
+            "earliest_pr_day": meta.get("earliest_pr_day") if meta else None,
+            "earliest_commit_day": meta.get("earliest_commit_day") if meta else None,
+            "pr_count": (meta.get("pr_count") if meta else None) or 0,
+            "review_count": (meta.get("review_count") if meta else None) or 0,
+            "commit_count": (meta.get("commit_count") if meta else None) or 0,
+            "backfill_done": backfill_done,
+            "history_done": history_done,
+            "commit_history_done": commit_history_done,
+        },
+    })

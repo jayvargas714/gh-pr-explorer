@@ -16,12 +16,10 @@ from backend.database.reviewers import ReviewersDB
 from backend.database.automation_dispatches import AutomationDispatchesDB
 from backend.database.review_requests import ReviewRequestsDB
 from backend.database.synced_prs import SyncedPRsDB
-from backend.database.dev_stats import DeveloperStatsDB
+from backend.database.synced_commits import SyncedCommitsDB
+from backend.database.analytics_daily import AnalyticsDailyDB
 from backend.database.cache_stores import (
-    LifecycleCacheDB,
     WorkflowCacheDB,
-    ContributorTimeSeriesCacheDB,
-    CodeActivityCacheDB,
     RepoStatsCacheDB,
     RepoLOCCacheDB,
     TimelineCacheDB,
@@ -39,15 +37,13 @@ _auto_verdict_arming_db: Optional[AutoVerdictArmingDB] = None
 _queue_db: Optional[MergeQueueDB] = None
 _swimlanes_db: Optional[SwimlanesDB] = None
 _settings_db: Optional[SettingsDB] = None
-_dev_stats_db: Optional[DeveloperStatsDB] = None
-_lifecycle_cache_db: Optional[LifecycleCacheDB] = None
 _workflow_cache_db: Optional[WorkflowCacheDB] = None
-_contributor_ts_cache_db: Optional[ContributorTimeSeriesCacheDB] = None
-_code_activity_cache_db: Optional[CodeActivityCacheDB] = None
 _repo_stats_cache_db: Optional[RepoStatsCacheDB] = None
 _repo_loc_cache_db: Optional[RepoLOCCacheDB] = None
 _timeline_cache_db: Optional[TimelineCacheDB] = None
 _synced_prs_db: Optional[SyncedPRsDB] = None
+_synced_commits_db: Optional[SyncedCommitsDB] = None
+_analytics_daily_db: Optional[AnalyticsDailyDB] = None
 _reviewers_db: Optional[ReviewersDB] = None
 _automation_dispatches_db: Optional[AutomationDispatchesDB] = None
 _review_requests_db: Optional[ReviewRequestsDB] = None
@@ -142,26 +138,6 @@ def get_settings_db() -> SettingsDB:
     return _settings_db
 
 
-def get_dev_stats_db() -> DeveloperStatsDB:
-    global _dev_stats_db
-    if _dev_stats_db is None:
-        db = get_database()
-        with _db_lock:
-            if _dev_stats_db is None:
-                _dev_stats_db = DeveloperStatsDB(db)
-    return _dev_stats_db
-
-
-def get_lifecycle_cache_db() -> LifecycleCacheDB:
-    global _lifecycle_cache_db
-    if _lifecycle_cache_db is None:
-        db = get_database()
-        with _db_lock:
-            if _lifecycle_cache_db is None:
-                _lifecycle_cache_db = LifecycleCacheDB(db)
-    return _lifecycle_cache_db
-
-
 def get_workflow_cache_db() -> WorkflowCacheDB:
     global _workflow_cache_db
     if _workflow_cache_db is None:
@@ -170,26 +146,6 @@ def get_workflow_cache_db() -> WorkflowCacheDB:
             if _workflow_cache_db is None:
                 _workflow_cache_db = WorkflowCacheDB(db)
     return _workflow_cache_db
-
-
-def get_contributor_ts_cache_db() -> ContributorTimeSeriesCacheDB:
-    global _contributor_ts_cache_db
-    if _contributor_ts_cache_db is None:
-        db = get_database()
-        with _db_lock:
-            if _contributor_ts_cache_db is None:
-                _contributor_ts_cache_db = ContributorTimeSeriesCacheDB(db)
-    return _contributor_ts_cache_db
-
-
-def get_code_activity_cache_db() -> CodeActivityCacheDB:
-    global _code_activity_cache_db
-    if _code_activity_cache_db is None:
-        db = get_database()
-        with _db_lock:
-            if _code_activity_cache_db is None:
-                _code_activity_cache_db = CodeActivityCacheDB(db)
-    return _code_activity_cache_db
 
 
 def get_repo_stats_cache_db() -> RepoStatsCacheDB:
@@ -232,6 +188,26 @@ def get_synced_prs_db() -> SyncedPRsDB:
     return _synced_prs_db
 
 
+def get_synced_commits_db() -> SyncedCommitsDB:
+    global _synced_commits_db
+    if _synced_commits_db is None:
+        db = get_database()
+        with _db_lock:
+            if _synced_commits_db is None:
+                _synced_commits_db = SyncedCommitsDB(db)
+    return _synced_commits_db
+
+
+def get_analytics_daily_db() -> AnalyticsDailyDB:
+    global _analytics_daily_db
+    if _analytics_daily_db is None:
+        db = get_database()
+        with _db_lock:
+            if _analytics_daily_db is None:
+                _analytics_daily_db = AnalyticsDailyDB(db)
+    return _analytics_daily_db
+
+
 def get_reviewers_db() -> ReviewersDB:
     global _reviewers_db
     if _reviewers_db is None:
@@ -266,17 +242,16 @@ __all__ = [
     "Database", "ReviewsDB", "ReviewEventsDB", "AuditsDB", "AutoVerdictsDB", "MergeQueueDB", "SwimlanesDB", "SettingsDB",
     "AutoVerdictArmingDB", "get_auto_verdict_arming_db",
     "SyncedPRsDB", "get_synced_prs_db",
+    "SyncedCommitsDB", "get_synced_commits_db",
+    "AnalyticsDailyDB", "get_analytics_daily_db",
     "ReviewersDB", "get_reviewers_db",
     "AutomationDispatchesDB", "get_automation_dispatches_db",
     "ReviewRequestsDB", "get_review_requests_db",
-    "DeveloperStatsDB", "LifecycleCacheDB", "WorkflowCacheDB",
-    "ContributorTimeSeriesCacheDB", "CodeActivityCacheDB",
-    "RepoStatsCacheDB", "RepoLOCCacheDB", "TimelineCacheDB",
+    "WorkflowCacheDB", "RepoStatsCacheDB", "RepoLOCCacheDB", "TimelineCacheDB",
     "get_database", "get_reviews_db", "get_review_events_db",
     "get_audits_db", "get_auto_verdicts_db",
     "get_queue_db", "get_swimlanes_db",
-    "get_settings_db", "get_dev_stats_db", "get_lifecycle_cache_db",
-    "get_workflow_cache_db", "get_contributor_ts_cache_db",
-    "get_code_activity_cache_db", "get_repo_stats_cache_db",
+    "get_settings_db", "get_workflow_cache_db",
+    "get_repo_stats_cache_db",
     "get_repo_loc_cache_db", "get_timeline_cache_db",
 ]

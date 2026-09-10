@@ -9,8 +9,8 @@ interface UIState {
   activeView: 'prs' | 'analytics' | 'workflows' | 'repo-stats' | 'review-logs' | 'automation'
   setActiveView: (view: 'prs' | 'analytics' | 'workflows' | 'repo-stats' | 'review-logs' | 'automation') => void
 
-  activeAnalyticsTab: 'stats' | 'lifecycle' | 'activity' | 'responsiveness' | 'contributors'
-  setActiveAnalyticsTab: (tab: 'stats' | 'lifecycle' | 'activity' | 'responsiveness' | 'contributors') => void
+  activeAnalyticsTab: 'stats' | 'activity' | 'contributors'
+  setActiveAnalyticsTab: (tab: 'stats' | 'activity' | 'contributors') => void
 
   // Panel visibility
   showQueuePanel: boolean

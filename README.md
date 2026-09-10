@@ -73,7 +73,6 @@ Edit `config.json` in the project root:
   "cache_ttl_seconds": 300,
   "workflow_cache_ttl_minutes": 60,
   "workflow_cache_max_runs": 1000,
-  "review_sample_limit": 250,
   "reviews_dir": "/path/to/your/code-reviews"
 }
 ```
@@ -88,14 +87,13 @@ Edit `config.json` in the project root:
 | `cache_ttl_seconds` | `300` | In-memory cache TTL (seconds) |
 | `workflow_cache_ttl_minutes` | `60` | CI/Workflow cache TTL (minutes) |
 | `workflow_cache_max_runs` | `1000` | Max workflow runs cached per repo |
-| `review_sample_limit` | `250` | Max PRs sampled for lifecycle/review analytics |
 | `reviews_dir` | — | Directory where code review output files are saved |
 
 ---
 
 ## Database
 
-The SQLite database (`pr_explorer.db`) is created automatically on first run. It stores review history, merge queue data, developer stats cache, and user settings.
+The SQLite database (`pr_explorer.db`) is created automatically on first run. It stores review history, merge queue data, the synced PR/commit list and Analytics daily rollup, and user settings.
 
 To pre-seed the CI/Workflow cache for faster first loads:
 
@@ -196,7 +194,7 @@ Issues that don't match this structure are silently skipped when posting inline 
 
 - **PR Browsing & Filtering** — 5-tab filter panel (Basic, Review, People, Dates, Advanced) with 30+ filter options
 - **Client-side Pagination** — page through PRs and workflow runs without extra API calls
-- **Analytics** — 5 sub-tabs: Developer Stats, PR Lifecycle, Code Activity, Review Responsiveness, Contributor Time Series
+- **Analytics** — 3 sub-tabs (Stats, Activity, Contributors) over a windowed daily rollup, with bot exclusion and history backfill to repo inception
 - **CI/Workflows** — workflow run history with filters, pass rate, and failure trends
 - **Merge Queue** — cross-repo prioritized queue with notes and reordering
 - **Code Reviews** — automated reviews via Claude CLI with score tracking and follow-ups

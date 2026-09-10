@@ -1,252 +1,122 @@
-import { useEffect, useMemo } from 'react'
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from 'recharts'
+import { useMemo, useState } from 'react'
 import { useAnalyticsStore } from '../../stores/useAnalyticsStore'
-import { useAccountStore } from '../../stores/useAccountStore'
-import { useUIStore } from '../../stores/useUIStore'
-import { fetchCodeActivity, fetchContributorTimeSeries } from '../../api/analytics'
-import { BarChart as CssBarChart } from './BarChart'
-import { CacheTimestamp } from '../common/CacheTimestamp'
-import { Spinner } from '../common/Spinner'
-import { Alert } from '../common/Alert'
+import { useChartTheme } from './chartTheme'
+import { DailyBarChart } from './DailyBarChart'
+import { TimeSeriesChart } from './TimeSeriesChart'
 import { InfoTooltip } from '../common/InfoTooltip'
 import { formatNumber } from '../../utils/formatters'
+import { summarizeTeam, toChartRows, seriesColor } from '../../utils/analyticsSeries'
 
-const TOP5_COLORS = ['#00d4aa', '#ff6b6b', '#4ecdc4', '#ffe66d', '#a29bfe']
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+// Formats a 'YYYY-MM-DD' day string without going through Date/toLocaleDateString,
+// which would shift the day backward in timezones behind UTC.
+function formatPeakDay(day: string): string {
+  const [year, month, date] = day.split('-').map(Number)
+  return `${MONTH_ABBR[month - 1]} ${date}, ${year}`
+}
 
 export function ActivityView() {
-  const selectedRepo = useAccountStore((state) => state.selectedRepo)
-  const darkMode = useUIStore((state) => state.darkMode)
-  const {
-    codeActivity,
-    activityLoading,
-    activityError,
-    activityTimeframe,
-    cacheMeta,
-    setCodeActivity,
-    setActivityLoading,
-    setActivityError,
-    setActivityTimeframe,
-    contributorTimeSeries,
-    setContributorTimeSeries,
-    setContributorTSLoading,
-    setContributorTSError,
-    setCacheMeta,
-  } = useAnalyticsStore()
+  const daily = useAnalyticsStore((state) => state.daily)
+  const [hidden, setHidden] = useState<Set<string>>(new Set())
+  const theme = useChartTheme()
 
-  useEffect(() => {
-    if (selectedRepo) {
-      loadActivity()
-      if (contributorTimeSeries.length === 0) {
-        loadContributorData()
-      }
-    }
-  }, [selectedRepo, activityTimeframe])
+  const summary = useMemo(
+    () => (daily ? summarizeTeam(daily.days, daily.team.series) : null),
+    [daily]
+  )
 
-  const loadActivity = async () => {
-    if (!selectedRepo) return
+  const rows = useMemo(
+    () =>
+      daily
+        ? toChartRows(daily.days, {
+            commits: daily.team.series.commits,
+            additions: daily.team.series.additions,
+            deletions: daily.team.series.deletions,
+            prs_created: daily.team.series.prs_created,
+            prs_merged: daily.team.series.prs_merged,
+            prs_closed: daily.team.series.prs_closed,
+          })
+        : [],
+    [daily]
+  )
 
-    try {
-      setActivityLoading(true)
-      setActivityError(null)
-      const response = await fetchCodeActivity(
-        selectedRepo.owner.login,
-        selectedRepo.name,
-        activityTimeframe
-      )
-      setCodeActivity(response)
-      setCacheMeta('activity', response)
-    } catch (err) {
-      setActivityError(err instanceof Error ? err.message : 'Failed to load activity data')
-    } finally {
-      setActivityLoading(false)
-    }
-  }
+  if (!daily || !summary) return null
 
-  const loadContributorData = async () => {
-    if (!selectedRepo) return
-    try {
-      setContributorTSLoading(true)
-      setContributorTSError(null)
-      const response = await fetchContributorTimeSeries(
-        selectedRepo.owner.login,
-        selectedRepo.name
-      )
-      setContributorTimeSeries(response.contributors)
-    } catch {
-      // Non-critical: top 5 chart just won't render
-    } finally {
-      setContributorTSLoading(false)
-    }
-  }
-
-  const top5ChartData = useMemo(() => {
-    if (!contributorTimeSeries.length) return []
-    const top5 = contributorTimeSeries.slice(0, 5)
-    const allWeeks = top5[0]?.weeks || []
-    const trimmedWeeks = allWeeks.slice(-activityTimeframe)
-    return trimmedWeeks.map((w) => {
-      const row: Record<string, string | number> = { week: w.week }
-      for (const c of top5) {
-        const match = c.weeks.find((cw) => cw.week === w.week)
-        row[c.login] = match ? match.commits : 0
-      }
-      return row
-    })
-  }, [contributorTimeSeries, activityTimeframe])
-
-  if (activityLoading) {
-    return (
-      <div className="mx-analytics__loading">
-        <Spinner size="lg" />
-        <p>Loading code activity...</p>
-      </div>
-    )
-  }
-
-  if (activityError) {
-    return <Alert variant="error">{activityError}</Alert>
-  }
-
-  if (!codeActivity) return null
-
-  const timeframeOptions = [
-    { value: 4, label: '1 Month' },
-    { value: 13, label: '3 Months' },
-    { value: 26, label: '6 Months' },
-    { value: 52, label: '1 Year' },
+  const prSeries = [
+    { id: 'prs_created', label: 'PRs created', color: seriesColor(0), personId: '', metric: 'prs_created' as const },
+    { id: 'prs_merged', label: 'merges', color: seriesColor(1), personId: '', metric: 'prs_merged' as const },
+    { id: 'prs_closed', label: 'closed', color: seriesColor(2), personId: '', metric: 'prs_closed' as const },
   ]
-
-  const activityCacheMeta = cacheMeta.activity
 
   return (
     <div className="mx-activity-view">
-      <CacheTimestamp
-        lastUpdated={activityCacheMeta.lastUpdated}
-        stale={activityCacheMeta.stale}
-        refreshing={activityCacheMeta.refreshing}
-      />
-      <div className="mx-activity__controls">
-        <label>Timeframe:</label>
-        {timeframeOptions.map((option) => (
-          <button
-            key={option.value}
-            className={`mx-button-group__item ${
-              activityTimeframe === option.value ? 'mx-button-group__item--active' : ''
-            }`}
-            onClick={() => setActivityTimeframe(option.value)}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-
       <div className="mx-stat-cards">
         <div className="mx-stat-card">
           <span className="mx-stat-card__label">Total Commits</span>
-          <span className="mx-stat-card__value">
-            {formatNumber(codeActivity.summary.total_commits)}
-          </span>
+          <span className="mx-stat-card__value">{formatNumber(summary.totalCommits)}</span>
         </div>
         <div className="mx-stat-card">
-          <span className="mx-stat-card__label">Avg Weekly Commits</span>
-          <span className="mx-stat-card__value">
-            {codeActivity.summary.avg_weekly_commits.toFixed(1)}
-          </span>
+          <span className="mx-stat-card__label">Avg Commits/Day</span>
+          <span className="mx-stat-card__value">{summary.avgCommitsPerDay.toFixed(1)}</span>
         </div>
         <div className="mx-stat-card">
           <span className="mx-stat-card__label">Lines Added</span>
-          <span className="mx-stat-card__value mx-stats-additions">
-            +{formatNumber(codeActivity.summary.total_additions)}
-          </span>
+          <span className="mx-stat-card__value mx-stats-additions">+{formatNumber(summary.additions)}</span>
         </div>
         <div className="mx-stat-card">
           <span className="mx-stat-card__label">Lines Deleted</span>
-          <span className="mx-stat-card__value mx-stats-deletions">
-            -{formatNumber(codeActivity.summary.total_deletions)}
+          <span className="mx-stat-card__value mx-stats-deletions">-{formatNumber(summary.deletions)}</span>
+        </div>
+        <div className="mx-stat-card">
+          <span className="mx-stat-card__label">Peak Day</span>
+          <span className="mx-stat-card__value">
+            {summary.peakDay ? formatPeakDay(summary.peakDay) : 'N/A'}
           </span>
+          {summary.peakDay && <span className="mx-stat-card__sub">{summary.peakCommits} commits</span>}
+        </div>
+        <div className="mx-stat-card">
+          <span className="mx-stat-card__label">PRs Merged</span>
+          <span className="mx-stat-card__value">{formatNumber(summary.prsMerged)}</span>
         </div>
       </div>
 
       <div className="mx-activity__charts">
-        <CssBarChart
-          title="Weekly Commits"
-          tooltip="Total number of commits pushed each week. Each bar represents one week in the selected timeframe. Hover a bar to see the exact week and count."
-          data={codeActivity.weekly_commits.map((w) => ({
-            label: w.week,
-            value: w.total,
-          }))}
-          color="var(--mx-color-primary)"
-        />
+        <div className="mx-activity__chart">
+          <h3>Commits per day</h3>
+          <DailyBarChart rows={rows} bars={[{ id: 'commits', label: 'Commits', color: theme.primary }]} />
+        </div>
 
-        {(() => {
-          const maxTotal = Math.max(1, ...codeActivity.code_changes.map((c) => c.additions + c.deletions))
-          return (
-            <div className="mx-activity__chart">
-              <h3>Code Changes<InfoTooltip text="Lines of code added (green) and deleted (red) each week. Taller bars indicate more code churn. Hover a segment to see the exact count." /></h3>
-              <div className="mx-stacked-chart">
-                {codeActivity.code_changes.map((change, i) => {
-                  const total = change.additions + change.deletions
-                  const barHeight = (total / maxTotal) * 100
-                  const addPct = total > 0 ? (change.additions / total) * 100 : 50
-                  return (
-                    <div key={i} className="mx-stacked-bar" style={{ height: `${barHeight}%` }}>
-                      <div
-                        className="mx-stacked-bar__additions"
-                        style={{ flex: addPct }}
-                        data-tooltip={`+${change.additions}`}
-                      />
-                      <div
-                        className="mx-stacked-bar__deletions"
-                        style={{ flex: 100 - addPct }}
-                        data-tooltip={`-${change.deletions}`}
-                      />
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )
-        })()}
+        <div className="mx-activity__chart">
+          <h3>
+            Lines added vs deleted
+            <InfoTooltip text="From PRs merged into the selected base, attributed on merge day" />
+          </h3>
+          <DailyBarChart
+            rows={rows}
+            bars={[
+              { id: 'additions', label: 'Lines added', color: theme.success, stackId: 'lines' },
+              { id: 'deletions', label: 'Lines deleted', color: theme.error, stackId: 'lines' },
+            ]}
+          />
+        </div>
 
-        {top5ChartData.length > 0 && (() => {
-          const textColor = darkMode ? '#b0b0b0' : '#666666'
-          const gridColor = darkMode ? '#333333' : '#e0e0e0'
-          const top5 = contributorTimeSeries.slice(0, 5)
-          const formatWeek = (w: string) => { const p = w.split('-'); return `${p[1]}/${p[2]}` }
-          return (
-            <div className="mx-activity__chart mx-activity__chart--wide">
-              <h3>Top 5 Contributors<InfoTooltip text="Weekly commit counts for the top 5 contributors by total commits. Click a legend entry to toggle visibility." /></h3>
-              <ResponsiveContainer width="100%" height={250}>
-                <LineChart data={top5ChartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
-                  <XAxis dataKey="week" tickFormatter={formatWeek} stroke={textColor} fontSize={12} tick={{ fill: textColor }} />
-                  <YAxis stroke={textColor} fontSize={12} tick={{ fill: textColor }} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: darkMode ? '#1a1a2e' : '#ffffff',
-                      border: `1px solid ${gridColor}`,
-                      borderRadius: 8,
-                      color: darkMode ? '#e0e0e0' : '#333333',
-                    }}
-                  />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  {top5.map((c, i) => (
-                    <Line key={c.login} type="monotone" dataKey={c.login} stroke={TOP5_COLORS[i]} strokeWidth={2} dot={false} />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          )
-        })()}
+        <div className="mx-activity__chart mx-activity__chart--wide">
+          <h3>PRs created / merged / closed</h3>
+          <TimeSeriesChart
+            rows={rows}
+            series={prSeries}
+            hidden={hidden}
+            onToggle={(id) =>
+              setHidden((prev) => {
+                const next = new Set(prev)
+                if (next.has(id)) next.delete(id)
+                else next.add(id)
+                return next
+              })
+            }
+          />
+        </div>
       </div>
     </div>
   )

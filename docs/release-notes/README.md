@@ -6,6 +6,7 @@ commit that closed out that feature set.
 
 | Version | Date | Theme |
 |---|---|---|
+| [v1.1.0](v1.1.0.md) | 2026-09-10 | Analytics rebuilt on a local daily rollup, inception history backfill, commit sync |
 | [v1.0.0](v1.0.0.md) | 2026-09-04 | Pipeline overlay, review-request follow-ups, disputed/deferred + mediation, review hardening, PR status comments |
 | [v0.9.0](v0.9.0.md) | 2026-08-31 | Automation tab and auto-review pipeline |
 | [v0.8.0](v0.8.0.md) | 2026-08-28 | Auto verdicts, auto follow-ups, Review Logs tab, synced PR list |

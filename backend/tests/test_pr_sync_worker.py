@@ -1,9 +1,11 @@
 """Sync worker tests with gh fully mocked."""
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
 
 from backend.database.base import Database
+from backend.database.synced_commits import SyncedCommitsDB
 from backend.database.synced_prs import SyncedPRsDB
 from backend.services.pr_sync_worker import (
     backfill_repo, incremental_sync_repo, sync_cycle,
@@ -13,6 +15,11 @@ from backend.services.pr_sync_worker import (
 @pytest.fixture
 def store(tmp_path):
     return SyncedPRsDB(Database(tmp_path / "test.db"))
+
+
+@pytest.fixture
+def commits_db(tmp_path):
+    return SyncedCommitsDB(Database(tmp_path / "commits.db"))
 
 
 def _pr(number, state="OPEN", updated="2026-08-20T00:00:00Z"):
@@ -74,7 +81,8 @@ def test_backfill_survives_single_pr_hydration_failure(store):
     assert store.get_repo("acme/widgets")["backfill_done"] is True
 
 
-def test_incremental_hydrates_updated_and_prunes(store):
+def test_incremental_hydrates_updated_and_does_not_prune_by_default(store):
+    """retain_days=0 (the default) means keep forever."""
     store.register_repo("acme/widgets")
     store.mark_backfill_done("acme/widgets")
     store.update_last_synced("acme/widgets")
@@ -82,16 +90,32 @@ def test_incremental_hydrates_updated_and_prunes(store):
 
     with patch(f"{WORKER}.fetch_pr_numbers", return_value=[4]) as mock_numbers, \
          patch(f"{WORKER}.fetch_full_pr", return_value=_pr(4, state="CLOSED")):
-        incremental_sync_repo(store, "acme/widgets", history_days=180)
+        n = incremental_sync_repo(store, "acme/widgets", history_days=180)
 
+    assert n == 1
     search = mock_numbers.call_args.kwargs.get("search") or mock_numbers.call_args[0][3]
     assert "updated:>=" in search
     rows = {r["number"]: r for r in store.get_prs("acme/widgets")}
     assert 4 in rows and rows[4]["state"] == "CLOSED"
-    assert 9 not in rows  # pruned: merged, older than window
+    assert 9 in rows  # retain_days=0: never pruned
 
 
-def test_sync_cycle_respects_cap_exclusions_and_isolation(store):
+def test_incremental_prunes_when_retain_days_set(store):
+    store.register_repo("acme/widgets")
+    store.mark_backfill_done("acme/widgets")
+    store.update_last_synced("acme/widgets")
+    store.upsert_pr("acme/widgets", _pr(9, state="MERGED", updated="2020-01-01T00:00:00Z"))
+
+    with patch(f"{WORKER}.fetch_pr_numbers", return_value=[4]), \
+         patch(f"{WORKER}.fetch_full_pr", return_value=_pr(4, state="CLOSED")):
+        incremental_sync_repo(store, "acme/widgets", history_days=180, retain_days=30)
+
+    rows = {r["number"]: r for r in store.get_prs("acme/widgets")}
+    assert 4 in rows and rows[4]["state"] == "CLOSED"
+    assert 9 not in rows  # pruned: merged, older than the retention window
+
+
+def test_sync_cycle_respects_cap_exclusions_and_isolation(store, commits_db):
     for name in ("a/one", "a/two", "a/skip"):
         store.register_repo(name)
     cfg = {
@@ -105,11 +129,101 @@ def test_sync_cycle_respects_cap_exclusions_and_isolation(store):
             raise RuntimeError("kaboom")   # must not break the loop
         synced.append(repo)
 
-    with patch(f"{WORKER}.backfill_repo", side_effect=fake_backfill):
-        sync_cycle(store=store, cfg=cfg)
+    with patch(f"{WORKER}.backfill_repo", side_effect=fake_backfill), \
+         patch(f"{WORKER}.fetch_commits_page", return_value=[]), \
+         patch(f"{WORKER}.analytics_rollup.needs_rebuild", return_value=False), \
+         patch(f"{WORKER}.analytics_rollup.rebuild_repo"):
+        sync_cycle(store=store, cfg=cfg, commits_db=commits_db)
 
     assert "a/skip" not in synced
     assert len(synced) >= 1  # a/one synced despite a/two failing
+
+
+def test_backfill_stamps_history_cursor_at_tomorrow(store):
+    store.register_repo("acme/widgets")
+    with patch(f"{WORKER}.fetch_pr_numbers", side_effect=[[1], []]), \
+         patch(f"{WORKER}.fetch_full_pr", side_effect=lambda o, r, n: _pr(n)):
+        backfill_repo(store, "acme/widgets", history_days=180)
+
+    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+    state = store.get_history_state("acme/widgets")
+    assert state["history_cursor"] == tomorrow
+    assert state["history_done"] is False
+
+
+def test_sync_cycle_orders_stages_and_rebuilds_once_when_changed(store, commits_db):
+    """incremental -> history slice -> commits, then a single rebuild_repo call
+    when anything changed."""
+    store.register_repo("acme/widgets")
+    store.mark_backfill_done("acme/widgets")
+    store.update_last_synced("acme/widgets")
+    store.set_history_cursor("acme/widgets", "2025-01-01")
+    store.mark_history_done("acme/widgets")  # history slice is a no-op this cycle
+
+    cfg = {
+        "enabled": True, "poll_interval_seconds": 120, "history_days": 180,
+        "max_synced_repos": 10, "exclude_repos": [], "retain_days": 0,
+        "history_backfill_budget": 60, "history_chunk_days": 30,
+        "min_graphql_remaining": 1500, "commit_branches": [],
+        "commit_pages_per_cycle": 40,
+    }
+    order = []
+
+    def fake_incremental(s, repo, history_days, retain_days=0):
+        order.append("incremental")
+        return 1  # something changed
+
+    def fake_rebuild(repo):
+        order.append("rebuild")
+
+    with patch(f"{WORKER}.incremental_sync_repo", side_effect=fake_incremental), \
+         patch(f"{WORKER}.history_backfill_slice", side_effect=lambda s, r, c: order.append("history") or 0), \
+         patch(f"{WORKER}.sync_commits", side_effect=lambda s, cdb, r, c: order.append("commits") or 0), \
+         patch(f"{WORKER}.analytics_rollup.needs_rebuild", return_value=False), \
+         patch(f"{WORKER}.analytics_rollup.rebuild_repo", side_effect=fake_rebuild):
+        sync_cycle(store=store, cfg=cfg, commits_db=commits_db)
+
+    assert order == ["incremental", "history", "commits", "rebuild"]
+
+
+def test_sync_cycle_skips_rebuild_when_nothing_changed_and_not_needed(store, commits_db):
+    store.register_repo("acme/widgets")
+    store.mark_backfill_done("acme/widgets")
+    store.update_last_synced("acme/widgets")
+    store.mark_history_done("acme/widgets")
+    cfg = {
+        "enabled": True, "poll_interval_seconds": 120, "history_days": 180,
+        "max_synced_repos": 10, "exclude_repos": [], "retain_days": 0,
+        "commit_branches": [],
+    }
+
+    with patch(f"{WORKER}.incremental_sync_repo", return_value=0), \
+         patch(f"{WORKER}.history_backfill_slice", return_value=0), \
+         patch(f"{WORKER}.analytics_rollup.needs_rebuild", return_value=False), \
+         patch(f"{WORKER}.analytics_rollup.rebuild_repo") as mock_rebuild:
+        sync_cycle(store=store, cfg=cfg, commits_db=commits_db)
+
+    mock_rebuild.assert_not_called()
+
+
+def test_sync_cycle_rebuilds_when_needs_rebuild_true_even_if_unchanged(store, commits_db):
+    store.register_repo("acme/widgets")
+    store.mark_backfill_done("acme/widgets")
+    store.update_last_synced("acme/widgets")
+    store.mark_history_done("acme/widgets")
+    cfg = {
+        "enabled": True, "poll_interval_seconds": 120, "history_days": 180,
+        "max_synced_repos": 10, "exclude_repos": [], "retain_days": 0,
+        "commit_branches": [],
+    }
+
+    with patch(f"{WORKER}.incremental_sync_repo", return_value=0), \
+         patch(f"{WORKER}.history_backfill_slice", return_value=0), \
+         patch(f"{WORKER}.analytics_rollup.needs_rebuild", return_value=True), \
+         patch(f"{WORKER}.analytics_rollup.rebuild_repo") as mock_rebuild:
+        sync_cycle(store=store, cfg=cfg, commits_db=commits_db)
+
+    mock_rebuild.assert_called_once_with("acme/widgets")
 
 
 # ----- Automation candidate detection -----
