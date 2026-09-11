@@ -55,33 +55,33 @@ Keep `docs/DESIGN.md` updated whenever any design aspect changes, and update the
 | **Architecture** | 40 | System diagram, data flow |
 | — Backend Components (Flask) | 116 | Package layout, services, filters, visualizers, cache, 14 route blueprints |
 | — Database Module | 180 | DB classes, full SQL schema, per-class method tables |
-| — Data Migration Module | 616 | One-time legacy JSON/markdown import |
-| — Frontend (React + TS) | 636 | Dir layout, 6-tab + analytics sub-tab architecture |
-| — Styling | 671 | Matrix UI design system, CSS conventions |
-| **Features** | 689 | (one ### per feature below) |
-| — PR List Pagination | 708 | Client-side paging |
-| — PR Filtering System | 734 | 5 filter tabs (Basic/Review/People/Dates/Advanced) |
-| — Analytics (Stats / Activity / Contributors) | 795–894 | Windowed daily rollup shared by all 3 sub-tabs, one endpoint, bot exclusion, `#### Metric Semantics` bucketing rules |
-| — CI/Workflows Tab | 895 | Workflow runs table, filters, stats |
-| — PR Card Status Badges | 959 | Review/CI/divergence/approved-by-me badges |
-| — Settings Persistence | 1028 | DB-backed filter/selection restore |
-| — Repo Stats Tab | 1046 | Repo-level stats, languages, LOC |
-| — Review History | 1075 | Past-review browser, score badges |
-| — PR Timelines | 1120 | Single-PR event timeline modal |
-| — Merge Queue | 1194 | Prioritized cross-repo PR queue |
-| — Swimlane Board (Kanban) | 1273 | Lane CRUD, DnD, badge + auto-mode filtering, auto/manual header counts; operator-owned watch list (automation never places cards; former Auto lane retired) |
-| — Code Review System (Claude CLI) | 1429 | Reviewer agents, subprocess flow, foreground-dispatch requirement, per-event PR status comments (supersede-delete, marker, single kill-switch flag), stale-review cancellation & restart, startup reconciliation of orphaned reviews (budget-paced requeue), review workspace + runaway-process guardrails (prescribed snapshot recipe, process-group kills, wall-clock timeout, systemd cgroup caps), split Review/Audit triggers |
-| — Inline Comments Posting | 1624 | Post critical issues to GitHub |
-| — Review Verdict | 1672 | Approve/Request-Changes/Comment composer, verdict source toggle |
-| — Auto Verdicts | 1744 | Per-PR `auto_verdict_arming` table (independent of merge-queue membership), armed cards, verdict vs comment mode, criteria thresholds, per-PR criteria overrides, auto approve/changes-requested, **Disputed/Deferred set-aside sections excluded from tallies, mediation outcome (`mediationDisputedThreshold` → COMMENT + disarm + status comment), follow-up scope rule, no-verdict rule for agents**, watcher threads, auto follow-up reviews (one batched head-SHA fetch per repo), rate-limit deferral + retry sweep, optimistic arming |
-| — Review Requests | 1948 | GitHub review request → pipeline: zero-cost detection (sync-worker `reviewRequests` diff + per-cycle sweep of open rows for standing untracked requests, incl. GitHub's remove+add re-request), routing by dispatch-row status (enroll / requeue incl. opt-out / follow-up demand in `review_requests`), fulfilment under the same dispatch gates regardless of arming, conversation-since-review + disposition rules in every follow-up prompt (`withdrawn`/`disputed`), Dispositions section in verdict bodies, 🙋 badges, status comments |
-| — Review Event Log | 2045 | Per-attempt event log, run_id grouping, closed event/reason vocabularies, verdict posted/not-posted events, day-paginated Review Logs tab (Running-now strip, day navigator, calendar jump, load-older), run hover panel w/ issue counts |
-| — PR List Sync | 2300 | DB-backed PR list: synced_repos/synced_prs tables, background sync worker (backfill + incremental), inception history walk (`history_cursor`, adaptive 1000-cap split, `history_backfill_budget`), commit sync (`synced_commits`, REST paging, `commit_pages_per_cycle`), `retain_days` prune (0 = never), three-way route dispatch (DB/hybrid/live), per-card refresh, `pr_sync` config |
-| — Automation (Full Auto Pipeline) | 2458 | Automation tab (config only: active-config summary strip), reviewer registry, routing rules + ignore patterns, seed + backfill scripts, dispatch condition gates (base branch must be `requireBaseBranch` (default main), CI pass, behind-base limit, non-draft; open PRs wait indefinitely unless `dispatchTimeoutHours` is set, drafts off the board), unified concurrency budget in begin_review, pipeline size cap, manual enroll/opt-out control + badge on all card surfaces, automation_dispatches, dispatch worker (never touches merge_queue/swimlanes), `automation_config` |
-| — Pipeline Management (Pipeline overlay) | 2678 | Header 🤖 overlay: DB-only in-memory snapshot (`pipeline_snapshot.py`, version-based cheap polling, dirty-flag rebuilds), derived `stage` (incl. sticky `mediation`), sortable/filterable table w/ Rounds + rev-log hover, expandable detail panel, bulk actions, Watch on board, per-row refresh, freshness indicator |
-| **API Endpoints** | 2750 | All REST routes, grouped by domain (auth → cache); Analytics Daily at 3134, Auto Verdicts at 3316, Automation/Reviewers (incl. `/api/automation/pipeline`) at 3424, Review Logs at 4192 |
-| **Configuration** | 4310 | `config.json` options, incl. review retry + log retention, `log_retention_days`, `pr_sync` block (incl. `retain_days`, history walk + commit sync keys), `analytics` block (`bot_logins`); DB-backed settings keys note |
-| **Technical Details** | 4400 | gh CLI integration, caching, parallel fetch, logging (4609: UTC per-run files + error.log), attempt outcome + retry policy (4674), follow-up parent selection (4727), Review JSON Schema (4760: incl. `disputed`/`deferred` sections, per-issue `severity`/`disposition`) |
-| **Future Considerations** | 4930 | Improvements, known limitations |
-| **Appendix** | 4991 | Dependencies, file structure, run instructions |
+| — Data Migration Module | 619 | One-time legacy JSON/markdown import |
+| — Frontend (React + TS) | 639 | Dir layout, 6-tab + analytics sub-tab architecture |
+| — Styling | 674 | Matrix UI design system, CSS conventions |
+| **Features** | 692 | (one ### per feature below) |
+| — PR List Pagination | 711 | Client-side paging |
+| — PR Filtering System | 737 | 5 filter tabs (Basic/Review/People/Dates/Advanced) |
+| — Analytics (Stats / Activity / Contributors) | 798–899 | Windowed daily rollup shared by all 3 sub-tabs, one endpoint, bot exclusion, `#### Metric Semantics` bucketing rules (incl. avg review rounds before merge) |
+| — CI/Workflows Tab | 900 | Workflow runs table, filters, stats |
+| — PR Card Status Badges | 964 | Review/CI/divergence/approved-by-me badges |
+| — Settings Persistence | 1033 | DB-backed filter/selection restore |
+| — Repo Stats Tab | 1051 | Repo-level stats, languages, LOC |
+| — Review History | 1080 | Past-review browser, score badges |
+| — PR Timelines | 1125 | Single-PR event timeline modal |
+| — Merge Queue | 1199 | Prioritized cross-repo PR queue |
+| — Swimlane Board (Kanban) | 1278 | Lane CRUD, DnD, badge + auto-mode filtering, auto/manual header counts; operator-owned watch list (automation never places cards; former Auto lane retired) |
+| — Code Review System (Claude CLI) | 1434 | Reviewer agents, subprocess flow, foreground-dispatch requirement, per-event PR status comments (supersede-delete, marker, single kill-switch flag), stale-review cancellation & restart, startup reconciliation of orphaned reviews (budget-paced requeue), review workspace + runaway-process guardrails (prescribed snapshot recipe, process-group kills, wall-clock timeout, systemd cgroup caps), split Review/Audit triggers |
+| — Inline Comments Posting | 1629 | Post critical issues to GitHub |
+| — Review Verdict | 1677 | Approve/Request-Changes/Comment composer, verdict source toggle |
+| — Auto Verdicts | 1749 | Per-PR `auto_verdict_arming` table (independent of merge-queue membership), armed cards, verdict vs comment mode, criteria thresholds, per-PR criteria overrides, auto approve/changes-requested, **Disputed/Deferred set-aside sections excluded from tallies, mediation outcome (`mediationDisputedThreshold` → COMMENT + disarm + status comment), follow-up scope rule, no-verdict rule for agents**, watcher threads, auto follow-up reviews (one batched head-SHA fetch per repo), rate-limit deferral + retry sweep, optimistic arming |
+| — Review Requests | 1953 | GitHub review request → pipeline: zero-cost detection (sync-worker `reviewRequests` diff + per-cycle sweep of open rows for standing untracked requests, incl. GitHub's remove+add re-request), routing by dispatch-row status (enroll / requeue incl. opt-out / follow-up demand in `review_requests`), fulfilment under the same dispatch gates regardless of arming, conversation-since-review + disposition rules in every follow-up prompt (`withdrawn`/`disputed`), Dispositions section in verdict bodies, 🙋 badges, status comments |
+| — Review Event Log | 2050 | Per-attempt event log, run_id grouping, closed event/reason vocabularies, verdict posted/not-posted events, day-paginated Review Logs tab (Running-now strip, day navigator, calendar jump, load-older), run hover panel w/ issue counts |
+| — PR List Sync | 2305 | DB-backed PR list: synced_repos/synced_prs tables, background sync worker (backfill + incremental), inception history walk (`history_cursor`, adaptive 1000-cap split, `history_backfill_budget`), commit sync (`synced_commits`, REST paging, `commit_pages_per_cycle`), `retain_days` prune (0 = never), three-way route dispatch (DB/hybrid/live), per-card refresh, `pr_sync` config |
+| — Automation (Full Auto Pipeline) | 2473 | Automation tab (config only: active-config summary strip), reviewer registry, routing rules + ignore patterns, seed + backfill scripts, dispatch condition gates (base branch must be `requireBaseBranch` (default main), CI pass, behind-base limit, non-draft; open PRs wait indefinitely unless `dispatchTimeoutHours` is set, drafts off the board), unified concurrency budget in begin_review, pipeline size cap, manual enroll/opt-out control + badge on all card surfaces, automation_dispatches, dispatch worker (never touches merge_queue/swimlanes), `automation_config` |
+| — Pipeline Management (Pipeline overlay) | 2693 | Header 🤖 overlay: DB-only in-memory snapshot (`pipeline_snapshot.py`, version-based cheap polling, dirty-flag rebuilds), derived `stage` (incl. sticky `mediation`), sortable/filterable table w/ Rounds + rev-log hover, expandable detail panel, bulk actions, Watch on board, per-row refresh, freshness indicator |
+| **API Endpoints** | 2765 | All REST routes, grouped by domain (auth → cache); Analytics Daily at 3149, Auto Verdicts at 3333, Automation/Reviewers (incl. `/api/automation/pipeline`) at 3441, Review Logs at 4209 |
+| **Configuration** | 4327 | `config.json` options, incl. review retry + log retention, `log_retention_days`, `pr_sync` block (incl. `retain_days`, history walk + commit sync keys), `analytics` block (`bot_logins`); DB-backed settings keys note |
+| **Technical Details** | 4417 | gh CLI integration, caching, parallel fetch, logging (4626: UTC per-run files + error.log), attempt outcome + retry policy (4691), follow-up parent selection (4744), Review JSON Schema (4777: incl. `disputed`/`deferred` sections, per-issue `severity`/`disposition`) |
+| **Future Considerations** | 4947 | Improvements, known limitations |
+| **Appendix** | 5008 | Dependencies, file structure, run instructions |
 

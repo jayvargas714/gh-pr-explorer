@@ -9,12 +9,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-ROLLUP_SCHEMA_VERSION = 1
+ROLLUP_SCHEMA_VERSION = 2
 
 METRIC_COLUMNS = (
     "prs_created", "prs_merged", "prs_closed", "reviews", "approvals",
     "changes_requested", "comments", "additions", "deletions", "commits",
     "merge_hours_sum", "merge_hours_count",
+    "review_rounds_sum", "review_rounds_count",
 )
 
 
@@ -37,24 +38,36 @@ def _hours_between(start: Optional[str], end: str) -> Optional[float]:
 
 
 def _parse_utc(ts: Optional[str]) -> Optional[datetime]:
-    """Parse either synced_repos' SQLite timestamp ("YYYY-MM-DD HH:MM:SS", UTC)
+    """Parse either synced_repos' SQLite timestamp ("YYYY-MM-DD HH:MM:SS[.ffffff]", UTC)
     or analytics_daily_meta's ISO 'Z' timestamp into an aware UTC datetime."""
     if not ts:
         return None
     try:
         if ts.endswith("Z"):
             return _parse_iso(ts)
-        return datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        fmt = "%Y-%m-%d %H:%M:%S.%f" if "." in ts else "%Y-%m-%d %H:%M:%S"
+        return datetime.strptime(ts, fmt).replace(tzinfo=timezone.utc)
     except ValueError:
         return None
 
 
-def build_rows(pr_rows: List[dict], commit_rows: List[dict]) -> Tuple[List[dict], dict]:
+def build_rows(
+    pr_rows: List[dict], commit_rows: List[dict],
+    review_runs: Optional[Dict[int, List[str]]] = None,
+) -> Tuple[List[dict], dict]:
     """Aggregate synced PR and commit rows into (day, login, base_ref) buckets.
+
+    `review_runs` maps PR number to the timestamps of its completed
+    code-review pipeline runs (already filtered to `status='completed'` by
+    the caller). For each MERGED PR, the count of those runs at or before
+    `merged_at` becomes one "review iterations before merge" sample,
+    attributed to the PR author on the merge day/base_ref bucket. A merged
+    PR with zero completed runs contributes nothing to either column.
 
     Pure function: no DB or config access. See task-2-brief.md for the
     bucketing rules.
     """
+    review_runs = review_runs or {}
     buckets: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
     bot_by_login: Dict[str, bool] = {}
 
@@ -94,6 +107,16 @@ def build_rows(pr_rows: List[dict], commit_rows: List[dict]) -> Tuple[List[dict]
             if hours is not None:
                 row["merge_hours_sum"] += hours
                 row["merge_hours_count"] += 1
+            merged_dt = _parse_utc(pr["merged_at"])
+            run_times = review_runs.get(pr.get("number"))
+            if run_times and merged_dt is not None:
+                n = sum(
+                    1 for t in run_times
+                    if (parsed := _parse_utc(t)) is not None and parsed <= merged_dt
+                )
+                if n > 0:
+                    row["review_rounds_sum"] += n
+                    row["review_rounds_count"] += 1
         elif state == "CLOSED" and pr.get("closed_at"):
             bucket(_day(pr["closed_at"]), login, base_ref)["prs_closed"] += 1
 
@@ -158,12 +181,15 @@ def needs_rebuild(repo: str) -> bool:
 
 def rebuild_repo(repo: str) -> dict:
     """Recompute and persist the rollup for one repo. Returns the meta written."""
-    from backend.database import get_analytics_daily_db, get_synced_commits_db, get_synced_prs_db
+    from backend.database import (
+        get_analytics_daily_db, get_reviews_db, get_synced_commits_db, get_synced_prs_db,
+    )
 
     start = time.monotonic()
     pr_rows = get_synced_prs_db().get_pr_rollup_rows(repo)
     commit_rows = get_synced_commits_db().get_rollup_rows(repo)
-    rows, counters = build_rows(pr_rows, commit_rows)
+    review_runs = get_reviews_db().get_completed_run_times(repo)
+    rows, counters = build_rows(pr_rows, commit_rows, review_runs)
 
     meta = {
         "built_at": _utc_now_iso(),

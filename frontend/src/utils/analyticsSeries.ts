@@ -116,6 +116,7 @@ export type MetricKey =
   | 'deletions'
   | 'commits'
   | 'avg_merge_hours'
+  | 'avg_review_rounds'
 
 export const METRIC_LABELS: Record<MetricKey, string> = {
   prs_created: 'PRs created',
@@ -129,6 +130,7 @@ export const METRIC_LABELS: Record<MetricKey, string> = {
   deletions: 'lines deleted',
   commits: 'commits',
   avg_merge_hours: 'avg merge time',
+  avg_review_rounds: 'avg review rounds',
 }
 
 export const METRIC_OPTIONS: { value: MetricKey; label: string }[] = (
@@ -136,6 +138,10 @@ export const METRIC_OPTIONS: { value: MetricKey; label: string }[] = (
 ).map((value) => ({ value, label: METRIC_LABELS[value] }))
 
 export const HOURS_METRICS: ReadonlySet<MetricKey> = new Set(['avg_merge_hours'])
+
+/** Metrics rendered as a plain decimal (one fractional digit) rather than
+ * hours or a K/M-suffixed count. */
+export const RATIO_METRICS: ReadonlySet<MetricKey> = new Set(['avg_review_rounds'])
 
 export type YMode = 'daily' | 'cumulative'
 
@@ -173,6 +179,9 @@ export function weightedAvgSeries(
 export function metricSeries(s: DailySeries, metric: MetricKey, mode: YMode): (number | null)[] {
   if (metric === 'avg_merge_hours') {
     return weightedAvgSeries(s.merge_hours_sum, s.merge_hours_count, mode)
+  }
+  if (metric === 'avg_review_rounds') {
+    return weightedAvgSeries(s.review_rounds_sum, s.review_rounds_count, mode)
   }
   const raw = s[metric as DailyRawKey]
   return mode === 'cumulative' ? cumulative(raw) : raw
@@ -329,6 +338,7 @@ export interface StatsRow {
   deletions: number
   commits: number
   avg_merge_hours: number | null
+  avg_review_rounds: number | null
 }
 
 function statsRowFromTotals(id: string, login: string, avatar_url: string | null, totals: DailyTotals): StatsRow {
@@ -347,6 +357,7 @@ function statsRowFromTotals(id: string, login: string, avatar_url: string | null
     deletions: totals.deletions,
     commits: totals.commits,
     avg_merge_hours: totals.avg_merge_hours,
+    avg_review_rounds: totals.avg_review_rounds,
   }
 }
 

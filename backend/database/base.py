@@ -513,6 +513,8 @@ class Database:
                     commits INTEGER NOT NULL DEFAULT 0,
                     merge_hours_sum REAL NOT NULL DEFAULT 0,
                     merge_hours_count INTEGER NOT NULL DEFAULT 0,
+                    review_rounds_sum INTEGER NOT NULL DEFAULT 0,
+                    review_rounds_count INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (repo, day, login, base_ref)
                 )
             """)
@@ -520,6 +522,21 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_analytics_daily_repo_day
                 ON analytics_daily(repo, day)
             """)
+
+            # Migration: Add review-rounds columns to analytics_daily for existing databases
+            cursor.execute("PRAGMA table_info(analytics_daily)")
+            analytics_daily_columns = {row[1] for row in cursor.fetchall()}
+            analytics_daily_new_columns = [
+                ("review_rounds_sum", "INTEGER NOT NULL DEFAULT 0"),
+                ("review_rounds_count", "INTEGER NOT NULL DEFAULT 0"),
+            ]
+            for col_name, col_type in analytics_daily_new_columns:
+                if col_name not in analytics_daily_columns:
+                    try:
+                        cursor.execute(f"ALTER TABLE analytics_daily ADD COLUMN {col_name} {col_type}")
+                        logger.info(f"Added column {col_name} to analytics_daily table")
+                    except sqlite3.OperationalError:
+                        pass
 
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS analytics_daily_meta (

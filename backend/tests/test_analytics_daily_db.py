@@ -12,13 +12,15 @@ def store(tmp_path):
 
 def _row(day, login, base_ref="main", is_bot=0, prs_created=0, prs_merged=0, prs_closed=0,
          reviews=0, approvals=0, changes_requested=0, comments=0, additions=0, deletions=0,
-         commits=0, merge_hours_sum=0.0, merge_hours_count=0):
+         commits=0, merge_hours_sum=0.0, merge_hours_count=0,
+         review_rounds_sum=0, review_rounds_count=0):
     return {
         "day": day, "login": login, "base_ref": base_ref, "is_bot": is_bot,
         "prs_created": prs_created, "prs_merged": prs_merged, "prs_closed": prs_closed,
         "reviews": reviews, "approvals": approvals, "changes_requested": changes_requested,
         "comments": comments, "additions": additions, "deletions": deletions,
         "commits": commits, "merge_hours_sum": merge_hours_sum, "merge_hours_count": merge_hours_count,
+        "review_rounds_sum": review_rounds_sum, "review_rounds_count": review_rounds_count,
     }
 
 
@@ -102,6 +104,26 @@ def test_query_without_base_ref_groups_and_sums(store):
     assert by_login["bob"]["prs_created"] == 3
     assert by_login["bob"]["is_bot"] == 1
     assert "base_ref" not in by_login["alice"]
+
+
+def test_query_review_rounds_round_trip_filtered_by_base_ref(store):
+    store.replace_repo("a/b", [
+        _row("2026-01-01", "alice", base_ref="main", review_rounds_sum=5, review_rounds_count=2),
+    ], _meta())
+    rows = store.query("a/b", "2026-01-01", "2026-01-01", base_ref="main")
+    assert rows[0]["review_rounds_sum"] == 5
+    assert rows[0]["review_rounds_count"] == 2
+
+
+def test_query_review_rounds_grouped_sum_across_base_refs(store):
+    store.replace_repo("a/b", [
+        _row("2026-01-01", "alice", base_ref="main", review_rounds_sum=3, review_rounds_count=1),
+        _row("2026-01-01", "alice", base_ref="dev", review_rounds_sum=2, review_rounds_count=1),
+    ], _meta())
+    rows = store.query("a/b", "2026-01-01", "2026-01-01")
+    by_login = {r["login"]: r for r in rows}
+    assert by_login["alice"]["review_rounds_sum"] == 5
+    assert by_login["alice"]["review_rounds_count"] == 2
 
 
 def test_query_day_range_filter(store):

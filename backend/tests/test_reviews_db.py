@@ -117,3 +117,47 @@ def test_get_latest_for_prs_returns_newest_per_pr(reviews_db):
 
 def test_get_latest_for_prs_empty_input(reviews_db):
     assert reviews_db.get_latest_for_prs([]) == {}
+
+
+# -- get_completed_run_times --------------------------------------------------
+
+def test_get_completed_run_times_completed_only(reviews_db):
+    from datetime import datetime
+    reviews_db.save_review(pr_number=1, repo="owner/repo", status="completed",
+                            review_timestamp=datetime(2026, 8, 1, 10, 0))
+    reviews_db.save_review(pr_number=1, repo="owner/repo", status="failed",
+                            review_timestamp=datetime(2026, 8, 2, 10, 0))
+    reviews_db.save_review(pr_number=1, repo="owner/repo", status="running",
+                            review_timestamp=datetime(2026, 8, 3, 10, 0))
+
+    result = reviews_db.get_completed_run_times("owner/repo")
+    assert result == {1: ["2026-08-01 10:00:00"]}
+
+
+def test_get_completed_run_times_grouped_by_pr_number(reviews_db):
+    from datetime import datetime
+    reviews_db.save_review(pr_number=1, repo="owner/repo", status="completed",
+                            review_timestamp=datetime(2026, 8, 1, 10, 0))
+    reviews_db.save_review(pr_number=1, repo="owner/repo", status="completed",
+                            review_timestamp=datetime(2026, 8, 5, 10, 0), is_followup=True)
+    reviews_db.save_review(pr_number=2, repo="owner/repo", status="completed",
+                            review_timestamp=datetime(2026, 8, 1, 10, 0))
+
+    result = reviews_db.get_completed_run_times("owner/repo")
+    assert result[1] == ["2026-08-01 10:00:00", "2026-08-05 10:00:00"]
+    assert result[2] == ["2026-08-01 10:00:00"]
+
+
+def test_get_completed_run_times_repo_scoped(reviews_db):
+    from datetime import datetime
+    reviews_db.save_review(pr_number=1, repo="owner/repo", status="completed",
+                            review_timestamp=datetime(2026, 8, 1, 10, 0))
+    reviews_db.save_review(pr_number=1, repo="other/repo", status="completed",
+                            review_timestamp=datetime(2026, 8, 1, 10, 0))
+
+    result = reviews_db.get_completed_run_times("owner/repo")
+    assert list(result.keys()) == [1]
+
+
+def test_get_completed_run_times_no_reviews(reviews_db):
+    assert reviews_db.get_completed_run_times("owner/repo") == {}

@@ -6,6 +6,7 @@ _METRIC_COLUMNS = [
     "prs_created", "prs_merged", "prs_closed", "reviews", "approvals",
     "changes_requested", "comments", "additions", "deletions", "commits",
     "merge_hours_sum", "merge_hours_count",
+    "review_rounds_sum", "review_rounds_count",
 ]
 
 # Non-key row columns a rollup row dict carries (repo and the day/login/base_ref

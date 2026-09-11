@@ -15,6 +15,7 @@ from backend.database.base import Database
 from backend.database.synced_prs import SyncedPRsDB
 from backend.database.synced_commits import SyncedCommitsDB
 from backend.database.analytics_daily import AnalyticsDailyDB
+from backend.database.reviews import ReviewsDB
 
 
 def _today():
@@ -24,7 +25,7 @@ def _today():
 @pytest.fixture
 def dbs(tmp_path):
     db = Database(tmp_path / "test.db")
-    return SyncedPRsDB(db), SyncedCommitsDB(db), AnalyticsDailyDB(db)
+    return SyncedPRsDB(db), SyncedCommitsDB(db), AnalyticsDailyDB(db), ReviewsDB(db)
 
 
 @pytest.fixture(autouse=True)
@@ -40,7 +41,7 @@ def no_gh(monkeypatch):
 
 @pytest.fixture
 def client(dbs, monkeypatch):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     # The route module's own bound names...
     monkeypatch.setattr(analytics_routes, "get_synced_prs_db", lambda: prs_db)
     monkeypatch.setattr(analytics_routes, "get_synced_commits_db", lambda: commits_db)
@@ -50,6 +51,7 @@ def client(dbs, monkeypatch):
     monkeypatch.setattr(database_pkg, "get_synced_prs_db", lambda: prs_db)
     monkeypatch.setattr(database_pkg, "get_synced_commits_db", lambda: commits_db)
     monkeypatch.setattr(database_pkg, "get_analytics_daily_db", lambda: analytics_db)
+    monkeypatch.setattr(database_pkg, "get_reviews_db", lambda: reviews_db)
 
     monkeypatch.setattr(analytics_routes, "get_pr_sync_config", lambda: {
         "poll_interval_seconds": 60, "commit_branches": ["main"], "enabled": True,
@@ -102,7 +104,7 @@ def _person(body, login):
 # -- window resolution ----------------------------------------------------------
 
 def test_default_window_no_from_to(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     prs_db.upsert_pr("acme/widgets", _pr(1, created="2026-09-05T00:00:00Z"))
 
@@ -114,7 +116,7 @@ def test_default_window_no_from_to(client, dbs):
 
 
 def test_explicit_window_zero_fills_every_day(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     prs_db.upsert_pr("acme/widgets", _pr(1, created="2026-09-01T00:00:00Z"))
 
@@ -130,7 +132,7 @@ def test_explicit_window_zero_fills_every_day(client, dbs):
 
 
 def test_from_after_to_is_400(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     resp = client.get("/api/repos/acme/widgets/analytics/daily?from=2026-09-05&to=2026-09-01")
     assert resp.status_code == 400
@@ -138,7 +140,7 @@ def test_from_after_to_is_400(client, dbs):
 
 @pytest.mark.parametrize("bad", ["2026/09/01", "09-01-2026", "not-a-date", "2026-13-40"])
 def test_bad_date_format_is_400(client, dbs, bad):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     resp = client.get(f"/api/repos/acme/widgets/analytics/daily?from={bad}&to=2026-09-01")
     assert resp.status_code == 400
@@ -150,7 +152,7 @@ def test_bad_date_format_is_400(client, dbs, bad):
 # -- huge ranges (MAX_RANGE_DAYS) ----------------------------------------------------
 
 def test_explicit_range_over_max_is_400(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     resp = client.get("/api/repos/acme/widgets/analytics/daily?from=2010-01-01&to=2026-09-10")
     assert resp.status_code == 400
@@ -159,7 +161,7 @@ def test_explicit_range_over_max_is_400(client, dbs):
 
 
 def test_default_window_clamped_to_max_range_on_old_repo(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     prs_db.upsert_pr("acme/widgets", _pr(1, created="2015-01-01T00:00:00Z"))
 
@@ -191,7 +193,7 @@ def test_bad_explicit_range_skips_rebuild(client, dbs, monkeypatch):
 def test_rebuild_failure_falls_back_to_existing_rollup(client, dbs, monkeypatch):
     """An unguarded rebuild would 500 the whole request; instead it should log
     and fall through to serving whatever rollup rows already exist."""
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     prs_db.upsert_pr("acme/widgets", _pr(1, author="alice", created="2026-09-01T00:00:00Z"))
     # Build the rollup once so there are existing rows to fall back to.
@@ -213,7 +215,7 @@ def test_rebuild_failure_falls_back_to_existing_rollup(client, dbs, monkeypatch)
 # -- base filtering ---------------------------------------------------------------
 
 def test_base_filter_excludes_other_branch_prs_and_reviews(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     prs_db.upsert_pr("acme/widgets", _pr(
         1, author="alice", base_ref="main", created="2026-09-01T00:00:00Z",
@@ -240,7 +242,7 @@ def test_base_filter_excludes_other_branch_prs_and_reviews(client, dbs):
 # -- bot exclusion -----------------------------------------------------------------
 
 def test_bots_excluded_from_people_and_team(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     prs_db.upsert_pr("acme/widgets", _pr(1, author="alice", created="2026-09-01T00:00:00Z"))
     prs_db.upsert_pr("acme/widgets", _pr(2, author="some-bot", created="2026-09-01T00:00:00Z"))
@@ -259,7 +261,7 @@ def test_bots_excluded_from_people_and_team(client, dbs):
 # -- derived metrics -----------------------------------------------------------------
 
 def test_merge_rate_fraction_and_none(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     prs_db.upsert_pr("acme/widgets", _pr(
         1, author="alice", state="MERGED",
@@ -282,10 +284,59 @@ def test_merge_rate_fraction_and_none(client, dbs):
     assert bob["totals"]["avg_merge_hours"] is None
 
 
+def test_avg_review_rounds_value_and_none(client, dbs):
+    prs_db, commits_db, analytics_db, reviews_db = dbs
+    _seed_repo(prs_db, commits_db)
+    prs_db.upsert_pr("acme/widgets", _pr(
+        1, author="alice", state="MERGED",
+        created="2026-09-01T00:00:00Z", merged="2026-09-01T06:00:00Z",
+    ))
+    reviews_db.save_review(pr_number=1, repo="acme/widgets", status="completed", content_json="{}",
+                            review_timestamp=datetime(2026, 9, 1, 1, 0, 0))
+    reviews_db.save_review(pr_number=1, repo="acme/widgets", status="completed", content_json="{}",
+                            is_followup=True, review_timestamp=datetime(2026, 9, 1, 3, 0, 0))
+    # bob's PR is merged but never went through the review pipeline.
+    prs_db.upsert_pr("acme/widgets", _pr(
+        2, author="bob", state="MERGED",
+        created="2026-09-01T00:00:00Z", merged="2026-09-01T06:00:00Z",
+    ))
+
+    resp = client.get("/api/repos/acme/widgets/analytics/daily?from=2026-09-01&to=2026-09-01")
+    body = resp.get_json()
+    alice = _person(body, "alice")
+    assert alice["totals"]["avg_review_rounds"] == pytest.approx(2.0)
+
+    bob = _person(body, "bob")
+    assert bob["totals"]["avg_review_rounds"] is None
+
+    assert body["team"]["totals"]["avg_review_rounds"] == pytest.approx(2.0)
+
+
+def test_review_rounds_series_length_matches_days(client, dbs):
+    prs_db, commits_db, analytics_db, reviews_db = dbs
+    _seed_repo(prs_db, commits_db)
+    prs_db.upsert_pr("acme/widgets", _pr(
+        1, author="alice", state="MERGED",
+        created="2026-09-01T00:00:00Z", merged="2026-09-02T00:00:00Z",
+    ))
+    reviews_db.save_review(pr_number=1, repo="acme/widgets", status="completed", content_json="{}",
+                            review_timestamp=datetime(2026, 9, 1, 1, 0, 0))
+
+    resp = client.get("/api/repos/acme/widgets/analytics/daily?from=2026-09-01&to=2026-09-03")
+    body = resp.get_json()
+    alice = _person(body, "alice")
+    assert len(alice["series"]["review_rounds_sum"]) == 3
+    assert len(alice["series"]["review_rounds_count"]) == 3
+    assert alice["series"]["review_rounds_sum"] == [0, 1, 0]
+    assert alice["series"]["review_rounds_count"] == [0, 1, 0]
+    for series in body["team"]["series"].values():
+        assert len(series) == 3
+
+
 # -- people ordering & avatar_url -----------------------------------------------------
 
 def test_people_ordering_and_avatar_url(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     # alice: 2 merged (score 2), bob: 1 review (score 1), unknown author: 0
     prs_db.upsert_pr("acme/widgets", _pr(
@@ -313,7 +364,7 @@ def test_people_ordering_and_avatar_url(client, dbs):
 
 
 def test_avatar_url_absent_for_login_with_space(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     prs_db.upsert_pr("acme/widgets", _pr(
         1, created="2026-09-01T00:00:00Z",
@@ -328,7 +379,7 @@ def test_avatar_url_absent_for_login_with_space(client, dbs):
 # -- base_branches -----------------------------------------------------------------
 
 def test_base_branches_ordered_most_rows_first(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     prs_db.upsert_pr("acme/widgets", _pr(1, base_ref="main", created="2026-09-01T00:00:00Z"))
     prs_db.upsert_pr("acme/widgets", _pr(2, base_ref="main", created="2026-09-02T00:00:00Z"))
@@ -342,7 +393,7 @@ def test_base_branches_ordered_most_rows_first(client, dbs):
 # -- staleness / syncing / coverage --------------------------------------------------
 
 def test_stale_false_when_fresh(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     prs_db.upsert_pr("acme/widgets", _pr(1, created="2026-09-01T00:00:00Z"))
     resp = client.get("/api/repos/acme/widgets/analytics/daily?from=2026-09-01&to=2026-09-01")
@@ -351,7 +402,7 @@ def test_stale_false_when_fresh(client, dbs):
 
 
 def test_stale_true_when_meta_built_at_old(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     prs_db.upsert_pr("acme/widgets", _pr(1, created="2026-09-01T00:00:00Z"))
     # First request builds the rollup.
@@ -370,7 +421,7 @@ def test_stale_true_when_meta_built_at_old(client, dbs):
 
 
 def test_syncing_true_until_everything_done_then_false(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db, backfill=False, history=False, commit_backfill=False)
     resp = client.get("/api/repos/acme/widgets/analytics/daily")
     body = resp.get_json()
@@ -387,7 +438,7 @@ def test_syncing_true_until_everything_done_then_false(client, dbs):
 def test_syncing_false_when_branch_errored_out(client, dbs):
     """A persistent branch error (e.g. 404 on a non-existent branch) is terminal:
     it must not latch `syncing` true forever once PR history is otherwise done."""
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db, commit_backfill=False)
     commits_db.upsert_branch_state("acme/widgets", "main", backfill_done=0, error="404 Not Found")
 
@@ -403,7 +454,7 @@ def test_syncing_false_when_pr_sync_disabled(client, dbs, monkeypatch):
     monkeypatch.setattr(analytics_routes, "get_pr_sync_config", lambda: {
         "poll_interval_seconds": 60, "commit_branches": ["main"], "enabled": False,
     })
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db, backfill=False, history=False, commit_backfill=False)
 
     resp = client.get("/api/repos/acme/widgets/analytics/daily")
@@ -412,7 +463,7 @@ def test_syncing_false_when_pr_sync_disabled(client, dbs, monkeypatch):
 
 
 def test_coverage_fields(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     prs_db.upsert_pr("acme/widgets", _pr(
         1, author="alice", state="MERGED",
@@ -439,7 +490,7 @@ def test_coverage_fields(client, dbs):
 # -- repo registration / last_updated ------------------------------------------------
 
 def test_unregistered_repo_gets_registered_and_response_built(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     assert prs_db.get_repo("acme/newrepo") is None
 
     resp = client.get("/api/repos/acme/newrepo/analytics/daily")
@@ -451,7 +502,7 @@ def test_unregistered_repo_gets_registered_and_response_built(client, dbs):
 
 
 def test_last_updated_is_iso_z(client, dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_repo(prs_db, commits_db)
     prs_db.upsert_pr("acme/widgets", _pr(1, created="2026-09-01T00:00:00Z"))
     resp = client.get("/api/repos/acme/widgets/analytics/daily?from=2026-09-01&to=2026-09-01")

@@ -398,6 +398,8 @@ CREATE TABLE IF NOT EXISTS analytics_daily (
     commits INTEGER NOT NULL DEFAULT 0,
     merge_hours_sum REAL NOT NULL DEFAULT 0,
     merge_hours_count INTEGER NOT NULL DEFAULT 0,
+    review_rounds_sum INTEGER NOT NULL DEFAULT 0,
+    review_rounds_count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (repo, day, login, base_ref)
 );
 CREATE INDEX IF NOT EXISTS idx_analytics_daily_repo_day
@@ -535,6 +537,7 @@ CREATE INDEX idx_review_requests_status ON review_requests(status);
 | `get_stats()` | Returns aggregate review statistics |
 | `check_pr_reviewed()` | Checks if a PR has existing reviews |
 | `update_review()` | Updates review fields including `content_json` (e.g., marking inline comments as posted) |
+| `get_completed_run_times()` | Repo-scoped: `{pr_number: [review_timestamp, ...]}` for `status='completed'` reviews only; feeds the analytics rollup's review-iterations-before-merge metric |
 
 **Note**: Score is extracted directly from the JSON content at `content_json["score"]["overall"]` rather than using regex parsing.
 
@@ -827,6 +830,7 @@ The Stats sub-tab shows per-developer totals for the selected window/base, eithe
 | Lines - | Total lines deleted |
 | Commits | Total commits |
 | Avg merge | `avg_merge_hours` — average PR-open-to-merge time, in hours |
+| Avg rounds | `avg_review_rounds` — average completed review-pipeline runs per merged PR (only PRs that went through the pipeline); "N/A" when none did |
 
 Columns are click-to-sort (ascending/descending, visual indicators) and tooltipped. A **Team** row is pinned as the table footer, summing every metric across all contributors. Rows and the Team row all come from the same `people`/`team` totals the backend already computed — no client-side aggregation beyond sorting.
 
@@ -835,9 +839,9 @@ Columns are click-to-sort (ascending/descending, visual indicators) and tooltipp
 A **Table ⇄ Time series** toggle switches the sub-tab into a chart:
 
 - **Per-day / Cumulative** toggle controls whether each metric plots as its daily value or a running total.
-- **Metric chips** (multi-select): all Stats table metrics plus `avg_merge_hours`, which is hours-denominated (weighted daily/cumulative average of `merge_hours_sum`/`merge_hours_count`, not summed).
+- **Metric chips** (multi-select): all Stats table metrics plus `avg_merge_hours` (hours-denominated: weighted daily/cumulative average of `merge_hours_sum`/`merge_hours_count`, not summed) and `avg_review_rounds` (a plain decimal, one fractional digit: weighted daily/cumulative average of `review_rounds_sum`/`review_rounds_count`, not summed).
 - **Person chips** (multi-select): Team plus every contributor, sorted by commit count.
-- Selected metrics × selected people form the plotted series (one line per pair); options grey out once **16 series** are selected (`MAX_SERIES`), and a hint explains the cap. A mixed metric selection spanning hours and non-hours metrics gets a "avg merge time is in hours" hint since they share one y-axis.
+- Selected metrics × selected people form the plotted series (one line per pair); options grey out once **16 series** are selected (`MAX_SERIES`), and a hint explains the cap. A mixed metric selection spanning hours/ratio/plain-count metrics gets a hint ("avg merge time is in hours", "avg review rounds is a decimal count") since they share one y-axis.
 - Legend entries toggle a series on/off; a single-day window shows one dot per series with a hint to widen the range.
 
 ### Code Activity (Analytics > Activity)
@@ -890,6 +894,7 @@ The rules the `analytics_rollup` service applies when aggregating `synced_prs`/`
 - **Lines** (`additions`/`deletions`) are PR-level totals from the PR object, attributed on the PR's merge day — there is no per-commit line-stat tracking (see [Known Limitations](#known-limitations)).
 - **`merge_rate`** = `prs_merged / (prs_merged + prs_closed)`, or `null` when both are zero.
 - **`avg_merge_hours`** = `merge_hours_sum / merge_hours_count`, or `null` when no PRs in the window have both a created and merged timestamp.
+- **Review iterations before merge**: a review iteration is one completed run of the app's own code-review pipeline on the PR (`reviews.status = 'completed'`, initial and follow-up runs alike — the same thing the Pipeline overlay's "Rounds" counts). For each MERGED PR, `review_rounds_sum`/`review_rounds_count` are incremented by the count of completed runs at or before `merged_at`, attributed to the PR author on the merge day/`base_ref` bucket — exactly like `merge_hours_sum`/`merge_hours_count`. A merged PR with zero completed runs (never went through the pipeline) contributes nothing to either column, so it is excluded from both the numerator and denominator of `avg_review_rounds`. **`avg_review_rounds`** = `review_rounds_sum / review_rounds_count`, or `null` when no reviewed merges are in the window.
 - **Bot exclusion** happens at query time in the route (not baked into the rollup), via `is_bot_login()`: a login counts as a bot when the row's stored `is_bot` flag is set (from the PR/commit author's `author.is_bot`), when the login starts with `app/` or ends with `[bot]`, or when its normalized form matches an entry in `analytics.bot_logins` (config-driven, case-insensitive).
 
 ### CI/Workflows Tab
@@ -2415,6 +2420,11 @@ effectively unconditional for a synced repo: incremental sync stamps
 `last_synced_at` every cycle regardless of whether any data changed, so the
 rollup is rebuilt after every cycle (cost ≈ 0.1–0.3 s per repo).
 
+`ROLLUP_SCHEMA_VERSION` is `2` (bumped from `1` when `review_rounds_sum`/
+`review_rounds_count` were added), which forces exactly one rebuild per repo
+on the first request after a live restart — every existing `analytics_daily_meta`
+row reads as stale-schema until then.
+
 **Route dispatch** (`GET /api/repos/<owner>/<repo>/prs`, three-way):
 
 1. **DB path** — repo backfilled and no GitHub-only filter active: SQL narrows by
@@ -3170,18 +3180,20 @@ The single endpoint backing all three Analytics sub-tabs (Stats, Activity, Contr
         "prs_created": [1, 0, "..."], "prs_merged": [0, 1, "..."], "prs_closed": [0, 0, "..."],
         "reviews": [2, 0, "..."], "approvals": [1, 0, "..."], "changes_requested": [0, 0, "..."],
         "comments": [1, 0, "..."], "additions": [0, 120, "..."], "deletions": [0, 40, "..."],
-        "commits": [3, 5, "..."], "merge_hours_sum": [0, 6.5, "..."], "merge_hours_count": [0, 1, "..."]
+        "commits": [3, 5, "..."], "merge_hours_sum": [0, 6.5, "..."], "merge_hours_count": [0, 1, "..."],
+        "review_rounds_sum": [0, 2, "..."], "review_rounds_count": [0, 1, "..."]
       },
       "totals": {
         "prs_created": 12, "prs_merged": 10, "prs_closed": 1, "reviews": 30, "approvals": 22,
         "changes_requested": 4, "comments": 4, "additions": 3400, "deletions": 900, "commits": 88,
-        "merge_hours_sum": 65.0, "merge_hours_count": 10, "merge_rate": 0.909, "avg_merge_hours": 6.5
+        "merge_hours_sum": 65.0, "merge_hours_count": 10, "merge_rate": 0.909, "avg_merge_hours": 6.5,
+        "review_rounds_sum": 18, "review_rounds_count": 9, "avg_review_rounds": 2.0
       }
     }
   ],
   "team": {
     "series": { "...": "sum of every person's series, same columns as above" },
-    "totals": { "...": "sum of every person's totals, plus merge_rate/avg_merge_hours recomputed from the summed columns" }
+    "totals": { "...": "sum of every person's totals, plus merge_rate/avg_merge_hours/avg_review_rounds recomputed from the summed columns" }
   },
   "base_branches": ["main", "release"],
   "last_updated": "2026-09-10T14:02:11Z",

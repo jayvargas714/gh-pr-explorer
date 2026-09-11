@@ -14,9 +14,16 @@ import {
   toChartRows,
   METRIC_OPTIONS,
   HOURS_METRICS,
+  RATIO_METRICS,
   TEAM_ID,
   MAX_SERIES,
 } from '../../utils/analyticsSeries'
+
+/** One-decimal plain formatter for ratio metrics (e.g. avg review rounds) --
+ * no K/M suffix, no hours conversion. */
+function formatRatio(value: number): string {
+  return value.toFixed(1)
+}
 
 export function StatsView() {
   const daily = useAnalyticsStore((state) => state.daily)
@@ -147,6 +154,13 @@ export function StatsView() {
       tooltip: 'Average time from PR open to merge',
       render: (row) => formatHours(row.avg_merge_hours),
     },
+    {
+      key: 'avg_review_rounds',
+      label: 'Avg rounds',
+      sortable: true,
+      tooltip: 'Average completed review-pipeline runs per merged PR (only PRs that went through the pipeline)',
+      render: (row) => (row.avg_review_rounds === null ? 'N/A' : row.avg_review_rounds.toFixed(1)),
+    },
   ]
 
   const atCap = statsPeople.length * statsMetrics.length >= MAX_SERIES
@@ -177,7 +191,13 @@ export function StatsView() {
   const chartRows = toChartRows(daily.days, columnsForChart)
   const allHours = statsMetrics.every((m) => HOURS_METRICS.has(m))
   const someHours = statsMetrics.some((m) => HOURS_METRICS.has(m))
-  const yFormatter = allHours ? formatHours : formatNumber
+  const allRatio = statsMetrics.every((m) => RATIO_METRICS.has(m))
+  const someRatio = statsMetrics.some((m) => RATIO_METRICS.has(m))
+  const yFormatter = allHours ? formatHours : allRatio ? formatRatio : formatNumber
+  const mixedUnitHints = [
+    someHours && !allHours ? 'avg merge time is in hours' : null,
+    someRatio && !allRatio ? 'avg review rounds is a decimal count' : null,
+  ].filter((hint): hint is string => hint !== null)
 
   return (
     <div className="mx-stats-view">
@@ -229,7 +249,9 @@ export function StatsView() {
             <ChipGroup options={personOptions} selected={statsPeople} onToggle={toggleStatsPerson} />
           </div>
           {atCap && <p className="mx-analytics__hint">Up to 16 series at once</p>}
-          {someHours && !allHours && <p className="mx-analytics__hint">avg merge time is in hours</p>}
+          {mixedUnitHints.length > 0 && (
+            <p className="mx-analytics__hint">{mixedUnitHints.join('; ')}</p>
+          )}
           <TimeSeriesChart
             rows={chartRows}
             series={validSpecs}

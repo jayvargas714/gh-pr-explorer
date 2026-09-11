@@ -19,6 +19,7 @@ METRIC_COLUMNS = (
     "prs_created", "prs_merged", "prs_closed", "reviews", "approvals",
     "changes_requested", "comments", "additions", "deletions", "commits",
     "merge_hours_sum", "merge_hours_count",
+    "review_rounds_sum", "review_rounds_count",
 )
 
 # Upper bound on the requested window (~5 years), so a huge explicit range
@@ -76,6 +77,8 @@ def _totals_from_series(series):
     totals["merge_rate"] = (totals["prs_merged"] / denom) if denom else None
     count = totals["merge_hours_count"]
     totals["avg_merge_hours"] = (totals["merge_hours_sum"] / count) if count else None
+    rounds_count = totals["review_rounds_count"]
+    totals["avg_review_rounds"] = (totals["review_rounds_sum"] / rounds_count) if rounds_count else None
     return totals
 
 

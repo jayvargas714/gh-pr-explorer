@@ -66,3 +66,44 @@ def test_drop_legacy_analytics_caches_migration_fresh_db(tmp_path):
     """Safe on a fresh DB where the legacy tables never existed."""
     db = Database(tmp_path / "fresh.db")
     assert db.is_migration_done("drop_legacy_analytics_caches")
+
+
+def test_analytics_daily_gains_review_rounds_columns_on_existing_db(tmp_path):
+    """A DB created with the old analytics_daily DDL (no review_rounds_* columns)
+    gains them via the PRAGMA-guarded ALTER on the next init."""
+    db_path = tmp_path / "test.db"
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE analytics_daily (
+            repo TEXT NOT NULL,
+            day TEXT NOT NULL,
+            login TEXT NOT NULL,
+            base_ref TEXT NOT NULL,
+            is_bot INTEGER NOT NULL DEFAULT 0,
+            prs_created INTEGER NOT NULL DEFAULT 0,
+            prs_merged INTEGER NOT NULL DEFAULT 0,
+            prs_closed INTEGER NOT NULL DEFAULT 0,
+            reviews INTEGER NOT NULL DEFAULT 0,
+            approvals INTEGER NOT NULL DEFAULT 0,
+            changes_requested INTEGER NOT NULL DEFAULT 0,
+            comments INTEGER NOT NULL DEFAULT 0,
+            additions INTEGER NOT NULL DEFAULT 0,
+            deletions INTEGER NOT NULL DEFAULT 0,
+            commits INTEGER NOT NULL DEFAULT 0,
+            merge_hours_sum REAL NOT NULL DEFAULT 0,
+            merge_hours_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (repo, day, login, base_ref)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+    db = Database(db_path)
+    conn = sqlite3.connect(db_path)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(analytics_daily)").fetchall()}
+    conn.close()
+    assert {"review_rounds_sum", "review_rounds_count"} <= cols
+
+    # Re-init is a no-op (idempotent).
+    Database(db_path)

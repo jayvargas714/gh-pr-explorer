@@ -218,6 +218,25 @@ class ReviewsDB:
 
         return counts
 
+    def get_completed_run_times(self, repo: str) -> Dict[int, List[str]]:
+        """pr_number -> completed review_timestamp strings for a repo.
+
+        Used by the analytics rollup to count review-pipeline iterations
+        before a PR's merge. Only `status='completed'` runs are included —
+        failed/running reviews never count as a review iteration.
+        """
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT pr_number, review_timestamp FROM reviews "
+                "WHERE repo = ? AND status = 'completed'",
+                (repo,),
+            )
+            result: Dict[int, List[str]] = {}
+            for row in cursor.fetchall():
+                result.setdefault(row["pr_number"], []).append(str(row["review_timestamp"]))
+            return result
+
     def get_reviews_for_pr(self, repo: str, pr_number: int) -> List[Dict[str, Any]]:
         """Get all reviews for a specific PR (review chain)."""
         with self.db.connection() as conn:

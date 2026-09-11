@@ -1,5 +1,7 @@
 """Tests for the analytics daily rollup builder."""
 
+from datetime import datetime
+
 import pytest
 
 import backend.database as database_pkg
@@ -7,6 +9,7 @@ from backend.database.base import Database
 from backend.database.synced_prs import SyncedPRsDB
 from backend.database.synced_commits import SyncedCommitsDB
 from backend.database.analytics_daily import AnalyticsDailyDB
+from backend.database.reviews import ReviewsDB
 from backend.services.analytics_rollup import (
     ROLLUP_SCHEMA_VERSION, build_rows, needs_rebuild, rebuild_repo,
 )
@@ -228,6 +231,111 @@ def test_counters_no_data():
     }
 
 
+# -- review rounds (avg review iterations before merge) ------------------------
+
+def test_run_before_merge_counts():
+    rows, _ = build_rows([
+        _pr(1, state="MERGED", created_at="2026-09-01T00:00:00Z",
+            merged_at="2026-09-02T12:00:00Z"),
+    ], [], review_runs={1: ["2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z"]})
+    row = _find(rows, "2026-09-02", "alice")
+    assert row["review_rounds_sum"] == 2
+    assert row["review_rounds_count"] == 1
+
+
+def test_run_at_merged_at_exactly_counts():
+    rows, _ = build_rows([
+        _pr(1, state="MERGED", created_at="2026-09-01T00:00:00Z",
+            merged_at="2026-09-02T12:00:00Z"),
+    ], [], review_runs={1: ["2026-09-02T12:00:00Z"]})
+    row = _find(rows, "2026-09-02", "alice")
+    assert row["review_rounds_sum"] == 1
+    assert row["review_rounds_count"] == 1
+
+
+def test_run_after_merge_does_not_count():
+    rows, _ = build_rows([
+        _pr(1, state="MERGED", created_at="2026-09-01T00:00:00Z",
+            merged_at="2026-09-02T12:00:00Z"),
+    ], [], review_runs={1: ["2026-09-01T00:00:00Z", "2026-09-03T00:00:00Z"]})
+    row = _find(rows, "2026-09-02", "alice")
+    assert row["review_rounds_sum"] == 1
+    assert row["review_rounds_count"] == 1
+
+
+def test_merged_pr_with_zero_runs_contributes_nothing():
+    rows, _ = build_rows([
+        _pr(1, state="MERGED", created_at="2026-09-01T00:00:00Z",
+            merged_at="2026-09-02T12:00:00Z"),
+    ], [], review_runs={})
+    row = _find(rows, "2026-09-02", "alice")
+    assert row["review_rounds_sum"] == 0
+    assert row["review_rounds_count"] == 0
+
+
+def test_merged_pr_with_only_post_merge_runs_contributes_nothing():
+    """All runs land after merged_at -- n == 0, so the count column stays 0
+    too (not 1 with a 0 sum)."""
+    rows, _ = build_rows([
+        _pr(1, state="MERGED", created_at="2026-09-01T00:00:00Z",
+            merged_at="2026-09-02T12:00:00Z"),
+    ], [], review_runs={1: ["2026-09-03T00:00:00Z"]})
+    row = _find(rows, "2026-09-02", "alice")
+    assert row["review_rounds_sum"] == 0
+    assert row["review_rounds_count"] == 0
+
+
+def test_open_pr_never_contributes_review_rounds():
+    rows, _ = build_rows([
+        _pr(1, state="OPEN", created_at="2026-09-01T00:00:00Z"),
+    ], [], review_runs={1: ["2026-09-01T00:00:00Z"]})
+    row = _find(rows, "2026-09-01", "alice")
+    assert row["review_rounds_sum"] == 0
+    assert row["review_rounds_count"] == 0
+
+
+def test_closed_pr_never_contributes_review_rounds():
+    rows, _ = build_rows([
+        _pr(1, state="CLOSED", created_at="2026-09-01T00:00:00Z", closed_at="2026-09-03T00:00:00Z"),
+    ], [], review_runs={1: ["2026-09-01T00:00:00Z"]})
+    row = _find(rows, "2026-09-03", "alice")
+    assert row["review_rounds_sum"] == 0
+    assert row["review_rounds_count"] == 0
+
+
+def test_review_rounds_attributed_to_author_merge_day_base_ref():
+    rows, _ = build_rows([
+        _pr(1, author="bob", base_ref="release", state="MERGED", created_at="2026-09-01T00:00:00Z",
+            merged_at="2026-09-05T00:00:00Z"),
+    ], [], review_runs={1: ["2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z", "2026-09-03T00:00:00Z"]})
+    row = _find(rows, "2026-09-05", "bob", base_ref="release")
+    assert row["review_rounds_sum"] == 3
+    assert row["review_rounds_count"] == 1
+
+
+def test_review_rounds_fractional_second_timestamp_parses():
+    """review_timestamp strings from SQLite can carry fractional seconds
+    (e.g. datetime.now() with a non-zero microsecond); _parse_utc must
+    still parse and compare them correctly."""
+    rows, _ = build_rows([
+        _pr(1, state="MERGED", created_at="2026-09-01T00:00:00Z",
+            merged_at="2026-09-02T12:00:00Z"),
+    ], [], review_runs={1: ["2026-09-02 11:59:59.123456", "2026-09-02 12:00:01.000000"]})
+    row = _find(rows, "2026-09-02", "alice")
+    assert row["review_rounds_sum"] == 1
+    assert row["review_rounds_count"] == 1
+
+
+def test_review_rounds_unknown_pr_number_ignored():
+    """review_runs entries for a PR not in pr_rows are simply never looked up."""
+    rows, _ = build_rows([
+        _pr(1, state="MERGED", created_at="2026-09-01T00:00:00Z", merged_at="2026-09-02T00:00:00Z"),
+    ], [], review_runs={999: ["2026-09-01T00:00:00Z"]})
+    row = _find(rows, "2026-09-02", "alice")
+    assert row["review_rounds_sum"] == 0
+    assert row["review_rounds_count"] == 0
+
+
 # -- output ordering -----------------------------------------------------------
 
 def test_rows_sorted_by_day_login_base_ref():
@@ -248,10 +356,12 @@ def dbs(monkeypatch, tmp_path):
     prs_db = SyncedPRsDB(db)
     commits_db = SyncedCommitsDB(db)
     analytics_db = AnalyticsDailyDB(db)
+    reviews_db = ReviewsDB(db)
     monkeypatch.setattr(database_pkg, "get_synced_prs_db", lambda: prs_db)
     monkeypatch.setattr(database_pkg, "get_synced_commits_db", lambda: commits_db)
     monkeypatch.setattr(database_pkg, "get_analytics_daily_db", lambda: analytics_db)
-    return prs_db, commits_db, analytics_db
+    monkeypatch.setattr(database_pkg, "get_reviews_db", lambda: reviews_db)
+    return prs_db, commits_db, analytics_db, reviews_db
 
 
 def _seed_pr(prs_db, repo, number=1, author="alice", state="MERGED",
@@ -267,7 +377,7 @@ def _seed_pr(prs_db, repo, number=1, author="alice", state="MERGED",
 
 
 def test_rebuild_repo_writes_rows_and_meta(dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_pr(prs_db, "a/b")
     commits_db.upsert_commits("a/b", "main", [
         {"sha": "s1", "login": "alice", "committed_at": "2026-09-01T00:00:00Z", "parents": 1},
@@ -288,14 +398,14 @@ def test_needs_rebuild_true_with_no_meta(dbs):
 
 
 def test_needs_rebuild_false_right_after_rebuild(dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_pr(prs_db, "a/b")
     rebuild_repo("a/b")
     assert needs_rebuild("a/b") is False
 
 
 def test_needs_rebuild_true_after_last_synced_bumped(dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_pr(prs_db, "a/b")
     rebuild_repo("a/b")
     assert needs_rebuild("a/b") is False
@@ -311,7 +421,7 @@ def test_needs_rebuild_true_after_last_synced_bumped(dbs):
 
 
 def test_needs_rebuild_true_on_schema_version_mismatch(dbs):
-    prs_db, commits_db, analytics_db = dbs
+    prs_db, commits_db, analytics_db, reviews_db = dbs
     _seed_pr(prs_db, "a/b")
     rebuild_repo("a/b")
     with analytics_db.db.connection() as conn:
@@ -320,3 +430,51 @@ def test_needs_rebuild_true_on_schema_version_mismatch(dbs):
             (ROLLUP_SCHEMA_VERSION + 1, "a/b"),
         )
     assert needs_rebuild("a/b") is True
+
+
+# -- rebuild_repo: review rounds sourced from ReviewsDB -------------------------
+
+def test_rebuild_repo_counts_completed_review_rounds(dbs):
+    prs_db, commits_db, analytics_db, reviews_db = dbs
+    _seed_pr(prs_db, "a/b", number=1, author="alice",
+             created="2026-09-01T00:00:00Z", merged="2026-09-02T00:00:00Z")
+    reviews_db.save_review(pr_number=1, repo="a/b", status="completed", content_json="{}",
+                            review_timestamp=datetime(2026, 9, 1, 6, 0, 0))
+    reviews_db.save_review(pr_number=1, repo="a/b", status="completed", content_json="{}",
+                            is_followup=True, review_timestamp=datetime(2026, 9, 1, 18, 0, 0))
+
+    rebuild_repo("a/b")
+    rows = analytics_db.query("a/b", "2000-01-01", "2100-01-01", base_ref="main")
+    row = _find(rows, "2026-09-02", "alice")
+    assert row["review_rounds_sum"] == 2
+    assert row["review_rounds_count"] == 1
+
+
+def test_rebuild_repo_excludes_failed_reviews(dbs):
+    """A failed run is filtered out at the source (ReviewsDB.get_completed_run_times),
+    so it never reaches the rollup as a review iteration."""
+    prs_db, commits_db, analytics_db, reviews_db = dbs
+    _seed_pr(prs_db, "a/b", number=1, author="alice",
+             created="2026-09-01T00:00:00Z", merged="2026-09-02T00:00:00Z")
+    reviews_db.save_review(pr_number=1, repo="a/b", status="completed", content_json="{}",
+                            review_timestamp=datetime(2026, 9, 1, 6, 0, 0))
+    reviews_db.save_review(pr_number=1, repo="a/b", status="failed", content_json="{}",
+                            review_timestamp=datetime(2026, 9, 1, 18, 0, 0))
+
+    rebuild_repo("a/b")
+    rows = analytics_db.query("a/b", "2000-01-01", "2100-01-01", base_ref="main")
+    row = _find(rows, "2026-09-02", "alice")
+    assert row["review_rounds_sum"] == 1
+    assert row["review_rounds_count"] == 1
+
+
+def test_rebuild_repo_pr_never_reviewed_contributes_nothing(dbs):
+    prs_db, commits_db, analytics_db, reviews_db = dbs
+    _seed_pr(prs_db, "a/b", number=1, author="alice",
+             created="2026-09-01T00:00:00Z", merged="2026-09-02T00:00:00Z")
+
+    rebuild_repo("a/b")
+    rows = analytics_db.query("a/b", "2000-01-01", "2100-01-01", base_ref="main")
+    row = _find(rows, "2026-09-02", "alice")
+    assert row["review_rounds_sum"] == 0
+    assert row["review_rounds_count"] == 0

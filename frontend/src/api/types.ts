@@ -208,10 +208,13 @@ export type DailyRawKey =
   | 'commits'
   | 'merge_hours_sum'
   | 'merge_hours_count'
+  | 'review_rounds_sum'
+  | 'review_rounds_count'
 export type DailySeries = Record<DailyRawKey, number[]>
 export type DailyTotals = Record<DailyRawKey, number> & {
   merge_rate: number | null
   avg_merge_hours: number | null
+  avg_review_rounds: number | null
 }
 export interface DailyPerson {
   login: string
