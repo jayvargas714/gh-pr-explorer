@@ -46,8 +46,8 @@ export function AutoVerdictBadge({ record }: AutoVerdictBadgeProps) {
       ? ` / ${record.disputedCount ?? 0} disputed / ${record.deferredCount ?? 0} deferred`
       : ''
   const tallies =
-    record.criticalCount !== null
-      ? `${record.criticalCount} critical / ${record.majorCount} major / ${record.minorCount} minor${setAside}`
+    record.blockingCount !== null
+      ? `${record.blockingCount} blocking / ${record.nonBlockingCount ?? 0} non-blocking${setAside}`
       : null
 
   const tooltip = [

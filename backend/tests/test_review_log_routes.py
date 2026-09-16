@@ -137,15 +137,14 @@ def test_stats_endpoint_on_empty_log(client):
     }
 
 
-def _review_with(reviews_db, *, critical=0, major=0, minor=0):
+def _review_with(reviews_db, *, blocking=0, non_blocking=0):
     import json
     issues = lambda n: [{"title": f"i{i}"} for i in range(n)]
     return reviews_db.save_review(
         pr_number=1, repo=REPO,
-        content_json=json.dumps({"sections": [
-            {"type": "critical", "issues": issues(critical)},
-            {"type": "major", "issues": issues(major)},
-            {"type": "minor", "issues": issues(minor)},
+        content_json=json.dumps({"schema_version": "2.0.0", "sections": [
+            {"type": "blocking", "issues": issues(blocking)},
+            {"type": "non_blocking", "issues": issues(non_blocking)},
         ]}),
     )
 
@@ -153,11 +152,11 @@ def _review_with(reviews_db, *, critical=0, major=0, minor=0):
 def test_completed_events_carry_issue_counts(client):
     c, events_db = client
     reviews_db = ReviewsDB(events_db.db)
-    rid = _review_with(reviews_db, critical=1, major=2, minor=3)
+    rid = _review_with(reviews_db, blocking=3, non_blocking=3)
     events_db.log_event("completed", REPO, 1, "run-1", attempt=1, review_id=rid)
 
     events = c.get("/api/review-logs").get_json()["events"]
-    assert events[0]["issue_counts"] == {"critical": 1, "major": 2, "minor": 3}
+    assert events[0]["issue_counts"] == {"blocking": 3, "non_blocking": 3}
 
 
 def test_events_without_a_review_have_null_counts(client):

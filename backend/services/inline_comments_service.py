@@ -10,19 +10,19 @@ import re
 import subprocess
 
 from backend.services.github_service import fetch_pr_head_sha
+from backend.services.review_schema import load_content_json
 
 logger = logging.getLogger(__name__)
 
 SECTION_HEADINGS = {
-    "critical": "Critical Issues",
-    "major": "Major Concerns",
-    "minor": "Minor Issues",
+    "blocking": "Blocking Issues",
+    "non_blocking": "Non-Blocking Issues",
 }
 
+# inline_comments_posted predates the tiers and is the blocking tier's flag.
 SECTION_DB_COLUMNS = {
-    "critical": "inline_comments_posted",
-    "major": "major_concerns_posted",
-    "minor": "minor_issues_posted",
+    "blocking": "inline_comments_posted",
+    "non_blocking": "non_blocking_posted",
 }
 
 # ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ def parse_section_issues_from_json(content_json: dict, section_type: str) -> lis
 
     Args:
         content_json: Parsed review JSON dict.
-        section_type: One of 'critical', 'major', 'minor'.
+        section_type: 'blocking' or 'non_blocking'.
 
     Returns:
         List of dicts: [{ title, path, start_line, end_line, body }]
@@ -169,11 +169,6 @@ def parse_section_issues(content, section_heading):
     return issues
 
 
-def parse_critical_issues(content):
-    """Parse critical issues from review markdown content (backward-compat wrapper)."""
-    return parse_section_issues(content, SECTION_HEADINGS["critical"])
-
-
 def _post_file_comment(owner, repo_name, pr_number, commit_sha, issue):
     """Post a single file-level comment via the individual comments endpoint."""
     comment_body = {
@@ -197,13 +192,13 @@ def _post_file_comment(owner, repo_name, pr_number, commit_sha, issue):
     return result
 
 
-def preview_section_issues(reviews_db, review_id, section="critical"):
+def preview_section_issues(reviews_db, review_id, section="blocking"):
     """Return parsed issues for a review section without posting them.
 
     Args:
         reviews_db: ReviewsDB instance.
         review_id: The review ID.
-        section: One of 'critical', 'major', or 'minor'.
+        section: 'blocking' or 'non_blocking'.
 
     Returns:
         tuple: (response_dict, status_code)
@@ -218,13 +213,9 @@ def preview_section_issues(reviews_db, review_id, section="critical"):
         return {"error": "Review not found"}, 404
 
     issues = []
-    content_json_str = review.get("content_json")
-    if content_json_str:
-        try:
-            content_json = json.loads(content_json_str)
-            issues = parse_section_issues_from_json(content_json, section)
-        except (json.JSONDecodeError, TypeError):
-            pass
+    content_json = load_content_json(review.get("content_json"))
+    if content_json is not None:
+        issues = parse_section_issues_from_json(content_json, section)
 
     if not issues:
         return {"error": f"No {section_heading.lower()} found in review content", "issues": []}, 400
@@ -246,13 +237,13 @@ def preview_section_issues(reviews_db, review_id, section="critical"):
     }, 200
 
 
-def post_inline_comments(reviews_db, review_id, section="critical", selected_indices=None):
+def post_inline_comments(reviews_db, review_id, section="blocking", selected_indices=None):
     """Post issues from a review section as inline PR comments.
 
     Args:
         reviews_db: ReviewsDB instance.
         review_id: The review ID.
-        section: One of 'critical', 'major', or 'minor'.
+        section: 'blocking' or 'non_blocking'.
         selected_indices: Optional list of issue indices to post. If None, posts all.
 
     Line-level issues are batched into a review. File-level issues (no line numbers)
@@ -274,15 +265,11 @@ def post_inline_comments(reviews_db, review_id, section="critical", selected_ind
     if review.get(db_column):
         return {"error": f"{section_heading} have already been posted for this review"}, 409
 
-    # JSON-first: parse from content_json, fall back to markdown regex
+    # JSON-first: parse from content_json (legacy documents folded on read)
     all_issues = []
-    content_json_str = review.get("content_json")
-    if content_json_str:
-        try:
-            content_json = json.loads(content_json_str)
-            all_issues = parse_section_issues_from_json(content_json, section)
-        except (json.JSONDecodeError, TypeError):
-            pass
+    content_json = load_content_json(review.get("content_json"))
+    if content_json is not None:
+        all_issues = parse_section_issues_from_json(content_json, section)
 
     if not all_issues:
         return {"error": f"No {section_heading.lower()} found in review content", "issues_found": 0}, 400

@@ -15,7 +15,7 @@ const COLUMNS: { key: PipelineSortColumn; label: string; tooltip?: string }[] = 
   { key: 'auto', label: 'Auto', tooltip: 'Auto-verdict arming' },
   { key: 'ci', label: 'CI' },
   { key: 'review', label: 'Review' },
-  { key: 'issues', label: 'Issues', tooltip: 'Critical / Major / Minor — posted/found' },
+  { key: 'issues', label: 'Issues', tooltip: 'Blocking / Non-Blocking — posted/found' },
   { key: 'updated', label: 'Updated' },
 ]
 

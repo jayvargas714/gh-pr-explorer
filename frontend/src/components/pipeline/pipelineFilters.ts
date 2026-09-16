@@ -191,7 +191,7 @@ function updatedMs(row: PipelineRow): number {
 function issuesFound(row: PipelineRow): number {
   const r = row.review
   if (!r) return -1
-  return (r.critical.found ?? 0) + (r.major.found ?? 0) + (r.minor.found ?? 0)
+  return (r.blocking.found ?? 0) + (r.non_blocking.found ?? 0)
 }
 
 function columnCompare(column: PipelineSortColumn, a: PipelineRow, b: PipelineRow): number {

@@ -68,10 +68,10 @@ def spawned(monkeypatch):
 
 def findings_content(summary):
     return json.dumps({
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "metadata": {"pr_number": PR, "repository": FULL_REPO},
         "summary": summary,
-        "sections": [{"type": "major", "display_name": "Major Concerns", "issues": [
+        "sections": [{"type": "blocking", "display_name": "Blocking Issues", "issues": [
             {"title": "Something real", "location": {"file": "a.go", "start_line": 1,
                                                      "end_line": 2}, "problem": "x"}]}],
         "highlights": [],

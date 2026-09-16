@@ -1,5 +1,6 @@
 """Review JSON schema: validation, JSON<->markdown conversion, section name config."""
 
+import copy
 import json
 import logging
 import re
@@ -10,7 +11,10 @@ from backend.config import get_config
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "1.0.0"
+# 2.0.0 replaced the three-tier critical/major/minor sections with two tiers:
+# blocking (must be fixed in this PR) and non_blocking. Legacy documents are
+# upgraded by normalize_legacy_sections at every read and write boundary.
+SCHEMA_VERSION = "2.0.0"
 
 # Path to the formal JSON Schema spec (for external tools/agents)
 SCHEMA_SPEC_PATH = Path(__file__).parent / "review_schema_spec.json"
@@ -27,15 +31,23 @@ RESOLUTION_STATUSES = (
 
 # Default section display names (can be overridden in config.json)
 DEFAULT_SECTION_NAMES = {
-    "critical": "Critical Issues",
-    "major": "Major Concerns",
-    "minor": "Minor Issues",
+    "blocking": "Blocking Issues",
+    "non_blocking": "Non-Blocking Issues",
     "disputed": "Disputed",
     "deferred": "Deferred",
 }
 
 
-SEVERITIES = ("critical", "major", "minor")
+SEVERITIES = ("blocking", "non_blocking")
+
+# Human labels for the severity values (``str.title()`` would render
+# "Non_Blocking").
+SEVERITY_LABELS = {"blocking": "Blocking", "non_blocking": "Non-Blocking"}
+
+# The pre-2.0.0 three-tier vocabulary and how it folds into the two tiers.
+LEGACY_SEVERITY_MAP = {"critical": "blocking", "major": "blocking", "minor": "non_blocking"}
+# Merge order inside a tier when several legacy sections fold into one.
+_LEGACY_MERGE_ORDER = ("critical", "major", "minor")
 
 # Sections whose issues were set aside by an author disposition. Each issue there
 # carries the severity it had when first raised plus the author's disposition, and
@@ -44,18 +56,114 @@ DISPOSITION_SECTIONS = ("disputed", "deferred")
 SECTION_TYPES = SEVERITIES + DISPOSITION_SECTIONS
 
 
+def _needs_normalization(content_json: Dict[str, Any]) -> bool:
+    if content_json.get("schema_version") != SCHEMA_VERSION:
+        return True
+    for section in content_json.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        sec_type = section.get("type")
+        if sec_type in LEGACY_SEVERITY_MAP:
+            return True
+        if sec_type in DISPOSITION_SECTIONS:
+            for issue in section.get("issues") or []:
+                if isinstance(issue, dict) and \
+                        str(issue.get("severity", "")).lower() in LEGACY_SEVERITY_MAP:
+                    return True
+    return False
+
+
+def normalize_legacy_sections(content_json: Dict[str, Any],
+                              display_names: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """Upgrade a legacy (critical/major/minor) review document to the two-tier schema.
+
+    Every ``critical`` and ``major`` section folds into one ``blocking`` section
+    (critical issues first, then major), ``minor`` becomes ``non_blocking``, and
+    the ``severity`` recorded on disputed/deferred issues is remapped the same
+    way. The merged section takes the position of the first section that fed it;
+    an existing two-tier section absorbs stray legacy ones. Unknown section
+    types pass through untouched.
+
+    Returns the input object itself when nothing needs upgrading (the
+    idempotency contract the data migration relies on); otherwise a new dict —
+    the input is never mutated.
+    """
+    if not _needs_normalization(content_json):
+        return content_json
+
+    names = dict(DEFAULT_SECTION_NAMES)
+    names.update(display_names or {})
+
+    out = copy.deepcopy(content_json)
+    out["schema_version"] = SCHEMA_VERSION
+
+    new_sections: List[Any] = []
+    slot: Dict[str, int] = {}
+    buckets: Dict[str, Dict[str, List[Any]]] = {}
+    for section in out.get("sections") or []:
+        if not isinstance(section, dict):
+            new_sections.append(section)
+            continue
+        sec_type = section.get("type")
+        target = LEGACY_SEVERITY_MAP.get(sec_type, sec_type)
+        if target in SEVERITIES:
+            if target not in slot:
+                slot[target] = len(new_sections)
+                display_name = section.get("display_name") if sec_type == target else names[target]
+                new_sections.append({**section, "type": target, "display_name": display_name,
+                                     "issues": []})
+            bucket = buckets.setdefault(
+                target, {key: [] for key in ("native",) + _LEGACY_MERGE_ORDER})
+            bucket["native" if sec_type == target else sec_type].extend(section.get("issues") or [])
+        elif sec_type in DISPOSITION_SECTIONS:
+            for issue in section.get("issues") or []:
+                if isinstance(issue, dict):
+                    legacy = str(issue.get("severity", "")).lower()
+                    if legacy in LEGACY_SEVERITY_MAP:
+                        issue["severity"] = LEGACY_SEVERITY_MAP[legacy]
+            new_sections.append(section)
+        else:
+            new_sections.append(section)
+
+    for target, idx in slot.items():
+        bucket = buckets[target]
+        new_sections[idx]["issues"] = sum(
+            (bucket[key] for key in ("native",) + _LEGACY_MERGE_ORDER), [])
+    out["sections"] = new_sections
+    return out
+
+
+def load_content_json(raw: Any) -> Optional[Dict[str, Any]]:
+    """Parse a stored ``content_json`` value and upgrade it to the current schema.
+
+    The single read choke point for review content: ``None`` for empty,
+    unparseable or non-object input, so a row restored from an old backup can
+    never be tallied as "zero issues" by a caller that skipped normalization.
+    """
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return normalize_legacy_sections(data)
+
+
 def count_issues(content_json: Dict[str, Any]) -> Dict[str, int]:
     """Tally a review's content_json.
 
-    Returns the three severity counts (findings the author must fix) plus
+    Returns the two severity counts (findings the author must fix) plus
     ``disputed``, ``deferred`` and ``disputed_blocking`` — the disputed issues
-    whose original severity is critical or major. Set-aside issues are never
-    added to the severity counts.
+    whose original severity is blocking. Set-aside issues are never added to
+    the severity counts. Legacy documents are normalized first.
 
     Lives here with the other content_json helpers so read-only callers (the
     review log) can tally a review without importing auto_verdict_service, which
     pulls in verdict_service and the gh subprocess layer.
     """
+    content_json = normalize_legacy_sections(content_json)
     tallies = {sev: 0 for sev in SECTION_TYPES}
     tallies["disputed_blocking"] = 0
     for section in content_json.get("sections", []) or []:
@@ -67,7 +175,7 @@ def count_issues(content_json: Dict[str, Any]) -> Dict[str, int]:
         if section_type == "disputed":
             tallies["disputed_blocking"] = sum(
                 1 for issue in issues
-                if str(issue.get("severity", "")).lower() in ("critical", "major")
+                if str(issue.get("severity", "")).lower() == "blocking"
             )
     return tallies
 
@@ -197,7 +305,8 @@ def format_issue_lines(issues: List[Dict[str, Any]]) -> List[str]:
         if loc_str:
             lines.append(f"- Location: `{loc_str}`")
         if issue.get("severity"):
-            lines.append(f"- Severity: {str(issue['severity']).title()}")
+            raw_sev = str(issue["severity"])
+            lines.append(f"- Severity: {SEVERITY_LABELS.get(raw_sev.lower(), raw_sev.title())}")
         if issue.get("disposition"):
             lines.append(f"- Disposition: {issue['disposition']}")
         if issue.get("principle"):
@@ -410,7 +519,8 @@ def markdown_to_json(content: str, metadata: Optional[Dict[str, Any]] = None) ->
     if followup:
         result["followup"] = followup
 
-    return result
+    # Legacy-heading markdown yields legacy section types; fold them in.
+    return normalize_legacy_sections(result)
 
 
 def _empty_review(metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -423,9 +533,8 @@ def _empty_review(metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         },
         "summary": "",
         "sections": [
-            {"type": "critical", "display_name": "Critical Issues", "issues": []},
-            {"type": "major", "display_name": "Major Concerns", "issues": []},
-            {"type": "minor", "display_name": "Minor Issues", "issues": []},
+            {"type": sev, "display_name": DEFAULT_SECTION_NAMES[sev], "issues": []}
+            for sev in SEVERITIES
         ],
         "highlights": [],
         "score": {"overall": 0},
@@ -522,7 +631,7 @@ def _parse_summary(content: str) -> str:
     # Heading-style: "## Summary" or "### Summary" — terminator is any
     # subsequent section heading or horizontal rule.
     m = re.search(
-        r'^#{2,6}\s*Summary\s*\n+(.*?)(?=\n#{2,6}\s|\n---\s*\n|\n\*\*(?:Critical|Major|Minor|Disputed|Deferred|Positive|Score|Recommendations)\*\*)',
+        r'^#{2,6}\s*Summary\s*\n+(.*?)(?=\n#{2,6}\s|\n---\s*\n|\n\*\*(?:Blocking|Non-Blocking|Critical|Major|Minor|Disputed|Deferred|Positive|Score|Recommendations)\b[^*\n]*\*\*)',
         content, re.DOTALL | re.IGNORECASE | re.MULTILINE
     )
     if m:
@@ -530,7 +639,7 @@ def _parse_summary(content: str) -> str:
 
     # Bold-style: **Summary**
     m = re.search(
-        r'\*\*Summary\*\*\s*\n+(.*?)(?=\n---|\n\*\*(?:Critical|Major|Minor|Disputed|Deferred|Positive|Score|Recommendations))',
+        r'\*\*Summary\*\*\s*\n+(.*?)(?=\n---|\n\*\*(?:Blocking|Non-Blocking|Critical|Major|Minor|Disputed|Deferred|Positive|Score|Recommendations))',
         content, re.DOTALL | re.IGNORECASE
     )
     if m:
@@ -541,7 +650,7 @@ def _parse_summary(content: str) -> str:
     if len(parts) >= 2:
         candidate = parts[1].strip()
         # Skip if it starts with a section heading
-        if candidate and not re.match(r'\*\*(?:Critical|Major|Minor)', candidate, re.IGNORECASE):
+        if candidate and not re.match(r'\*\*(?:Blocking|Non-Blocking|Critical|Major|Minor)', candidate, re.IGNORECASE):
             # Remove leading **Summary** or ## Summary if present
             candidate = re.sub(r'^(?:\*\*Summary\*\*|#{2,6}\s*Summary)\s*\n*', '', candidate).strip()
             return candidate
@@ -554,8 +663,12 @@ def extract_markdown_summary(md_content: str) -> str:
     return _parse_summary(md_content)
 
 
-# Section heading patterns and their types
+# Section heading patterns and their types. The legacy three-tier headings are
+# still recognised (older .md files on disk); markdown_to_json folds them into
+# the two tiers afterwards.
 _SECTION_MAP = {
+    "Blocking Issues": "blocking",
+    "Non-Blocking Issues": "non_blocking",
     "Critical Issues": "critical",
     "Major Concerns": "major",
     "Minor Issues": "minor",
@@ -565,14 +678,16 @@ _SECTION_MAP = {
 
 # All known section headings that terminate a section (matches frontend reviewSections.ts)
 _ALL_HEADINGS = [
+    "Blocking Issues", "Non-Blocking Issues",
     "Critical Issues", "Major Concerns", "Minor Issues", "Disputed", "Deferred",
     "Positive Highlights", "Recommendations", "Summary", "Score",
 ]
 
 
 def _parse_sections(content: str) -> List[Dict[str, Any]]:
-    """Parse the severity sections (always emitted, empty or not) plus the
-    Disputed / Deferred sections (emitted only when their heading is present)."""
+    """Parse the two severity sections (always emitted, empty or not) plus the
+    legacy severity and Disputed / Deferred sections (emitted only when their
+    heading is present)."""
     sections = []
     display_names = get_section_display_names()
 
@@ -590,7 +705,7 @@ def _parse_sections(content: str) -> List[Dict[str, Any]]:
         match = pattern.search(content)
 
         display_name = display_names.get(sec_type, heading)
-        if not match and sec_type in DISPOSITION_SECTIONS:
+        if not match and sec_type not in SEVERITIES:
             continue
         if not match or not match.group(1).strip() or match.group(1).strip().lower() == "none":
             sections.append({
@@ -650,8 +765,12 @@ def _parse_issues_from_section(section_text: str) -> List[Dict[str, Any]]:
             issue["principle"] = principle
         if fix:
             issue["fix"] = fix
-        if severity and severity.strip().lower() in SEVERITIES:
-            issue["severity"] = severity.strip().lower()
+        if severity:
+            # "Non-Blocking" / "Non Blocking" -> "non_blocking"; legacy tiers
+            # are kept as written and folded in by normalize_legacy_sections.
+            sev = re.sub(r"[\s-]+", "_", severity.strip().lower())
+            if sev in SEVERITIES or sev in LEGACY_SEVERITY_MAP:
+                issue["severity"] = sev
         if disposition:
             issue["disposition"] = disposition
 

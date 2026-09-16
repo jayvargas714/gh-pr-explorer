@@ -8,8 +8,8 @@ from typing import Optional, List, Dict, Any, Tuple
 logger = logging.getLogger(__name__)
 
 # "deferred" = the post was rate-limited and will be retried; "mediation" = the
-# disputed critical/major count reached the threshold, the review was posted as
-# a COMMENT and the PR was disarmed pending a human.
+# disputed blocking count reached the threshold, the review was posted as a
+# COMMENT and the PR was disarmed pending a human.
 VALID_OUTCOMES = ("pending", "posted", "suppressed", "skipped", "error", "deferred", "mediation")
 
 
@@ -81,13 +81,13 @@ class AutoVerdictsDB:
             cursor.execute("""
                 UPDATE auto_verdicts SET
                     outcome = ?, event = ?, reason = ?,
-                    critical_count = ?, major_count = ?, minor_count = ?,
+                    blocking_count = ?, non_blocking_count = ?,
                     disputed_count = ?, deferred_count = ?,
                     criteria_json = ?, error_detail = ?
                 WHERE review_id = ?
             """, (
                 outcome, event, reason,
-                tallies.get("critical"), tallies.get("major"), tallies.get("minor"),
+                tallies.get("blocking"), tallies.get("non_blocking"),
                 tallies.get("disputed"), tallies.get("deferred"),
                 json.dumps(criteria) if criteria is not None else None,
                 error_detail, review_id,

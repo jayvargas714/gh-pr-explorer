@@ -118,12 +118,20 @@ def test_auto_verdict_state_carries_mode_and_override():
         "auto_verdict_enabled": 1,
         "auto_verdict_reviewer": "ed",
         "auto_verdict_mode": "comment",
-        "auto_verdict_criteria": json.dumps({"maxCritical": 3}),
+        "auto_verdict_criteria": json.dumps({"maxBlocking": 3}),
     }
     state = format_auto_verdict_state(item, last=None)
     assert state["mode"] == "comment"
     assert state["reviewerType"] == "ed"
-    assert state["criteriaOverride"] == {"maxCritical": 3}
+    assert state["criteriaOverride"] == {"maxBlocking": 3}
+
+
+def test_auto_verdict_state_upgrades_a_legacy_override():
+    import json
+    from backend.services.queue_enrichment import format_auto_verdict_state
+    item = {"auto_verdict_enabled": 1, "auto_verdict_criteria": json.dumps({"maxCritical": 1, "maxMajor": 2})}
+    assert format_auto_verdict_state(item, last=None)["criteriaOverride"] == {
+        "maxBlocking": 3, "maxNonBlocking": None}
 
 
 def test_auto_verdict_state_swallows_malformed_override_json():
@@ -185,9 +193,10 @@ def test_format_automation_state_tolerates_malformed_outcome_json():
 def test_auto_verdict_last_carries_set_aside_counts():
     from backend.services.queue_enrichment import _format_auto_verdict
     row = {"review_id": 5, "event": "COMMENT", "outcome": "mediation", "reason": "r",
-           "critical_count": 0, "major_count": 1, "minor_count": 0,
+           "blocking_count": 1, "non_blocking_count": 0,
            "disputed_count": 3, "deferred_count": 1, "created_at": "2026-09-04 07:00:00"}
     last = _format_auto_verdict(row)
     assert last["outcome"] == "mediation"
+    assert (last["blockingCount"], last["nonBlockingCount"]) == (1, 0)
     assert last["disputedCount"] == 3
     assert last["deferredCount"] == 1

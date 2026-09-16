@@ -144,7 +144,7 @@ def preview_section_issues_endpoint(review_id):
     """Return parsed issues for a review section for preview/selection."""
     try:
         reviews_db = get_reviews_db()
-        section = request.args.get("section", "critical")
+        section = request.args.get("section", "blocking")
         result, status_code = preview_section_issues(reviews_db, review_id, section=section)
         return jsonify(result), status_code
     except Exception as e:
@@ -157,7 +157,7 @@ def post_inline_comments_endpoint(review_id):
     try:
         reviews_db = get_reviews_db()
         data = request.get_json(silent=True) or {}
-        section = data.get("section", "critical")
+        section = data.get("section", "blocking")
         selected_indices = data.get("selected_indices")
         result, status_code = post_inline_comments(
             reviews_db, review_id, section=section, selected_indices=selected_indices

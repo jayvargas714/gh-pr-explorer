@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import type { PipelineRow as PipelineRowData } from '../../api/types'
 import { usePipelineStore } from '../../stores/usePipelineStore'
 import { useReviewStore } from '../../stores/useReviewStore'
@@ -16,6 +16,7 @@ import { NotesModal } from '../queue/NotesModal'
 import { VerdictModal } from '../queue/VerdictModal'
 import { QueueDescriptionModal } from '../queue/QueueDescriptionModal'
 import { prUrl } from './pipelineFilters'
+import { SEVERITIES, SEVERITY_LABELS } from '../../utils/severity'
 
 interface PipelineRowDetailProps {
   row: PipelineRowData
@@ -58,8 +59,7 @@ export function PipelineRowDetail({ row }: PipelineRowDetailProps) {
     hasReview: review !== null,
     reviewId: review?.reviewId ?? null,
     inlineCommentsPosted: review?.inlineCommentsPosted ?? false,
-    majorConcernsPosted: review?.majorConcernsPosted ?? false,
-    minorIssuesPosted: review?.minorIssuesPosted ?? false,
+    nonBlockingPosted: review?.nonBlockingPosted ?? false,
     autoVerdict: row.autoVerdict ?? undefined,
   }
 
@@ -103,12 +103,12 @@ export function PipelineRowDetail({ row }: PipelineRowDetailProps) {
               <span className="mx-pipe-muted">{formatLocalDateTime(review.createdAt)}</span>
             </div>
             <dl className="mx-pipe-detail__issues">
-              <dt>Critical</dt>
-              <dd>{review.critical.posted ?? '?'}/{review.critical.found ?? '?'} posted</dd>
-              <dt>Major</dt>
-              <dd>{review.major.posted ?? '?'}/{review.major.found ?? '?'} posted</dd>
-              <dt>Minor</dt>
-              <dd>{review.minor.posted ?? '?'}/{review.minor.found ?? '?'} posted</dd>
+              {SEVERITIES.map((sev) => (
+                <Fragment key={sev}>
+                  <dt>{SEVERITY_LABELS[sev]}</dt>
+                  <dd>{review[sev].posted ?? '?'}/{review[sev].found ?? '?'} posted</dd>
+                </Fragment>
+              ))}
             </dl>
           </div>
         ) : (

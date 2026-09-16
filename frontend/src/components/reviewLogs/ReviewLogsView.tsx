@@ -258,8 +258,8 @@ function runTooltip(run: Run): string {
   const lines: string[] = []
 
   if (run.issueCounts) {
-    const { critical, major, minor } = run.issueCounts
-    lines.push(`${critical} critical · ${major} major · ${minor} minor`)
+    const { blocking, non_blocking } = run.issueCounts
+    lines.push(`${blocking} blocking · ${non_blocking} non-blocking`)
   } else if (run.last.event === 'completed') {
     // Completed, but the review's content could not be read back.
     lines.push('issue counts unavailable')

@@ -130,15 +130,14 @@ class ReviewsDB:
 
         Args:
             review_id: The review ID.
-            section: One of 'critical', 'major', or 'minor'.
+            section: 'blocking' or 'non_blocking'.
             posted: Whether the section has been posted.
             posted_count: Number of issues successfully posted.
             found_count: Number of issues found/parsed.
         """
         column_map = {
-            "critical": "inline_comments_posted",
-            "major": "major_concerns_posted",
-            "minor": "minor_issues_posted",
+            "blocking": "inline_comments_posted",
+            "non_blocking": "non_blocking_posted",
         }
         column = column_map.get(section)
         if not column:
@@ -174,21 +173,22 @@ class ReviewsDB:
             return dict(row) if row else None
 
     def get_issue_counts(self, review_ids: List[int]) -> Dict[int, Dict[str, int]]:
-        """Tally critical/major/minor issues for many reviews at once.
+        """Tally blocking/non_blocking issues for many reviews at once.
 
         Reviews with no row, unparseable content_json, or no matching sections
         are simply absent from the result — callers treat a missing entry as
         "counts unavailable" rather than as zero, which would claim a clean
-        review where we actually know nothing.
+        review where we actually know nothing. Legacy (critical/major/minor)
+        documents are folded into the two tiers on read.
 
         Args:
             review_ids: Review row ids to tally.
 
         Returns:
-            ``{review_id: {"critical": n, "major": n, "minor": n}}`` — the
-            severity counts only; disputed/deferred set-asides are not exposed here.
+            ``{review_id: {"blocking": n, "non_blocking": n}}`` — the severity
+            counts only; disputed/deferred set-asides are not exposed here.
         """
-        from backend.services.review_schema import SEVERITIES, count_issues
+        from backend.services.review_schema import SEVERITIES, count_issues, load_content_json
 
         unique_ids = list({rid for rid in review_ids if rid is not None})
         if not unique_ids:
@@ -208,11 +208,8 @@ class ReviewsDB:
                 rows = cursor.fetchall()
 
             for row in rows:
-                try:
-                    parsed = json.loads(row["content_json"])
-                except (json.JSONDecodeError, TypeError):
-                    continue
-                if isinstance(parsed, dict):
+                parsed = load_content_json(row["content_json"])
+                if parsed is not None:
                     full = count_issues(parsed)
                     counts[row["id"]] = {sev: full[sev] for sev in SEVERITIES}
 

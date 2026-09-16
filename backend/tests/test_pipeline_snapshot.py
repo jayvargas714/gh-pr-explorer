@@ -100,15 +100,15 @@ def _pr(number, state="OPEN", **over):
     return pr
 
 
-def _content(critical=1, major=0, minor=2):
+def _content(blocking=1, non_blocking=2):
     def issues(n, prefix):
         return [{"title": f"{prefix} {i}", "location": {"file": "a.py", "start_line": 1, "end_line": 1},
                  "problem": "p", "fix": "f"} for i in range(n)]
     return json.dumps({
+        "schema_version": "2.0.0",
         "sections": [
-            {"type": "critical", "issues": issues(critical, "Crit")},
-            {"type": "major", "issues": issues(major, "Maj")},
-            {"type": "minor", "issues": issues(minor, "Min")},
+            {"type": "blocking", "issues": issues(blocking, "Blk")},
+            {"type": "non_blocking", "issues": issues(non_blocking, "Nb")},
         ],
         "score": {"overall": 7},
     })
@@ -165,7 +165,7 @@ def test_build_rows_stage_is_mediation_after_a_mediation_outcome(env):
                                      content_json=_content(), head_commit_sha="head999")
     env["verdicts"].claim(REPO, 9, rid)
     env["verdicts"].finalize(rid, "mediation", event="COMMENT", reason="3 disputed",
-                             tallies={"critical": 0, "major": 1, "minor": 0,
+                             tallies={"blocking": 1, "non_blocking": 0,
                                       "disputed": 3, "deferred": 1})
     env["arming"].set_arming(REPO, 9, False, "ed", "verdict")
 
@@ -193,13 +193,13 @@ def test_build_rows_joins_every_source(env):
     rid = env["reviews"].save_review(pr_number=7, repo=REPO, status="completed",
                                      content_json=_content(), is_followup=True,
                                      head_commit_sha="head111")
-    env["reviews"].update_section_posted(rid, "critical", True, posted_count=1, found_count=1)
+    env["reviews"].update_section_posted(rid, "blocking", True, posted_count=1, found_count=1)
     env["audits"].add_audit(pr_number=7, repo=REPO, finding_count=2, blocking_count=1)
     env["verdicts"].claim(REPO, 7, rid)
-    env["verdicts"].finalize(rid, "posted", event="REQUEST_CHANGES", reason="1 critical",
-                             tallies={"critical": 1, "major": 0, "minor": 2})
+    env["verdicts"].finalize(rid, "posted", event="REQUEST_CHANGES", reason="1 blocking",
+                             tallies={"blocking": 1, "non_blocking": 2})
     env["arming"].set_arming(REPO, 7, True, "pb", "comment")
-    env["arming"].set_criteria(REPO, 7, {"maxCritical": 3})
+    env["arming"].set_criteria(REPO, 7, {"maxBlocking": 3})
     item = env["queue"].add_to_queue(7, REPO, "t", "alice", "u", 1, 1)
     env["queue"].add_note(item["id"], "first")
     env["queue"].add_note(item["id"], "second")
@@ -229,7 +229,7 @@ def test_build_rows_joins_every_source(env):
     assert row["autoVerdict"]["enabled"] is True
     assert row["autoVerdict"]["reviewerType"] == "pb"
     assert row["autoVerdict"]["mode"] == "comment"
-    assert row["autoVerdict"]["criteriaOverride"] == {"maxCritical": 3}
+    assert row["autoVerdict"]["criteriaOverride"] == {"maxBlocking": 3}
     assert row["autoVerdict"]["last"]["event"] == "REQUEST_CHANGES"
     assert row["reviewDecision"] == "APPROVED"
     assert [(r["login"], r["state"]) for r in row["currentReviewers"]] == [("bob", "APPROVED")]
@@ -240,8 +240,8 @@ def test_build_rows_joins_every_source(env):
     assert row["review"]["score"] == 7.0
     assert row["review"]["isFollowup"] is True
     assert row["review"]["inlineCommentsPosted"] is True
-    assert row["review"]["critical"] == {"posted": 1, "found": 1, "titles": ["Crit 0"]}
-    assert row["review"]["minor"] == {"posted": None, "found": None, "titles": ["Min 0", "Min 1"]}
+    assert row["review"]["blocking"] == {"posted": 1, "found": 1, "titles": ["Blk 0"]}
+    assert row["review"]["non_blocking"] == {"posted": None, "found": None, "titles": ["Nb 0", "Nb 1"]}
     assert row["hasNewCommits"] is False
     assert [e["kind"] for e in row["revLog"]] == ["audit", "review", "review"]
     assert row["revLog"][1]["id"] == rid and row["revLog"][1]["verdictEvent"] == "REQUEST_CHANGES"

@@ -14,6 +14,7 @@ import { AutoVerdictToggle } from '../autoVerdict/AutoVerdictToggle'
 import { RevLogBadge } from '../queue/RevLogBadge'
 import { AuditViewer } from '../audits/AuditViewer'
 import { formatFullDateTime, formatNumber, formatRelativeTime } from '../../utils/formatters'
+import { SEVERITIES, SEVERITY_LABELS, SEVERITY_SHORT } from '../../utils/severity'
 import { prUrl, stagePresentation } from './pipelineFilters'
 
 interface PipelineRowProps {
@@ -34,11 +35,11 @@ function issueTooltip(label: string, c: PipelineIssueCounts): string {
 function IssueCell({ row }: { row: PipelineRowData }) {
   const r = row.review
   if (!r) return <span className="mx-pipe-muted">—</span>
-  const cells: { short: string; label: string; counts: PipelineIssueCounts }[] = [
-    { short: 'C', label: 'Critical', counts: r.critical },
-    { short: 'M', label: 'Major', counts: r.major },
-    { short: 'm', label: 'Minor', counts: r.minor },
-  ]
+  const cells: { short: string; label: string; counts: PipelineIssueCounts }[] = SEVERITIES.map((sev) => ({
+    short: SEVERITY_SHORT[sev],
+    label: SEVERITY_LABELS[sev],
+    counts: r[sev],
+  }))
   return (
     <span className="mx-pipe-issues">
       {cells.map(({ short, label, counts }) => {

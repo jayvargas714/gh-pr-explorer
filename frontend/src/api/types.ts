@@ -280,12 +280,13 @@ export type AutoVerdictReviewer = string
 /** Global thresholds deciding auto changes-requested vs auto approval. */
 export interface AutoVerdictConfig {
   enabled: boolean
-  maxCritical: number
-  maxMajor: number
-  maxMinor: number
+  /** Blocking findings tolerated; 0 means one blocking finding trips changes-requested. */
+  maxBlocking: number
+  /** Non-blocking findings tolerated; null = unlimited (the default). */
+  maxNonBlocking: number | null
   allowAutoApprove: boolean
   autoFollowupReview: boolean
-  /** Disputed critical/major findings at or above this count route the PR to
+  /** Disputed blocking findings at or above this count route the PR to
    * human mediation instead of a verdict (min 1). */
   mediationDisputedThreshold: number
 }
@@ -301,9 +302,8 @@ export interface AutoVerdictRecord {
   event: string | null
   outcome: AutoVerdictOutcome
   reason: string | null
-  criticalCount: number | null
-  majorCount: number | null
-  minorCount: number | null
+  blockingCount: number | null
+  nonBlockingCount: number | null
   /** Set-aside findings (author disputed / deferred); null on rows recorded
    * before the columns existed. */
   disputedCount: number | null
@@ -346,18 +346,15 @@ export interface MergeQueueItem {
   hasReview: boolean
   reviewScore: number | null
   reviewId: number | null
+  /** Blocking issues posted inline (the flag predates the tiers). */
   inlineCommentsPosted: boolean
-  majorConcernsPosted: boolean
-  minorIssuesPosted: boolean
-  criticalPostedCount: number | null
-  criticalFoundCount: number | null
-  majorPostedCount: number | null
-  majorFoundCount: number | null
-  minorPostedCount: number | null
-  minorFoundCount: number | null
-  criticalIssueTitles: string[] | null
-  majorIssueTitles: string[] | null
-  minorIssueTitles: string[] | null
+  nonBlockingPosted: boolean
+  blockingPostedCount: number | null
+  blockingFoundCount: number | null
+  nonBlockingPostedCount: number | null
+  nonBlockingFoundCount: number | null
+  blockingIssueTitles: string[] | null
+  nonBlockingIssueTitles: string[] | null
   isFollowup: boolean
   reviewDecision: string | null
   ciStatus: string | null
@@ -475,11 +472,9 @@ export interface PipelineReviewSummary {
   isFollowup: boolean
   createdAt: string
   inlineCommentsPosted: boolean
-  majorConcernsPosted: boolean
-  minorIssuesPosted: boolean
-  critical: PipelineIssueCounts
-  major: PipelineIssueCounts
-  minor: PipelineIssueCounts
+  nonBlockingPosted: boolean
+  blocking: PipelineIssueCounts
+  non_blocking: PipelineIssueCounts
 }
 
 /** One row of the pipeline snapshot: an automation_dispatches row joined with
@@ -599,7 +594,9 @@ export interface ReviewJSONMetadata {
   description?: string
 }
 
-export type ReviewSeverity = 'critical' | 'major' | 'minor'
+/** Two-tier severity (schema 2.0.0): blocking findings must be fixed before
+ * merge; non_blocking is everything else worth reporting. */
+export type ReviewSeverity = 'blocking' | 'non_blocking'
 
 /** Sections whose issues were set aside by an author disposition. */
 export type ReviewSetAsideSection = 'disputed' | 'deferred'
@@ -939,9 +936,8 @@ export interface VerdictResponse {
   inline_errors: string[] | null
   fallback_used: boolean
   section_details?: {
-    critical?: { posted: number; found: number; failed_titles: string[] }
-    major?: { posted: number; found: number; failed_titles: string[] }
-    minor?: { posted: number; found: number; failed_titles: string[] }
+    blocking?: { posted: number; found: number; failed_titles: string[] }
+    non_blocking?: { posted: number; found: number; failed_titles: string[] }
   }
 }
 
@@ -1253,9 +1249,8 @@ export type ReviewLogReason =
 
 /** Issue tally for a review, or null when the review's content can't be read. */
 export interface ReviewIssueCounts {
-  critical: number
-  major: number
-  minor: number
+  blocking: number
+  non_blocking: number
 }
 
 export interface ReviewLogEvent {

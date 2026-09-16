@@ -1,27 +1,32 @@
 import { Toggle } from '../common/Toggle'
 import { AutoVerdictConfig } from '../../api/types'
 
-const THRESHOLDS: { key: keyof AutoVerdictConfig; label: string; hint: string; min?: number }[] = [
+type ThresholdKey = 'maxBlocking' | 'maxNonBlocking' | 'mediationDisputedThreshold'
+
+const THRESHOLDS: {
+  key: ThresholdKey
+  label: string
+  hint: string
+  min?: number
+  /** Blank means "no limit" (stored as null). */
+  nullable?: boolean
+}[] = [
   {
-    key: 'maxCritical',
-    label: 'Critical issues allowed',
-    hint: '0 means a single critical issue triggers changes-requested.',
+    key: 'maxBlocking',
+    label: 'Blocking issues allowed',
+    hint: '0 means a single blocking issue triggers changes-requested.',
   },
   {
-    key: 'maxMajor',
-    label: 'Major issues allowed',
-    hint: 'Usually 0, sometimes 1.',
-  },
-  {
-    key: 'maxMinor',
-    label: 'Minor issues allowed',
-    hint: '99 is effectively unlimited — minors alone will not block.',
+    key: 'maxNonBlocking',
+    label: 'Non-blocking issues allowed',
+    hint: 'Leave blank for no limit — non-blocking issues alone will never block.',
+    nullable: true,
   },
   {
     key: 'mediationDisputedThreshold',
-    label: 'Disputed critical/major → mediation at',
+    label: 'Disputed blocking → mediation at',
     hint: 'Disputed and deferred findings never count toward the limits above. At this many '
-      + 'disputed critical/major findings the review is posted as a comment, auto verdict is '
+      + 'disputed blocking findings the review is posted as a comment, auto verdict is '
       + 'disarmed, and the PR is routed to a human.',
     min: 1,
   },
@@ -43,7 +48,11 @@ export function AutoVerdictCriteriaForm({
   saving,
   showMasterSwitch,
 }: AutoVerdictCriteriaFormProps) {
-  const setNumber = (key: keyof AutoVerdictConfig, raw: string) => {
+  const setNumber = (key: ThresholdKey, raw: string, nullable?: boolean) => {
+    if (nullable && raw.trim() === '') {
+      setDraft({ ...draft, [key]: null })
+      return
+    }
     const parsed = parseInt(raw, 10)
     setDraft({ ...draft, [key]: Number.isNaN(parsed) || parsed < 0 ? 0 : parsed })
   }
@@ -66,15 +75,16 @@ export function AutoVerdictCriteriaForm({
       )}
 
       <div className="mx-auto-verdict-config__thresholds">
-        {THRESHOLDS.map(({ key, label, hint, min }) => (
+        {THRESHOLDS.map(({ key, label, hint, min, nullable }) => (
           <div className="mx-auto-verdict-config__field" key={key}>
             <label htmlFor={`av-${key}`}>{label}</label>
             <input
               id={`av-${key}`}
               type="number"
               min={min ?? 0}
-              value={draft[key] as number}
-              onChange={(e) => setNumber(key, e.target.value)}
+              value={draft[key] ?? ''}
+              placeholder={nullable ? 'unlimited' : undefined}
+              onChange={(e) => setNumber(key, e.target.value, nullable)}
               disabled={saving}
               className="mx-auto-verdict-config__number"
             />

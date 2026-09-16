@@ -38,39 +38,59 @@ def test_save_review_reviewer_agent_defaults_null(reviews_db):
     assert got["reviewer_agent"] is None
 
 
-def _content(critical=0, major=0, minor=0):
+def _issues(n):
+    return [{"title": f"i{i}"} for i in range(n)]
+
+
+def _content(blocking=0, non_blocking=0):
     import json
-    issues = lambda n: [{"title": f"i{i}"} for i in range(n)]
     return json.dumps({
+        "schema_version": "2.0.0",
         "sections": [
-            {"type": "critical", "issues": issues(critical)},
-            {"type": "major", "issues": issues(major)},
-            {"type": "minor", "issues": issues(minor)},
+            {"type": "blocking", "issues": _issues(blocking)},
+            {"type": "non_blocking", "issues": _issues(non_blocking)},
         ]
     })
 
 
-def test_get_issue_counts_tallies_each_severity(reviews_db):
+def _legacy_content(critical=0, major=0, minor=0):
+    import json
+    return json.dumps({
+        "schema_version": "1.0.0",
+        "sections": [
+            {"type": "critical", "issues": _issues(critical)},
+            {"type": "major", "issues": _issues(major)},
+            {"type": "minor", "issues": _issues(minor)},
+        ]
+    })
+
+
+def test_get_issue_counts_tallies_each_tier(reviews_db):
     rid = reviews_db.save_review(pr_number=1, repo="owner/repo",
-                                 content_json=_content(critical=2, major=3, minor=4))
+                                 content_json=_content(blocking=2, non_blocking=4))
     counts = reviews_db.get_issue_counts([rid])
-    assert counts[rid] == {"critical": 2, "major": 3, "minor": 4}
+    assert counts[rid] == {"blocking": 2, "non_blocking": 4}
+
+
+def test_get_issue_counts_folds_legacy_content(reviews_db):
+    rid = reviews_db.save_review(pr_number=1, repo="owner/repo",
+                                 content_json=_legacy_content(critical=2, major=3, minor=4))
+    assert reviews_db.get_issue_counts([rid]) == {rid: {"blocking": 5, "non_blocking": 4}}
 
 
 def test_get_issue_counts_handles_many_reviews_at_once(reviews_db):
     ids = [
-        reviews_db.save_review(pr_number=n, repo="owner/repo",
-                               content_json=_content(critical=n, major=0, minor=0))
+        reviews_db.save_review(pr_number=n, repo="owner/repo", content_json=_content(blocking=n))
         for n in range(1, 6)
     ]
     counts = reviews_db.get_issue_counts(ids)
     assert len(counts) == 5
-    assert [counts[i]["critical"] for i in ids] == [1, 2, 3, 4, 5]
+    assert [counts[i]["blocking"] for i in ids] == [1, 2, 3, 4, 5]
 
 
 def test_get_issue_counts_dedupes_and_ignores_none(reviews_db):
-    rid = reviews_db.save_review(pr_number=1, repo="owner/repo", content_json=_content(minor=1))
-    assert reviews_db.get_issue_counts([rid, rid, None]) == {rid: {"critical": 0, "major": 0, "minor": 1}}
+    rid = reviews_db.save_review(pr_number=1, repo="owner/repo", content_json=_content(non_blocking=1))
+    assert reviews_db.get_issue_counts([rid, rid, None]) == {rid: {"blocking": 0, "non_blocking": 1}}
 
 
 def test_get_issue_counts_omits_unknown_ids(reviews_db):
@@ -91,11 +111,37 @@ def test_get_issue_counts_omits_non_object_content(reviews_db):
 def test_get_issue_counts_tallies_zero_for_a_clean_review(reviews_db):
     """A review with sections but no issues is a real zero, not unknown."""
     rid = reviews_db.save_review(pr_number=1, repo="owner/repo", content_json=_content())
-    assert reviews_db.get_issue_counts([rid]) == {rid: {"critical": 0, "major": 0, "minor": 0}}
+    assert reviews_db.get_issue_counts([rid]) == {rid: {"blocking": 0, "non_blocking": 0}}
 
 
 def test_get_issue_counts_empty_input(reviews_db):
     assert reviews_db.get_issue_counts([]) == {}
+
+
+# -- update_section_posted ------------------------------------------------------
+
+def test_update_section_posted_writes_the_blocking_columns(reviews_db):
+    rid = reviews_db.save_review(pr_number=1, repo="owner/repo", content_json=_content(blocking=2))
+    reviews_db.update_section_posted(rid, "blocking", True, posted_count=1, found_count=2)
+    row = reviews_db.get_review(rid)
+    assert row["inline_comments_posted"] == 1
+    assert (row["blocking_posted_count"], row["blocking_found_count"]) == (1, 2)
+
+
+def test_update_section_posted_writes_the_non_blocking_columns(reviews_db):
+    rid = reviews_db.save_review(pr_number=1, repo="owner/repo", content_json=_content(non_blocking=3))
+    reviews_db.update_section_posted(rid, "non_blocking", True, posted_count=3, found_count=3)
+    row = reviews_db.get_review(rid)
+    assert row["non_blocking_posted"] == 1
+    assert (row["non_blocking_posted_count"], row["non_blocking_found_count"]) == (3, 3)
+    assert not row["inline_comments_posted"]
+
+
+@pytest.mark.parametrize("section", ["critical", "major", "minor", "disputed"])
+def test_update_section_posted_rejects_non_tier_sections(reviews_db, section):
+    rid = reviews_db.save_review(pr_number=1, repo="owner/repo", content_json=_content())
+    with pytest.raises(ValueError):
+        reviews_db.update_section_posted(rid, section, True)
 
 
 def test_get_latest_for_prs_returns_newest_per_pr(reviews_db):

@@ -116,9 +116,10 @@ def test_migration_copies_armed_and_overridden_queue_rows(tmp_path):
     _legacy_queue_row(db, 1, True, reviewer="ed", mode="comment")
     _legacy_queue_row(db, 2, False, criteria={"maxCritical": 5})
     _legacy_queue_row(db, 3, False)  # neither armed nor overridden: not copied
-    # Pretend this DB predates the migration, then re-open it.
+    # Pretend this DB predates both migrations, then re-open it.
     with db.connection() as conn:
-        conn.execute("DELETE FROM migrations WHERE name = 'copy_arming_from_merge_queue'")
+        conn.execute("DELETE FROM migrations WHERE name IN "
+                     "('copy_arming_from_merge_queue', 'severity_two_tier_v1')")
 
     reopened = Database(path)
     arming = AutoVerdictArmingDB(reopened)
@@ -129,7 +130,9 @@ def test_migration_copies_armed_and_overridden_queue_rows(tmp_path):
     assert armed["auto_verdict_mode"] == "comment"
     overridden = arming.get(REPO, 2)
     assert overridden["auto_verdict_enabled"] == 0
-    assert json.loads(overridden["auto_verdict_criteria"]) == {"maxCritical": 5}
+    # Copied verbatim, then upgraded to the two-tier keys by severity_two_tier_v1
+    # in the same init — pinning the order of the two migrations.
+    assert json.loads(overridden["auto_verdict_criteria"]) == {"maxBlocking": 5, "maxNonBlocking": None}
     assert arming.get(REPO, 3) is None
     assert reopened.is_migration_done("copy_arming_from_merge_queue")
 

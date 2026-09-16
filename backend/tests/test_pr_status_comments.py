@@ -70,7 +70,7 @@ def set_flag(monkeypatch, value):
     monkeypatch.setattr(svc, "get_config", lambda: {"post_review_started_comment": value})
 
 
-TALLIES = {"critical": 1, "major": 2, "minor": 3}
+TALLIES = {"blocking": 1, "non_blocking": 3}
 
 
 # --- posting mechanics --------------------------------------------------------
@@ -277,13 +277,13 @@ def test_stopped_stale_comment_reports_shas_and_next_step(gh):
 
 def test_verdict_suppressed_body(gh):
     svc.post_verdict_suppressed_comment(
-        OWNER, REPO, PR, tallies=TALLIES, reason="within limits (0/2/99)",
+        OWNER, REPO, PR, tallies=TALLIES, reason="within limits (2/unlimited)",
     )
 
     body = gh.body
     assert "approval needs manual action" in body.lower()
-    assert "1 critical, 2 major, 3 minor" in body
-    assert "within limits (0/2/99)" in body
+    assert "1 blocking, 3 non-blocking" in body
+    assert "within limits (2/unlimited)" in body
     assert "post the verdict manually" in body.lower()
 
 
@@ -295,7 +295,7 @@ def test_verdict_deferred_body(gh):
     body = gh.body
     assert "rate limit" in body.lower()
     assert "REQUEST_CHANGES" in body
-    assert "1 critical, 2 major, 3 minor" in body
+    assert "1 blocking, 3 non-blocking" in body
     assert "no action is needed" in body.lower()
 
 
@@ -322,14 +322,14 @@ def test_verdict_skipped_body(gh):
 def test_verdict_mediation_body(gh):
     svc.post_verdict_mediation_comment(
         OWNER, REPO, PR, disputed_blocking=3, threshold=3,
-        tallies={"critical": 0, "major": 1, "minor": 2, "disputed": 4, "deferred": 1},
+        tallies={"blocking": 1, "non_blocking": 2, "disputed": 4, "deferred": 1},
     )
 
     body = gh.body
     assert "mediation" in body.lower()
-    assert "3 critical/major findings are disputed" in body
+    assert "3 blocking findings are disputed" in body
     assert "threshold 3" in body
-    assert "0 critical, 1 major, 2 minor" in body
+    assert "1 blocking, 2 non-blocking" in body
     assert "4 disputed" in body and "1 deferred" in body
     assert "disarmed" in body.lower()
     assert "re-arm" in body.lower()

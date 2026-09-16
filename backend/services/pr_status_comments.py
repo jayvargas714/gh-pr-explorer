@@ -52,9 +52,8 @@ def _failure_line(reason, detail):
 def _tallies_line(tallies):
     tallies = tallies or {}
     return (
-        f"{tallies.get('critical', 0)} critical, "
-        f"{tallies.get('major', 0)} major, "
-        f"{tallies.get('minor', 0)} minor"
+        f"{tallies.get('blocking', 0)} blocking, "
+        f"{tallies.get('non_blocking', 0)} non-blocking"
     )
 
 
@@ -332,7 +331,7 @@ def post_verdict_mediation_comment(owner, repo, pr_number, *, disputed_blocking,
     tallies = tallies or {}
     body = (
         "🤖 **Auto verdict stopped — human mediation needed**\n\n"
-        f"{disputed_blocking} critical/major findings are disputed (threshold {threshold}): "
+        f"{disputed_blocking} blocking findings are disputed (threshold {threshold}): "
         "the author declined them with a rationale the reviewer does not accept. The review "
         "was posted as a comment instead of a verdict, and auto verdict is now disarmed for "
         "this PR so no further automatic rounds run.\n\n"

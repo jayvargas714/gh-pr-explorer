@@ -1,4 +1,5 @@
 import type { ReviewJSON, ReviewSectionJSON } from '../api/types'
+import { SEVERITY_SECTION_HEADINGS, SEVERITY_SECTION_KEYS, severityLabel } from './severity'
 
 export interface ReviewSection {
   key: string
@@ -6,7 +7,11 @@ export interface ReviewSection {
   content: string
 }
 
+// The legacy three-tier headings stay recognised so pre-2.0.0 markdown on
+// disk still splits into sections.
 const SECTION_HEADINGS = [
+  SEVERITY_SECTION_HEADINGS.blocking,
+  SEVERITY_SECTION_HEADINGS.non_blocking,
   'Critical Issues',
   'Major Concerns',
   'Minor Issues',
@@ -15,12 +20,11 @@ const SECTION_HEADINGS = [
 ]
 
 /** Section key per JSON section type. Keys for the set-aside sections are
- * deliberately absent from VerdictModal's INLINE_ELIGIBLE_KEYS. Mirrors
+ * deliberately absent from INLINE_ELIGIBLE_SECTION_KEYS. Mirrors
  * `_SECTION_MAP` in backend/services/review_schema.py. */
 export const SECTION_KEY_BY_TYPE: Record<ReviewSectionJSON['type'], string> = {
-  critical: 'critical-issues',
-  major: 'major-concerns',
-  minor: 'minor-issues',
+  blocking: SEVERITY_SECTION_KEYS.blocking,
+  non_blocking: SEVERITY_SECTION_KEYS.non_blocking,
   disputed: 'disputed',
   deferred: 'deferred',
 }
@@ -43,7 +47,7 @@ const HEADING_TERMINATORS = ALL_KNOWN_HEADINGS
 
 /**
  * Extract full-text sections from review markdown content.
- * Looks for bold section headings like **Critical Issues** and captures
+ * Looks for bold section headings like **Blocking Issues** and captures
  * everything until the next known section heading, horizontal rule, or ## heading.
  */
 export function parseReviewSections(content: string): ReviewSection[] {
@@ -86,7 +90,7 @@ function formatSectionToMarkdown(section: ReviewSectionJSON): string {
     }
     if (locStr) parts.push(`- Location: \`${locStr}\``)
     if (issue.severity) {
-      parts.push(`- Severity: ${issue.severity.charAt(0).toUpperCase()}${issue.severity.slice(1)}`)
+      parts.push(`- Severity: ${severityLabel(issue.severity, issue.severity)}`)
     }
     if (issue.disposition) parts.push(`- Disposition: ${issue.disposition}`)
     if (issue.principle) parts.push(`- Principle: ${issue.principle}`)

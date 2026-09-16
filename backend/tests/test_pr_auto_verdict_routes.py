@@ -89,20 +89,31 @@ def test_criteria_override_is_set_and_returned(client):
     c, arming_db = client
 
     resp = c.put(f"{URL}/criteria",
-                 json={"criteria": {"maxCritical": 3, "maxMajor": 1, "maxMinor": 99,
+                 json={"criteria": {"maxBlocking": 3, "maxNonBlocking": None,
                                     "allowAutoApprove": True, "autoFollowupReview": False}})
 
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body["criteriaOverride"]["maxCritical"] == 3
+    assert body["criteriaOverride"]["maxBlocking"] == 3
+    assert body["criteriaOverride"]["maxNonBlocking"] is None
     assert "enabled" not in body["criteriaOverride"]
     stored = json.loads(arming_db.get(REPO, PR)["auto_verdict_criteria"])
-    assert stored["maxCritical"] == 3
+    assert stored["maxBlocking"] == 3
+    assert stored["maxNonBlocking"] is None
+
+
+def test_criteria_override_accepts_a_non_blocking_cap(client):
+    c, arming_db = client
+
+    resp = c.put(f"{URL}/criteria", json={"criteria": {"maxBlocking": 0, "maxNonBlocking": "4"}})
+
+    assert resp.status_code == 200
+    assert resp.get_json()["criteriaOverride"]["maxNonBlocking"] == 4
 
 
 def test_criteria_override_is_cleared_with_null(client):
     c, arming_db = client
-    arming_db.set_criteria(REPO, PR, {"maxCritical": 3})
+    arming_db.set_criteria(REPO, PR, {"maxBlocking": 3})
 
     resp = c.put(f"{URL}/criteria", json={"criteria": None})
 
@@ -113,7 +124,7 @@ def test_criteria_override_is_cleared_with_null(client):
 
 def test_negative_override_threshold_is_rejected(client):
     c, _ = client
-    resp = c.put(f"{URL}/criteria", json={"criteria": {"maxCritical": -1}})
+    resp = c.put(f"{URL}/criteria", json={"criteria": {"maxBlocking": -1}})
     assert resp.status_code == 400
 
 

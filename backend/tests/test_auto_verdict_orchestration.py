@@ -20,7 +20,7 @@ REPO = "owner/repo"
 PR = 42
 
 
-def _content(critical=0, major=0, minor=0, disputed=(), deferred=()):
+def _content(blocking=0, non_blocking=0, disputed=(), deferred=()):
     """`disputed`/`deferred` are tuples of original severities for the set-aside sections."""
     def issues(n):
         return [
@@ -35,9 +35,8 @@ def _content(critical=0, major=0, minor=0, disputed=(), deferred=()):
                 for i, (issue, sev) in enumerate(zip(issues(len(severities)), severities))]
 
     sections = [
-        {"type": "critical", "display_name": "Critical Issues", "issues": issues(critical)},
-        {"type": "major", "display_name": "Major Concerns", "issues": issues(major)},
-        {"type": "minor", "display_name": "Minor Issues", "issues": issues(minor)},
+        {"type": "blocking", "display_name": "Blocking Issues", "issues": issues(blocking)},
+        {"type": "non_blocking", "display_name": "Non-Blocking Issues", "issues": issues(non_blocking)},
     ]
     if disputed:
         sections.append({"type": "disputed", "display_name": "Disputed",
@@ -46,7 +45,7 @@ def _content(critical=0, major=0, minor=0, disputed=(), deferred=()):
         sections.append({"type": "deferred", "display_name": "Deferred",
                          "issues": set_aside(deferred, "Deferred")})
     return json.dumps({
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "metadata": {"pr_number": PR, "repository": REPO},
         "summary": "Summary text.",
         "sections": sections,
@@ -86,8 +85,8 @@ def harness(monkeypatch):
 
 
 def _criteria(monkeypatch, **overrides):
-    criteria = {"enabled": True, "maxCritical": 0, "maxMajor": 0,
-                "maxMinor": 99, "allowAutoApprove": True}
+    criteria = {"enabled": True, "maxBlocking": 0, "maxNonBlocking": None,
+                "allowAutoApprove": True}
     criteria.update(overrides)
     monkeypatch.setattr(svc, "get_criteria", lambda: criteria)
     return criteria
@@ -99,18 +98,18 @@ def _arm(h, enabled=True, author="someone-else", mode=None, criteria_override=No
         h.arming.set_criteria(REPO, PR, criteria_override)
 
 
-def _review(h, critical=0, major=0, minor=0, status="completed", author="someone-else",
+def _review(h, blocking=0, non_blocking=0, status="completed", author="someone-else",
             disputed=(), deferred=()):
     return h.reviews.save_review(
         pr_number=PR, repo=REPO, pr_author=author, status=status,
-        content_json=_content(critical, major, minor, disputed=disputed, deferred=deferred),
+        content_json=_content(blocking, non_blocking, disputed=disputed, deferred=deferred),
     )
 
 
-def test_criticals_post_request_changes(harness, monkeypatch):
+def test_blocking_findings_post_request_changes(harness, monkeypatch):
     _criteria(monkeypatch)
     _arm(harness)
-    rid = _review(harness, critical=2)
+    rid = _review(harness, blocking=2)
 
     result = svc.maybe_post_auto_verdict(REPO, PR, rid)
 
@@ -157,7 +156,7 @@ def test_self_authored_pr_falls_back_to_comment(harness, monkeypatch):
 def test_disarmed_card_is_left_alone(harness, monkeypatch):
     _criteria(monkeypatch)
     _arm(harness, enabled=False)
-    rid = _review(harness, critical=3)
+    rid = _review(harness, blocking=3)
 
     assert svc.maybe_post_auto_verdict(REPO, PR, rid) is None
     assert harness.posted == []
@@ -167,7 +166,7 @@ def test_disarmed_card_is_left_alone(harness, monkeypatch):
 def test_master_switch_off_is_left_alone(harness, monkeypatch):
     _criteria(monkeypatch, enabled=False)
     _arm(harness)
-    rid = _review(harness, critical=3)
+    rid = _review(harness, blocking=3)
 
     assert svc.maybe_post_auto_verdict(REPO, PR, rid) is None
     assert harness.posted == []
@@ -175,7 +174,7 @@ def test_master_switch_off_is_left_alone(harness, monkeypatch):
 
 def test_never_armed_pr_is_left_alone(harness, monkeypatch):
     _criteria(monkeypatch)
-    rid = _review(harness, critical=3)
+    rid = _review(harness, blocking=3)
 
     assert svc.maybe_post_auto_verdict(REPO, PR, rid) is None
     assert harness.posted == []
@@ -185,7 +184,7 @@ def test_closed_pr_is_skipped(harness, monkeypatch):
     _criteria(monkeypatch)
     monkeypatch.setattr(svc, "fetch_pr_state_and_sha", lambda *a: ("MERGED", "sha123"))
     _arm(harness)
-    rid = _review(harness, critical=3)
+    rid = _review(harness, blocking=3)
 
     result = svc.maybe_post_auto_verdict(REPO, PR, rid)
 
@@ -212,7 +211,7 @@ def test_a_second_evaluation_does_not_post_again(harness, monkeypatch):
     """The claim guard is what stops the watcher and the UI poll double-posting."""
     _criteria(monkeypatch)
     _arm(harness)
-    rid = _review(harness, critical=1)
+    rid = _review(harness, blocking=1)
 
     svc.maybe_post_auto_verdict(REPO, PR, rid)
     assert svc.maybe_post_auto_verdict(REPO, PR, rid) is None
@@ -222,7 +221,7 @@ def test_a_second_evaluation_does_not_post_again(harness, monkeypatch):
 def test_a_failed_post_is_recorded_as_error(harness, monkeypatch):
     _criteria(monkeypatch)
     _arm(harness)
-    rid = _review(harness, critical=1)
+    rid = _review(harness, blocking=1)
     harness.post_result = ({"error": "GitHub said no"}, 500)
 
     result = svc.maybe_post_auto_verdict(REPO, PR, rid)
@@ -233,22 +232,46 @@ def test_a_failed_post_is_recorded_as_error(harness, monkeypatch):
 
 
 def test_tallies_and_criteria_are_snapshotted_on_the_row(harness, monkeypatch):
-    _criteria(monkeypatch, maxMinor=2)
+    _criteria(monkeypatch, maxNonBlocking=2)
     _arm(harness)
-    rid = _review(harness, critical=1, major=2, minor=5)
+    rid = _review(harness, blocking=1, non_blocking=5)
 
     svc.maybe_post_auto_verdict(REPO, PR, rid)
 
     row = harness.auto.get_latest_for_pr(REPO, PR)
-    assert (row["critical_count"], row["major_count"], row["minor_count"]) == (1, 2, 5)
-    assert json.loads(row["criteria_json"])["maxMinor"] == 2
+    assert (row["blocking_count"], row["non_blocking_count"]) == (1, 5)
+    assert json.loads(row["criteria_json"])["maxNonBlocking"] == 2
+
+
+def test_non_blocking_findings_alone_never_block_by_default(harness, monkeypatch):
+    _criteria(monkeypatch)
+    _arm(harness)
+    rid = _review(harness, non_blocking=40)
+
+    result = svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert result["event"] == "APPROVE"
+    row = harness.auto.get_latest_for_pr(REPO, PR)
+    assert row["non_blocking_count"] == 40
+    assert json.loads(row["criteria_json"])["maxNonBlocking"] is None
+
+
+def test_per_pr_override_can_lift_a_global_non_blocking_cap(harness, monkeypatch):
+    _criteria(monkeypatch, maxNonBlocking=2)
+    _arm(harness, criteria_override={"maxBlocking": 0, "maxNonBlocking": None,
+                                     "allowAutoApprove": True, "autoFollowupReview": False})
+    rid = _review(harness, non_blocking=5)
+
+    result = svc.maybe_post_auto_verdict(REPO, PR, rid)
+
+    assert result["event"] == "APPROVE"
 
 
 def test_comment_mode_posts_findings_as_comment(harness, monkeypatch):
     """Comment mode ignores thresholds: a failing review still posts as COMMENT."""
     _criteria(monkeypatch)
     _arm(harness, mode="comment")
-    rid = _review(harness, critical=2)
+    rid = _review(harness, blocking=2)
 
     result = svc.maybe_post_auto_verdict(REPO, PR, rid)
 
@@ -274,7 +297,7 @@ def test_comment_mode_posts_even_on_a_clean_review(harness, monkeypatch):
 def test_comment_mode_respects_the_master_switch(harness, monkeypatch):
     _criteria(monkeypatch, enabled=False)
     _arm(harness, mode="comment")
-    rid = _review(harness, critical=2)
+    rid = _review(harness, blocking=2)
 
     assert svc.maybe_post_auto_verdict(REPO, PR, rid) is None
     assert harness.posted == []
@@ -293,13 +316,13 @@ def test_comment_mode_still_skips_closed_prs(harness, monkeypatch):
 
 
 def test_per_pr_override_replaces_the_global_thresholds(harness, monkeypatch):
-    """Global would request changes on 2 criticals; the card's override allows 5."""
+    """Global would request changes on 2 blocking findings; the card's override allows 5."""
     _criteria(monkeypatch, allowAutoApprove=False)
     _arm(harness, criteria_override={
-        "maxCritical": 5, "maxMajor": 5, "maxMinor": 99,
+        "maxBlocking": 5, "maxNonBlocking": None,
         "allowAutoApprove": True, "autoFollowupReview": False,
     })
-    rid = _review(harness, critical=2)
+    rid = _review(harness, blocking=2)
 
     result = svc.maybe_post_auto_verdict(REPO, PR, rid)
 
@@ -310,7 +333,7 @@ def test_per_pr_override_replaces_the_global_thresholds(harness, monkeypatch):
 def test_per_pr_override_cannot_enable_a_disabled_master_switch(harness, monkeypatch):
     _criteria(monkeypatch, enabled=False)
     _arm(harness, criteria_override={
-        "maxCritical": 5, "maxMajor": 5, "maxMinor": 99,
+        "maxBlocking": 5, "maxNonBlocking": None,
         "allowAutoApprove": True, "autoFollowupReview": False,
     })
     rid = _review(harness)
@@ -320,17 +343,17 @@ def test_per_pr_override_cannot_enable_a_disabled_master_switch(harness, monkeyp
 
 
 def test_effective_criteria_are_snapshotted_when_overridden(harness, monkeypatch):
-    _criteria(monkeypatch, maxCritical=0)
+    _criteria(monkeypatch, maxBlocking=0)
     _arm(harness, criteria_override={
-        "maxCritical": 7, "maxMajor": 0, "maxMinor": 99,
+        "maxBlocking": 7, "maxNonBlocking": None,
         "allowAutoApprove": False, "autoFollowupReview": False,
     })
-    rid = _review(harness, critical=1)
+    rid = _review(harness, blocking=1)
 
     svc.maybe_post_auto_verdict(REPO, PR, rid)
 
     row = harness.auto.get_latest_for_pr(REPO, PR)
-    assert json.loads(row["criteria_json"])["maxCritical"] == 7
+    assert json.loads(row["criteria_json"])["maxBlocking"] == 7
 
 
 def _run_events(events_db, event):
@@ -342,7 +365,7 @@ def test_posted_verdict_is_recorded_against_the_reviews_run(harness, monkeypatch
     """A posted auto verdict shows up in the Review Logs under its own run."""
     _criteria(monkeypatch)
     _arm(harness)
-    rid = _review(harness, critical=2)
+    rid = _review(harness, blocking=2)
     isolate_review_event_log.log_event("completed", REPO, PR, "run-xyz", attempt=1, review_id=rid)
 
     svc.maybe_post_auto_verdict(REPO, PR, rid)
@@ -373,7 +396,7 @@ def test_suppressed_verdict_is_recorded_as_not_posted(harness, monkeypatch, isol
 def test_failed_post_is_recorded_as_not_posted(harness, monkeypatch, isolate_review_event_log):
     _criteria(monkeypatch)
     _arm(harness)
-    rid = _review(harness, critical=2)
+    rid = _review(harness, blocking=2)
     isolate_review_event_log.log_event("completed", REPO, PR, "run-xyz", attempt=1, review_id=rid)
     harness.post_result = ({"error": "GitHub said no"}, 500)
 
@@ -389,7 +412,7 @@ def test_verdict_for_a_review_with_no_run_is_not_recorded(harness, monkeypatch, 
     """Reviews predating the event log have no run to group a verdict under."""
     _criteria(monkeypatch)
     _arm(harness)
-    rid = _review(harness, critical=2)
+    rid = _review(harness, blocking=2)
 
     result = svc.maybe_post_auto_verdict(REPO, PR, rid)
 
@@ -406,7 +429,7 @@ def _defer(harness, monkeypatch, **review_kwargs):
     """Arm, review, and drive one rate-limited post → a deferred row."""
     _criteria(monkeypatch)
     _arm(harness)
-    rid = _review(harness, critical=2, **review_kwargs)
+    rid = _review(harness, blocking=2, **review_kwargs)
     harness.post_result = RATE_LIMITED
     result = svc.maybe_post_auto_verdict(REPO, PR, rid)
     harness.post_result = ({"message": "ok"}, 200)
@@ -425,7 +448,7 @@ def test_rate_limited_post_is_deferred_not_errored(harness, monkeypatch):
 def test_deferral_is_logged_as_rate_limited(harness, monkeypatch, isolate_review_event_log):
     _criteria(monkeypatch)
     _arm(harness)
-    rid = _review(harness, critical=2)
+    rid = _review(harness, blocking=2)
     isolate_review_event_log.log_event("completed", REPO, PR, "run-xyz", attempt=1, review_id=rid)
     harness.post_result = RATE_LIMITED
 
@@ -556,20 +579,20 @@ def comments(monkeypatch):
 def test_suppressed_outcome_comments_with_tallies(harness, monkeypatch, comments):
     _criteria(monkeypatch, allowAutoApprove=False)
     _arm(harness)
-    rid = _review(harness, minor=3)
+    rid = _review(harness, non_blocking=3)
 
     svc.maybe_post_auto_verdict(REPO, PR, rid)
 
     assert [c["kind"] for c in comments] == ["suppressed"]
-    assert {k: comments[0]["tallies"][k] for k in ("critical", "major", "minor")} == {
-        "critical": 0, "major": 0, "minor": 3}
+    assert {k: comments[0]["tallies"][k] for k in ("blocking", "non_blocking")} == {
+        "blocking": 0, "non_blocking": 3}
     assert "auto-approve disabled" in comments[0]["reason"]
 
 
 def test_deferred_outcome_comments_with_pending_event(harness, monkeypatch, comments):
     _criteria(monkeypatch)
     _arm(harness)
-    rid = _review(harness, critical=2)
+    rid = _review(harness, blocking=2)
     harness.post_result = RATE_LIMITED
 
     svc.maybe_post_auto_verdict(REPO, PR, rid)
@@ -581,7 +604,7 @@ def test_deferred_outcome_comments_with_pending_event(harness, monkeypatch, comm
 def test_error_outcome_comments_with_detail(harness, monkeypatch, comments):
     _criteria(monkeypatch)
     _arm(harness)
-    rid = _review(harness, critical=1)
+    rid = _review(harness, blocking=1)
     harness.post_result = ({"error": "GitHub said no"}, 500)
 
     svc.maybe_post_auto_verdict(REPO, PR, rid)
@@ -593,7 +616,7 @@ def test_error_outcome_comments_with_detail(harness, monkeypatch, comments):
 def test_posted_outcome_deletes_status_comments_instead(harness, monkeypatch, comments):
     _criteria(monkeypatch)
     _arm(harness)
-    rid = _review(harness, critical=1)
+    rid = _review(harness, blocking=1)
 
     svc.maybe_post_auto_verdict(REPO, PR, rid)
 
@@ -616,7 +639,7 @@ def test_skip_on_closed_pr_is_silent(harness, monkeypatch, comments):
     _criteria(monkeypatch)
     monkeypatch.setattr(svc, "fetch_pr_state_and_sha", lambda *a: ("MERGED", "sha123"))
     _arm(harness)
-    rid = _review(harness, critical=3)
+    rid = _review(harness, blocking=3)
 
     svc.maybe_post_auto_verdict(REPO, PR, rid)
 
@@ -626,7 +649,7 @@ def test_skip_on_closed_pr_is_silent(harness, monkeypatch, comments):
 def test_retry_expiry_comments_the_error(harness, monkeypatch, comments):
     _criteria(monkeypatch)
     _arm(harness)
-    rid = _review(harness, critical=2)
+    rid = _review(harness, blocking=2)
     harness.post_result = RATE_LIMITED
     svc.maybe_post_auto_verdict(REPO, PR, rid)
     comments.clear()
@@ -640,13 +663,13 @@ def test_retry_expiry_comments_the_error(harness, monkeypatch, comments):
 
 # --- disputed / deferred findings and the mediation outcome -------------------
 
-THREE_DISPUTED = ("major", "major", "critical")
+THREE_DISPUTED = ("blocking", "blocking", "blocking")
 
 
 def test_disputes_below_the_threshold_still_approve(harness, monkeypatch):
-    _criteria(monkeypatch, maxMajor=1)
+    _criteria(monkeypatch, maxBlocking=1)
     _arm(harness)
-    rid = _review(harness, major=1, disputed=("major", "major"), deferred=("critical",))
+    rid = _review(harness, blocking=1, disputed=("blocking", "blocking"), deferred=("blocking",))
 
     result = svc.maybe_post_auto_verdict(REPO, PR, rid)
 
@@ -658,9 +681,9 @@ def test_disputes_below_the_threshold_still_approve(harness, monkeypatch):
 
 
 def test_mediation_posts_comment_disarms_and_records_outcome(harness, monkeypatch, comments):
-    _criteria(monkeypatch, maxMajor=1)
+    _criteria(monkeypatch, maxBlocking=1)
     harness.arming.set_arming(REPO, PR, True, "ed", mode="verdict")
-    rid = _review(harness, major=1, disputed=THREE_DISPUTED)
+    rid = _review(harness, blocking=1, disputed=THREE_DISPUTED)
 
     result = svc.maybe_post_auto_verdict(REPO, PR, rid)
 
@@ -707,7 +730,7 @@ def test_mediation_disarms_even_when_the_post_fails(harness, monkeypatch, commen
 def test_comment_mode_never_mediates(harness, monkeypatch):
     _criteria(monkeypatch)
     _arm(harness, mode="comment")
-    rid = _review(harness, disputed=THREE_DISPUTED + ("major", "major"))
+    rid = _review(harness, disputed=THREE_DISPUTED + ("blocking", "blocking"))
 
     result = svc.maybe_post_auto_verdict(REPO, PR, rid)
 
@@ -717,7 +740,7 @@ def test_comment_mode_never_mediates(harness, monkeypatch):
 
 def test_mediation_threshold_override_applies_per_pr(harness, monkeypatch):
     _criteria(monkeypatch)
-    _arm(harness, criteria_override={"maxCritical": 0, "maxMajor": 0, "maxMinor": 99,
+    _arm(harness, criteria_override={"maxBlocking": 0, "maxNonBlocking": None,
                                      "allowAutoApprove": True, "autoFollowupReview": False,
                                      "mediationDisputedThreshold": 5})
     rid = _review(harness, disputed=THREE_DISPUTED)

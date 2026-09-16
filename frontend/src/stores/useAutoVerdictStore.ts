@@ -1,13 +1,13 @@
 import { create } from 'zustand'
 import { getAutoVerdictConfig, saveAutoVerdictConfig } from '../api/autoVerdict'
 import { AutoVerdictConfig } from '../api/types'
+import { formatLimit } from '../utils/severity'
 
 /** Mirrors DEFAULT_CRITERIA in backend/services/auto_verdict_config.py. */
 export const DEFAULT_AUTO_VERDICT_CONFIG: AutoVerdictConfig = {
   enabled: false,
-  maxCritical: 0,
-  maxMajor: 0,
-  maxMinor: 99,
+  maxBlocking: 0,
+  maxNonBlocking: null,
   allowAutoApprove: false,
   autoFollowupReview: false,
   mediationDisputedThreshold: 3,
@@ -61,7 +61,7 @@ export const useAutoVerdictStore = create<AutoVerdictState>((set) => ({
 
 /** Human-readable threshold summary, used in card tooltips. */
 export function describeCriteria(config: AutoVerdictConfig): string {
-  const limits = `max ${config.maxCritical} critical / ${config.maxMajor} major / ${config.maxMinor} minor`
+  const limits = `max ${config.maxBlocking} blocking / ${formatLimit(config.maxNonBlocking)} non-blocking`
   const approve = config.allowAutoApprove ? 'auto-approve on' : 'auto-approve off'
   const mediation = `mediation at ${config.mediationDisputedThreshold} disputed`
   return config.enabled ? `${limits} — ${approve} — ${mediation}` : 'Auto verdicts globally disabled'

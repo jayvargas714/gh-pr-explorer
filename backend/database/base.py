@@ -305,9 +305,8 @@ class Database:
                     event TEXT,
                     outcome TEXT NOT NULL DEFAULT 'pending',
                     reason TEXT,
-                    critical_count INTEGER,
-                    major_count INTEGER,
-                    minor_count INTEGER,
+                    blocking_count INTEGER,
+                    non_blocking_count INTEGER,
                     disputed_count INTEGER,
                     deferred_count INTEGER,
                     criteria_json TEXT,
@@ -633,19 +632,15 @@ class Database:
                 except sqlite3.OperationalError:
                     pass
 
-            # Migration: Add section-posted columns to reviews for existing databases
+            # Migration: Add reviewer/auto-start columns to reviews for existing
+            # databases. (The pre-two-tier per-severity posting counters —
+            # critical/major/minor_*_count, major_concerns_posted,
+            # minor_issues_posted — are no longer created; existing databases
+            # keep them as unread legacy columns.)
             cursor.execute("PRAGMA table_info(reviews)")
             reviews_columns = {row[1] for row in cursor.fetchall()}
 
             review_new_columns = [
-                ("major_concerns_posted", "BOOLEAN DEFAULT FALSE"),
-                ("minor_issues_posted", "BOOLEAN DEFAULT FALSE"),
-                ("critical_posted_count", "INTEGER"),
-                ("critical_found_count", "INTEGER"),
-                ("major_posted_count", "INTEGER"),
-                ("major_found_count", "INTEGER"),
-                ("minor_posted_count", "INTEGER"),
-                ("minor_found_count", "INTEGER"),
                 ("reviewer_agent", "TEXT"),
                 ("auto_started", "BOOLEAN DEFAULT FALSE"),
             ]
@@ -673,6 +668,19 @@ class Database:
                     "INSERT OR IGNORE INTO migrations (name) VALUES ('drop_legacy_analytics_caches')"
                 )
                 logger.info("Dropped legacy analytics cache tables")
+
+            # Two-tier severity (blocking / non_blocking): columns on every init,
+            # data folded once. Runs after copy_arming_from_merge_queue so a
+            # copied legacy criteria override is upgraded in the same init.
+            # Imported lazily: services depend on the database package, not the reverse.
+            from backend.database import severity_migration
+
+            severity_migration.ensure_columns(cursor)
+            if not severity_migration.is_applied(cursor):
+                report = severity_migration.apply_severity_two_tier(cursor)
+                severity_migration.mark_applied(cursor)
+                if report["reviews_seen"]:
+                    logger.info(f"Migrated review severities to two tiers: {report}")
 
             logger.info(f"Database initialized at {self.db_path}")
 

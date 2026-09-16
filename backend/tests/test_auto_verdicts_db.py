@@ -64,16 +64,16 @@ def test_finalize_records_the_decision(auto_db, review_ids):
     rid = review_ids[0]
     auto_db.claim("owner/repo", 42, review_id=rid)
     auto_db.finalize(
-        rid, "posted", event="REQUEST_CHANGES", reason="2 critical > 0 allowed",
-        tallies={"critical": 2, "major": 0, "minor": 3},
-        criteria={"maxCritical": 0, "maxMajor": 0, "maxMinor": 99},
+        rid, "posted", event="REQUEST_CHANGES", reason="2 blocking > 0 allowed",
+        tallies={"blocking": 2, "non_blocking": 3},
+        criteria={"maxBlocking": 0, "maxNonBlocking": None},
     )
     row = auto_db.get_latest_for_pr("owner/repo", 42)
     assert row["outcome"] == "posted"
     assert row["event"] == "REQUEST_CHANGES"
-    assert row["critical_count"] == 2
-    assert row["minor_count"] == 3
-    assert "maxMinor" in row["criteria_json"]
+    assert row["blocking_count"] == 2
+    assert row["non_blocking_count"] == 3
+    assert "maxNonBlocking" in row["criteria_json"]
 
 
 def test_finalize_rejects_an_unknown_outcome(auto_db, review_ids):
@@ -92,8 +92,8 @@ def test_finalize_records_disputed_and_deferred_counts(auto_db, review_ids):
     rid = review_ids[0]
     auto_db.claim("owner/repo", 42, review_id=rid)
     auto_db.finalize(
-        rid, "mediation", event="COMMENT", reason="3 disputed critical/major findings >= 3",
-        tallies={"critical": 0, "major": 1, "minor": 0,
+        rid, "mediation", event="COMMENT", reason="3 disputed blocking findings >= 3",
+        tallies={"blocking": 1, "non_blocking": 0,
                  "disputed": 3, "disputed_blocking": 3, "deferred": 1},
     )
     row = auto_db.get_latest_for_pr("owner/repo", 42)
@@ -105,12 +105,12 @@ def test_finalize_records_disputed_and_deferred_counts(auto_db, review_ids):
 def test_finalize_leaves_set_aside_counts_null_when_tallies_lack_them(auto_db, review_ids):
     rid = review_ids[0]
     auto_db.claim("owner/repo", 42, review_id=rid)
-    auto_db.finalize(rid, "posted", event="APPROVE", tallies={"critical": 0, "major": 0, "minor": 0})
+    auto_db.finalize(rid, "posted", event="APPROVE", tallies={"blocking": 0, "non_blocking": 0})
     row = auto_db.get_latest_for_pr("owner/repo", 42)
     assert row["disputed_count"] is None and row["deferred_count"] is None
 
 
-def test_migration_adds_set_aside_columns_to_an_existing_table():
+def test_migration_adds_set_aside_and_two_tier_columns_to_an_existing_table():
     import sqlite3
     path = Path(tempfile.mkdtemp()) / "legacy.db"
     conn = sqlite3.connect(path)
@@ -131,4 +131,4 @@ def test_migration_adds_set_aside_columns_to_an_existing_table():
     conn = sqlite3.connect(path)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(auto_verdicts)")}
     conn.close()
-    assert {"disputed_count", "deferred_count"} <= columns
+    assert {"disputed_count", "deferred_count", "blocking_count", "non_blocking_count"} <= columns

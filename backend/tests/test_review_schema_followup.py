@@ -12,7 +12,7 @@ from backend.services.review_schema import (
 
 def _review(statuses):
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "metadata": {"pr_number": 1, "repository": "o/r"},
         "summary": "s", "score": {"overall": 7},
         "sections": [],
@@ -73,7 +73,7 @@ def _issue(**extra):
 
 def _review_with_sections(sections):
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "metadata": {"pr_number": 1, "repository": "o/r"},
         "summary": "s", "score": {"overall": 7},
         "sections": sections,
@@ -83,9 +83,9 @@ def _review_with_sections(sections):
 def test_validation_accepts_disputed_and_deferred_sections_with_severity_and_disposition():
     review = _review_with_sections([
         {"type": "disputed", "display_name": "Disputed",
-         "issues": [_issue(severity="major", disposition="author: upstream guard covers it")]},
+         "issues": [_issue(severity="blocking", disposition="author: upstream guard covers it")]},
         {"type": "deferred", "display_name": "Deferred",
-         "issues": [_issue(severity="Minor", disposition="follow-up PR #99")]},
+         "issues": [_issue(severity="Non_Blocking", disposition="follow-up PR #99")]},
     ])
     ok, errors = validate_review_json(review)
     assert ok, errors
@@ -94,8 +94,8 @@ def test_validation_accepts_disputed_and_deferred_sections_with_severity_and_dis
 @pytest.mark.parametrize("bad_issue", [
     _issue(disposition="x"),                          # missing severity
     _issue(severity="nitpick", disposition="x"),      # unknown severity
-    _issue(severity="major"),                         # missing disposition
-    _issue(severity="major", disposition="  "),       # blank disposition
+    _issue(severity="blocking"),                      # missing disposition
+    _issue(severity="blocking", disposition="  "),    # blank disposition
 ])
 def test_validation_rejects_malformed_disposition_section_issues(bad_issue):
     review = _review_with_sections([{"type": "disputed", "display_name": "Disputed", "issues": [bad_issue]}])
@@ -105,16 +105,16 @@ def test_validation_rejects_malformed_disposition_section_issues(bad_issue):
 
 
 def test_validation_rejects_severity_on_a_severity_section_issue():
-    review = _review_with_sections([{"type": "major", "display_name": "Major Concerns",
-                                     "issues": [_issue(severity="major")]}])
+    review = _review_with_sections([{"type": "blocking", "display_name": "Blocking Issues",
+                                     "issues": [_issue(severity="blocking")]}])
     ok, errors = validate_review_json(review)
     assert not ok
     assert any("severity" in e for e in errors), errors
 
 
 def test_format_issue_lines_renders_severity_and_disposition():
-    lines = format_issue_lines([_issue(severity="major", disposition="follow-up PR #99")])
-    assert "- Severity: Major" in lines
+    lines = format_issue_lines([_issue(severity="blocking", disposition="follow-up PR #99")])
+    assert "- Severity: Blocking" in lines
     assert "- Disposition: follow-up PR #99" in lines
 
 
@@ -125,37 +125,35 @@ def test_format_issue_lines_omits_severity_and_disposition_when_absent():
 
 def test_markdown_round_trips_disputed_and_deferred_sections():
     review = _review_with_sections([
-        {"type": "critical", "display_name": "Critical Issues", "issues": []},
-        {"type": "major", "display_name": "Major Concerns", "issues": [_issue(title="Real major")]},
-        {"type": "minor", "display_name": "Minor Issues", "issues": []},
+        {"type": "blocking", "display_name": "Blocking Issues", "issues": [_issue(title="Real major")]},
+        {"type": "non_blocking", "display_name": "Non-Blocking Issues", "issues": []},
         {"type": "disputed", "display_name": "Disputed",
-         "issues": [_issue(title="Guard", severity="major", disposition="author says upstream")]},
+         "issues": [_issue(title="Guard", severity="blocking", disposition="author says upstream")]},
         {"type": "deferred", "display_name": "Deferred",
-         "issues": [_issue(title="Rename", severity="minor", disposition="PR #99")]},
+         "issues": [_issue(title="Rename", severity="non_blocking", disposition="PR #99")]},
     ])
     md = json_to_markdown(review)
     assert "**Disputed**" in md and "**Deferred**" in md
     parsed = markdown_to_json(md, {"pr_number": 1, "repository": "o/r"})
     by_type = {s["type"]: s for s in parsed["sections"]}
-    assert by_type["major"]["issues"][0]["title"] == "Real major"
-    assert "severity" not in by_type["major"]["issues"][0]
+    assert by_type["blocking"]["issues"][0]["title"] == "Real major"
+    assert "severity" not in by_type["blocking"]["issues"][0]
     disputed = by_type["disputed"]["issues"][0]
     assert (disputed["title"], disputed["severity"], disputed["disposition"]) == (
-        "Guard", "major", "author says upstream")
+        "Guard", "blocking", "author says upstream")
     deferred = by_type["deferred"]["issues"][0]
-    assert (deferred["severity"], deferred["disposition"]) == ("minor", "PR #99")
+    assert (deferred["severity"], deferred["disposition"]) == ("non_blocking", "PR #99")
     ok, errors = validate_review_json(parsed)
     assert ok, errors
 
 
 def test_markdown_parser_emits_disposition_sections_only_when_present():
     md = json_to_markdown(_review_with_sections([
-        {"type": "critical", "display_name": "Critical Issues", "issues": []},
-        {"type": "major", "display_name": "Major Concerns", "issues": []},
-        {"type": "minor", "display_name": "Minor Issues", "issues": []},
+        {"type": "blocking", "display_name": "Blocking Issues", "issues": []},
+        {"type": "non_blocking", "display_name": "Non-Blocking Issues", "issues": []},
     ]))
     parsed = markdown_to_json(md, {"pr_number": 1, "repository": "o/r"})
-    assert [s["type"] for s in parsed["sections"]] == ["critical", "major", "minor"]
+    assert [s["type"] for s in parsed["sections"]] == ["blocking", "non_blocking"]
 
 
 def test_markdown_parser_reads_deferred_status():

@@ -20,7 +20,9 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
-from backend.services.auto_verdict_config import DEFAULT_CRITERIA, apply_override, get_criteria
+from backend.services.auto_verdict_config import (
+    DEFAULT_CRITERIA, apply_override, get_criteria, upgrade_legacy_criteria,
+)
 from backend.services.github_service import (
     fetch_pr_state_and_sha,
     get_authenticated_login,
@@ -40,6 +42,7 @@ from backend.services.review_schema import (
     format_issue_lines,
     format_resolution_lines,
     get_section_display_names,
+    load_content_json,
 )
 from backend.services.verdict_service import post_verdict
 
@@ -60,6 +63,9 @@ RETRY_MAX_AGE_HOURS = 24
 # review_id -> (rate-limited retry attempts so far, next attempt unix time)
 _retry_schedule: Dict[int, Tuple[int, float]] = {}
 
+# Tier names as they read in reason strings and status comments.
+_TIER_WORDS = {"blocking": "blocking", "non_blocking": "non-blocking"}
+
 
 def evaluate_criteria(
     content_json: Dict[str, Any],
@@ -69,35 +75,35 @@ def evaluate_criteria(
 
     Returns (decision, tallies, reason) where decision is 'mediation',
     'request_changes' or 'pass'. Disputed and deferred findings never count
-    toward the severity thresholds; but when the disputed critical/major count
-    reaches ``mediationDisputedThreshold`` the review is routed to human
-    mediation, checked before the thresholds so a standing disagreement is
-    never reported as an ordinary breach.
+    toward the tier thresholds; but when the disputed blocking count reaches
+    ``mediationDisputedThreshold`` the review is routed to human mediation,
+    checked before the thresholds so a standing disagreement is never reported
+    as an ordinary breach. A ``None`` limit means unlimited.
     """
     tallies = count_issues(content_json)
     threshold = criteria.get("mediationDisputedThreshold", DEFAULT_CRITERIA["mediationDisputedThreshold"])
     if tallies["disputed_blocking"] >= threshold:
         return "mediation", tallies, (
-            f"{tallies['disputed_blocking']} disputed critical/major findings >= {threshold} "
+            f"{tallies['disputed_blocking']} disputed blocking findings >= {threshold} "
             f"— routed to human mediation"
         )
     limits = {
-        "critical": criteria["maxCritical"],
-        "major": criteria["maxMajor"],
-        "minor": criteria["maxMinor"],
+        "blocking": criteria.get("maxBlocking", DEFAULT_CRITERIA["maxBlocking"]),
+        "non_blocking": criteria.get("maxNonBlocking", DEFAULT_CRITERIA["maxNonBlocking"]),
     }
 
     breaches = [
-        f"{tallies[sev]} {sev} > {limits[sev]} allowed"
+        f"{tallies[sev]} {_TIER_WORDS[sev]} > {limits[sev]} allowed"
         for sev in SEVERITIES
-        if tallies[sev] > limits[sev]
+        if limits[sev] is not None and tallies[sev] > limits[sev]
     ]
 
     if breaches:
         return "request_changes", tallies, "; ".join(breaches)
 
-    within = ", ".join(f"{tallies[sev]} {sev}" for sev in SEVERITIES)
-    allowed = "/".join(str(limits[sev]) for sev in SEVERITIES)
+    within = ", ".join(f"{tallies[sev]} {_TIER_WORDS[sev]}" for sev in SEVERITIES)
+    allowed = "/".join(
+        "unlimited" if limits[sev] is None else str(limits[sev]) for sev in SEVERITIES)
     set_aside = ", ".join(
         f"{tallies[kind]} {kind}" for kind in ("disputed", "deferred") if tallies.get(kind)
     )
@@ -252,15 +258,10 @@ def _post_outcome_status_comment(repo, pr_number, outcome, event, reason,
 
 
 def _load_review_content(review: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Parse a review row's content_json, or None if unusable."""
-    raw = review.get("content_json")
-    if not raw:
-        return None
-    try:
-        parsed = raw if isinstance(raw, dict) else json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    if not isinstance(parsed, dict) or parsed.get("error"):
+    """Parse a review row's content_json (upgrading legacy documents), or None
+    if unusable."""
+    parsed = load_content_json(review.get("content_json"))
+    if parsed is None or parsed.get("error"):
         return None
     return parsed
 
@@ -430,6 +431,8 @@ def retry_deferred_verdicts(now: Optional[float] = None) -> None:
         pr_number = row["pr_number"]
         try:
             criteria = json.loads(row["criteria_json"]) if row.get("criteria_json") else None
+            if isinstance(criteria, dict):
+                criteria = upgrade_legacy_criteria(criteria)
         except (json.JSONDecodeError, TypeError):
             criteria = None
         tallies = {sev: row.get(f"{sev}_count") for sev in SEVERITIES}

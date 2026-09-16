@@ -5,7 +5,8 @@ import { InlineIssuePickerModal } from './InlineIssuePickerModal'
 import { ReviewerPickerMenu } from './ReviewerPickerMenu'
 import { Button } from '../common/Button'
 import { Spinner } from '../common/Spinner'
-import type { MergeQueueItem } from '../../api/types'
+import type { MergeQueueItem, ReviewSeverity } from '../../api/types'
+import { SEVERITIES, SEVERITY_EMOJI, SEVERITY_LABELS } from '../../utils/severity'
 
 /** The slice of a queue card the review button needs — pipeline rows build
  * this same shape from a PipelineRow, so the button is not queue-bound. */
@@ -13,9 +14,15 @@ export type QueueReviewTarget = Pick<
   MergeQueueItem,
   | 'repo' | 'number' | 'url' | 'title' | 'author'
   | 'hasReview' | 'reviewId'
-  | 'inlineCommentsPosted' | 'majorConcernsPosted' | 'minorIssuesPosted'
+  | 'inlineCommentsPosted' | 'nonBlockingPosted'
   | 'autoVerdict'
 >
+
+/** Which card flag records that a tier's issues were posted inline. */
+const POSTED_FLAG: Record<ReviewSeverity, keyof QueueReviewTarget> = {
+  blocking: 'inlineCommentsPosted',
+  non_blocking: 'nonBlockingPosted',
+}
 
 interface QueueReviewButtonProps {
   item: QueueReviewTarget
@@ -190,37 +197,18 @@ export function QueueReviewButton({ item, onRefresh }: QueueReviewButtonProps) {
         )}
       </div>
 
-      {item.hasReview && item.reviewId && !item.inlineCommentsPosted && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setPickerSection('critical')}
-          data-tooltip="Select and post critical issues as inline comments"
-        >
-          🔴 Critical
-        </Button>
-      )}
-
-      {item.hasReview && item.reviewId && !item.majorConcernsPosted && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setPickerSection('major')}
-          data-tooltip="Select and post major concerns as inline comments"
-        >
-          🟡 Major
-        </Button>
-      )}
-
-      {item.hasReview && item.reviewId && !item.minorIssuesPosted && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setPickerSection('minor')}
-          data-tooltip="Select and post minor issues as inline comments"
-        >
-          🟢 Minor
-        </Button>
+      {SEVERITIES.map((sev) =>
+        item.hasReview && item.reviewId && !item[POSTED_FLAG[sev]] ? (
+          <Button
+            key={sev}
+            variant="ghost"
+            size="sm"
+            onClick={() => setPickerSection(sev)}
+            data-tooltip={`Select and post ${SEVERITY_LABELS[sev].toLowerCase()} issues as inline comments`}
+          >
+            {SEVERITY_EMOJI[sev]} {SEVERITY_LABELS[sev]}
+          </Button>
+        ) : null
       )}
 
       {pickerSection && item.reviewId && (

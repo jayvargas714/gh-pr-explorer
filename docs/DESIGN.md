@@ -134,7 +134,7 @@ The backend is organized as a Python package with clear separation of concerns:
 | `analytics_rollup.py` | `build_rows()`, `needs_rebuild()`, `rebuild_repo()` |
 | `bot_filter.py` | `normalize_login()`, `is_bot_login()` |
 | `review_service.py` | `save_review_to_db()`, `check_review_status()`, `start_review_process()` |
-| `inline_comments_service.py` | `parse_critical_issues()`, `post_inline_comments()` |
+| `inline_comments_service.py` | `parse_section_issues_from_json()`, `post_inline_comments()` |
 | `workflow_service.py` | `fetch_workflow_data()` |
 | `timeline_service.py` | `normalize_timeline_events()`, `fetch_pr_timeline_from_api()`, `get_timeline()` |
 | `review_schema.py` | `validate_review_json()`, `json_to_markdown()`, `markdown_to_json()`, `get_section_display_names()`, `SCHEMA_VERSION` |
@@ -305,11 +305,12 @@ CREATE TABLE auto_verdicts (
     review_id INTEGER UNIQUE,
     event TEXT,                     -- APPROVE | REQUEST_CHANGES | COMMENT | NULL
     outcome TEXT NOT NULL DEFAULT 'pending',
-                                    -- pending | posted | suppressed | skipped | error
+                                    -- pending | posted | suppressed | skipped | error | deferred | mediation
     reason TEXT,                    -- human-readable criteria evaluation
-    critical_count INTEGER,
-    major_count INTEGER,
-    minor_count INTEGER,
+    blocking_count INTEGER,         -- two-tier tallies (schema 2.0.0); the pre-2.0.0
+    non_blocking_count INTEGER,     -- critical/major/minor_count columns survive unread on old DBs
+    disputed_count INTEGER,
+    deferred_count INTEGER,
     criteria_json TEXT,             -- threshold snapshot at decision time
     head_commit_sha TEXT,
     error_detail TEXT,
@@ -635,6 +636,24 @@ The migration module handles one-time import of existing data into the SQLite da
 - **Score Extraction**: Parses review content to extract numerical scores
 - **Metadata Parsing**: Extracts PR number, repo, and timestamp from file names
 - **Idempotent Execution**: Tracks migrations in `migrations` table to prevent duplicate runs
+
+#### In-app one-shot migrations
+
+Schema columns are added PRAGMA-guarded on every `Database._init_db`; data
+rewrites run once, recorded by name in the `migrations` table:
+
+| Name | What it does |
+|------|--------------|
+| `copy_arming_from_merge_queue` | Copied armed / overridden queue rows into `auto_verdict_arming` |
+| `drop_legacy_analytics_caches` | Dropped the pre-rollup analytics cache tables |
+| `severity_two_tier_v1` | Folded the critical / major / minor model into blocking / non_blocking (`backend/database/severity_migration.py`): rewrites every `reviews.content_json` through `normalize_legacy_sections` (critical + major → one `blocking` section, minor → `non_blocking`, disposition severities remapped, `schema_version` 2.0.0); backfills `auto_verdicts.blocking_count = critical + major`, `non_blocking_count = minor` (all-NULL rows stay NULL); sums the `reviews` inline-posting counters the same way and ORs `major_concerns_posted` into `inline_comments_posted`; upgrades `user_settings.auto_verdict_config`, `auto_verdict_arming.auto_verdict_criteria` and every `auto_verdicts.criteria_json` via `upgrade_legacy_criteria`. Unparseable `content_json` is left byte-identical. Runs after `copy_arming_from_merge_queue` so a copied legacy override is upgraded in the same init. |
+
+`scripts/migrate_severity_two_tier.py --db <path> [--dry-run]` runs the same
+function on demand — rehearse on a copy, or apply explicitly with a printed
+report before restarting the app (the startup guard then finds it done). It
+must never run against a database an older build will still serve: old code
+does not know the two-tier section types and would tally every migrated
+review as zero issues.
 
 ### Frontend (React + TypeScript)
 
@@ -1264,7 +1283,7 @@ The Merge Queue feature allows users to organize PRs they intend to review or me
 | Queue Panel | Slide-out | Full queue management interface |
 | Queue Item | Panel | Individual PR with reorder and remove controls |
 | Review Button | Queue Item | Start code review for queued PR |
-| Post Inline Comments | Queue Item | Post critical issues to GitHub (appears when review exists) |
+| Post Inline Comments | Queue Item | Post blocking / non-blocking issues to GitHub (appears when review exists) |
 | Verdict Button | Queue Item | Submit formal PR review verdict to GitHub (appears when review exists) |
 | Verdict Modal | Overlay | Modal with event selector, custom text, section toggles, and submit |
 | View Description | Queue Item | 📝 button that opens the same draggable description modal used by the main PR list. Lazy-fetches the PR via `GET /api/repos/.../prs?prNumber=N`. |
@@ -1628,19 +1647,19 @@ When a review fails:
 
 ### Inline Comments Posting
 
-The Inline Comments feature allows users to post critical issues from code reviews directly as inline comments on GitHub PRs.
+The Inline Comments feature allows users to post a review's blocking or non-blocking issues directly as inline comments on GitHub PRs. Each tier has its own button (🔴 Blocking, 🟢 Non-Blocking) and its own posted flag (`inline_comments_posted` for blocking — the flag predates the tiers — and `non_blocking_posted`); Disputed / Deferred set-asides are never posted inline.
 
 #### How It Works
 
-1. After a review completes, the "Post Inline Comments" button appears on the PR card
-2. User clicks the button to parse critical issues from the review content
-3. Backend extracts file paths, line numbers, and issue descriptions
+1. After a review completes, a per-tier "Post" button appears on the PR card while that tier is unposted
+2. User clicks the button and picks the issues from that tier in `InlineIssuePickerModal`
+3. Backend reads the issues from `content_json` (`parse_section_issues_from_json`, legacy documents folded first) with file paths and line numbers
 4. Comments are posted to GitHub via the `gh` CLI
-5. The button disappears after comments are posted (tracked in database)
+5. The button disappears after the tier is posted (tracked in database, with posted/found counts)
 
-#### Critical Issues Parsing
+#### Markdown Fallback Parsing
 
-The system extracts critical issues from review content using pattern matching:
+Legacy markdown reviews are parsed with pattern matching:
 
 ```python
 # Matches patterns like:
@@ -1710,16 +1729,16 @@ The modal parses the completed review content to extract named sections:
 
 | Section | Description |
 |---------|-------------|
-| Critical Issues | Critical bugs or security issues |
-| Major Concerns | Significant design or logic concerns |
-| Minor Issues | Style, naming, or minor code issues |
+| Blocking Issues | Findings the author must fix before the PR can merge |
+| Non-Blocking Issues | Everything else worth reporting: suggestions, polish, nits |
+| Disputed / Deferred | Set-aside findings (follow-ups only); shown but never posted inline |
 
 Each section can be individually toggled on/off and previewed before submission. Clicking **Edit** on a row opens `SectionEditModal` — a floating, draggable, resizable editor for that section's content (or per-issue Problem/Fix fields when the section is marked Inline).
 
 #### Composed Body Format
 
 The final review body is assembled from (joined by `\n\n---\n\n`):
-1. **Inline issues summary table** (prepended automatically when one or more inline comments will be posted) — a GFM markdown table with `Severity | Issue | Location` columns, sorted critical → major → minor with stable ordering within each severity. Heading: `**Inline issues posted (N)**`. Omitted entirely when no inline comments are selected.
+1. **Inline issues summary table** (prepended automatically when one or more inline comments will be posted) — a GFM markdown table with `Severity | Issue | Location` columns, sorted blocking → non-blocking with stable ordering within each tier. Heading: `**Inline issues posted (N)**`. Omitted entirely when no inline comments are selected.
 2. Custom text (if provided)
 3. Enabled review sections (each preceded by a bold heading)
 
@@ -1761,7 +1780,7 @@ The comment body is composed the same way a manually posted verdict is (summary,
 2. On a queue or swimlane card, the **🤖 Auto** button arms that PR, picks the mode (verdict / comment), and picks which reviewer agent its auto review uses. Optionally, the popover's "Override for this PR…" sets per-PR criteria (see below).
 3. A review completes — started from anywhere, by any surface.
 4. `check_review_status` saves the review, then spawns a thread running `maybe_post_auto_verdict` (`backend/services/auto_verdict_service.py`).
-5. The evaluator resolves the effective criteria (global config + the card's override, if any). In verdict mode it counts issues per severity, compares against the criteria, and posts `REQUEST_CHANGES`, `APPROVE`, `COMMENT`, or nothing. In comment mode it always posts `COMMENT`.
+5. The evaluator resolves the effective criteria (global config + the card's override, if any). In verdict mode it counts issues per tier (blocking / non-blocking), compares against the criteria, and posts `REQUEST_CHANGES`, `APPROVE`, `COMMENT`, or nothing. In comment mode it always posts `COMMENT`.
 6. The decision is recorded in the `auto_verdicts` table and surfaces on the card as a badge plus a verdict chip on the triggering review's rev-log row.
 
 #### Criteria
@@ -1771,18 +1790,19 @@ Stored as the `auto_verdict_config` key in `user_settings`. Defaults live in exa
 | Field | Default | Meaning |
 |-------|---------|---------|
 | `enabled` | `false` | Master switch. While off, armed cards are never evaluated and nothing is posted. |
-| `maxCritical` | `0` | Critical issues tolerated. `0` means one critical triggers changes-requested. |
-| `maxMajor` | `0` | Major issues tolerated. |
-| `maxMinor` | `99` | Minor issues tolerated — effectively unlimited, so minors alone never block. |
+| `maxBlocking` | `0` | Blocking issues tolerated. `0` means one blocking finding triggers changes-requested. |
+| `maxNonBlocking` | `null` | Non-blocking issues tolerated. `null` = no limit (the default), so non-blocking findings alone never block; an integer caps them. The UI shows a blank field as *unlimited*. |
 | `allowAutoApprove` | `false` | When off, a passing review posts nothing; only changes-requested is automated. |
 | `autoFollowupReview` | `false` | When on, an armed PR that gets new commits after a review automatically starts a follow-up review. Independent of `enabled` — it starts reviews but never posts to GitHub itself. |
-| `mediationDisputedThreshold` | `3` | Disputed critical/major findings at or above this count route the PR to **human mediation** instead of a verdict (see below). Minimum 1. |
+| `mediationDisputedThreshold` | `3` | Disputed blocking findings at or above this count route the PR to **human mediation** instead of a verdict (see below). Minimum 1. |
 
-Thresholds are **inclusive upper bounds**: `maxMajor: 1` allows one major and trips on two. Both switches default off so installing the feature cannot post anything until deliberately enabled.
+Thresholds are **inclusive upper bounds**: `maxBlocking: 1` allows one blocking finding and trips on two; a `null` limit never trips. Both switches default off so installing the feature cannot post anything until deliberately enabled.
+
+**Legacy criteria.** Before schema 2.0.0 the thresholds were `maxCritical` / `maxMajor` / `maxMinor`. `upgrade_legacy_criteria` (`auto_verdict_config.py`) folds that shape into `maxBlocking = maxCritical + maxMajor`, `maxNonBlocking = null`; it runs inside `get_criteria`, `validate_criteria` and `apply_override`, so a stored value, an incoming payload or a per-PR override in the old shape still evaluates correctly. The `severity_two_tier_v1` migration rewrote every stored copy, leaving the read-time upgrade as a safety net.
 
 #### Per-PR Criteria Overrides
 
-The global config is the default; any PR can carry its own **criteria override** — a complete snapshot of the six overridable fields (`maxCritical`, `maxMajor`, `maxMinor`, `allowAutoApprove`, `autoFollowupReview`, `mediationDisputedThreshold`) stored as JSON in `auto_verdict_arming.auto_verdict_criteria`. The rules:
+The global config is the default; any PR can carry its own **criteria override** — a complete snapshot of the five overridable fields (`maxBlocking`, `maxNonBlocking`, `allowAutoApprove`, `autoFollowupReview`, `mediationDisputedThreshold`) stored as JSON in `auto_verdict_arming.auto_verdict_criteria`. The rules:
 
 - **Whole-config, not per-field.** A PR either follows the global config or has its own full snapshot; there is no partial inheritance. Later changes to the global defaults do not affect overridden PRs.
 - **The master `enabled` switch is never overridable.** `OVERRIDE_KEYS` in `auto_verdict_config.py` deliberately excludes it, `validate_override` strips it, and `apply_override` never copies it — so "the master switch is off" always means nothing posts, board-wide.
@@ -1796,8 +1816,8 @@ Verdict mode:
 
 | Condition | Event posted | Recorded outcome |
 |-----------|--------------|------------------|
-| Disputed critical/major findings ≥ `mediationDisputedThreshold` (checked first) | `COMMENT` | `mediation` — PR disarmed |
-| Any severity over its limit | `REQUEST_CHANGES` | `posted` |
+| Disputed blocking findings ≥ `mediationDisputedThreshold` (checked first) | `COMMENT` | `mediation` — PR disarmed |
+| Either tier over its limit (a `null` limit never trips) | `REQUEST_CHANGES` | `posted` |
 | Within all limits, `allowAutoApprove` on, PR authored by someone else | `APPROVE` | `posted` |
 | Within all limits, `allowAutoApprove` on, PR self-authored | `COMMENT` | `posted` |
 | Within all limits, `allowAutoApprove` off | *(nothing)* | `suppressed` |
@@ -1814,7 +1834,7 @@ Comment mode:
 | `post_verdict` returned non-200 or raised | *(attempted)* | `error` |
 | `post_verdict` hit the GitHub API rate limit (429) | *(attempted)* | `deferred` — retried later |
 
-Comment mode never suppresses and never mediates: thresholds, `allowAutoApprove` and the mediation threshold are irrelevant, and the reason records the issue tallies (`comment mode — review findings posted as comment (N critical, …)`). Both modes are gated by the global master `enabled` switch — while it is off, armed cards in either mode post nothing and per-PR overrides are inert.
+Comment mode never suppresses and never mediates: thresholds, `allowAutoApprove` and the mediation threshold are irrelevant, and the reason records the issue tallies (`comment mode — review findings posted as comment (N blocking, …)`). Both modes are gated by the global master `enabled` switch — while it is off, armed cards in either mode post nothing and per-PR overrides are inert.
 
 GitHub rejects `APPROVE` on your own PR with a 422, so in verdict mode a self-authored passing PR falls back to `COMMENT` and the reason records why. A `suppressed` outcome is the "changes-requested only" mode: the card shows *passed — approve manually* so every approval stays a human action.
 
@@ -1825,7 +1845,7 @@ A review's severity sections hold only findings the author is expected to fix in
 - **Deferred** — the author agreed to fix the finding in a named follow-up (issue, PR, later milestone). The follow-up prompt has the reviewer mark it `deferred` and move it to the `deferred` section.
 - **Disputed** — the author declined with a rationale the reviewer does not accept. Marked `disputed`, moved to the `disputed` section, and **not re-argued** in later rounds; it stays there verbatim until the author changes position or a human settles it at live review.
 
-`count_issues` never adds set-aside issues to the `critical` / `major` / `minor` tallies, so three Majors with two properly deferred evaluate as one Major against `maxMajor`. It additionally returns `disputed`, `deferred`, and `disputed_blocking` (disputed issues whose original severity is critical or major). Minors may be disputed without limit. Both counts are stored on the `auto_verdicts` row (`disputed_count`, `deferred_count`) and surface as `disputedCount` / `deferredCount` on the card payload.
+`count_issues` never adds set-aside issues to the `blocking` / `non_blocking` tallies, so three blocking findings with two properly deferred evaluate as one against `maxBlocking`. It additionally returns `disputed`, `deferred`, and `disputed_blocking` (disputed issues whose original severity is `blocking`). Non-blocking findings may be disputed without limit. Both counts are stored on the `auto_verdicts` row (`disputed_count`, `deferred_count`) and surface as `disputedCount` / `deferredCount` on the card payload.
 
 This is what stopped the non-converging ED loop (scala PR #3437, eleven REQUEST_CHANGES rounds): standing disagreements used to count against `maxMajor` forever.
 
@@ -1893,10 +1913,13 @@ The setting is deliberately independent of the master `enabled` switch: `enabled
 ```sql
 auto_verdicts (
   id, repo, pr_number, review_id UNIQUE, event, outcome,
-  reason, critical_count, major_count, minor_count,
+  reason, blocking_count, non_blocking_count,
   disputed_count, deferred_count,        -- set-asides; NULL on rows before the columns existed
   criteria_json, head_commit_sha, error_detail, created_at
 )
+-- Databases created before schema 2.0.0 also carry the unread legacy
+-- critical_count / major_count / minor_count columns; severity_two_tier_v1
+-- backfilled blocking_count = critical + major and non_blocking_count = minor.
 ```
 
 Arming is its own per-PR table, independent of merge-queue membership (so pipelined PRs that are not on the board are armed and followed up exactly like board cards):
@@ -2122,7 +2145,7 @@ group under, and the Review Logs tab is grouped by run.
 
 `detail` leads with the GitHub review event (`APPROVE` / `REQUEST_CHANGES` /
 `COMMENT`), followed by the free-text explanation after an em dash separator —
-e.g. `APPROVE — 0 critical, 1 major`. `auto_started` distinguishes an auto
+e.g. `APPROVE — 0 blocking, 1 non-blocking`. `auto_started` distinguishes an auto
 verdict from a hand-posted one.
 
 #### Recording
@@ -2245,7 +2268,7 @@ Hovering a run row shows a panel with the review's issue tally and the run's
 timing:
 
 ```
-0 critical · 5 major · 4 minor
+5 blocking · 4 non-blocking
 completed · 1 attempt · took 14m 26s
 ```
 
@@ -2267,13 +2290,14 @@ the latest event would let a verdict posted an hour later inflate "took".
 **Issue counts are tallied at query time, not stored.** `GET /api/review-logs`
 collects the `review_id`s on the page, batch-loads those reviews in one query
 (chunked at 500 to stay under SQLite's bound-variable ceiling), and tallies each
-`content_json` through `review_schema.count_issues`. Measured at ~21ms for 223
-reviews, which buys coverage of every run ever logged with no new columns, no
-migration and no backfill.
+`content_json` through `review_schema.count_issues` (via `load_content_json`, so a
+legacy three-tier document is folded on read). Measured at ~21ms for 223 reviews,
+which buys coverage of every run ever logged with no new columns, no migration
+and no backfill.
 
-Two related columns are deliberately *not* the source. `reviews.critical_found_count`
-and friends are written only when inline comments are posted — populated for 2 of
-the 223 reviews in the log — and they count issues *posted to GitHub*, which is a
+Two related columns are deliberately *not* the source. `reviews.blocking_found_count`
+and friends are written only when inline comments are posted — populated for a
+handful of reviews in the log — and they count issues *posted to GitHub*, which is a
 different quantity from issues the review found.
 
 `count_issues` lives in `review_schema` rather than `auto_verdict_service` so this
@@ -3341,9 +3365,8 @@ Returns the global auto-verdict criteria, stored values merged over `DEFAULT_CRI
 {
   "config": {
     "enabled": false,
-    "maxCritical": 0,
-    "maxMajor": 0,
-    "maxMinor": 99,
+    "maxBlocking": 0,
+    "maxNonBlocking": null,
     "allowAutoApprove": false,
     "autoFollowupReview": false,
     "mediationDisputedThreshold": 3
@@ -3354,18 +3377,19 @@ Returns the global auto-verdict criteria, stored values merged over `DEFAULT_CRI
 **PUT** `/api/auto-verdict/config`
 
 Validates and saves the criteria. Thresholds must be integers ≥ 0; a negative or
-non-numeric value returns 400. Unrecognized keys are ignored, and omitted keys fall
-back to their defaults. Also accepts POST. The payload may be sent either wrapped in
-`config` or as a bare object.
+non-numeric value returns 400. `maxNonBlocking` additionally accepts `null` (or `""`)
+meaning no limit. A payload in the pre-2.0.0 shape (`maxCritical` / `maxMajor` /
+`maxMinor`) is folded via `upgrade_legacy_criteria` before validation. Unrecognized
+keys are ignored, and omitted keys fall back to their defaults. Also accepts POST.
+The payload may be sent either wrapped in `config` or as a bare object.
 
 **Request Body**:
 ```json
 {
   "config": {
     "enabled": true,
-    "maxCritical": 0,
-    "maxMajor": 1,
-    "maxMinor": 99,
+    "maxBlocking": 1,
+    "maxNonBlocking": null,
     "allowAutoApprove": false,
     "autoFollowupReview": false,
     "mediationDisputedThreshold": 3
@@ -3415,16 +3439,15 @@ Criteria Overrides](#per-pr-criteria-overrides)).
 ```json
 {
   "criteria": {
-    "maxCritical": 3,
-    "maxMajor": 1,
-    "maxMinor": 99,
+    "maxBlocking": 3,
+    "maxNonBlocking": null,
     "allowAutoApprove": true,
     "autoFollowupReview": false
   }
 }
 ```
 
-The override is validated like the global config (integer thresholds ≥ 0, else 400)
+The override is validated like the global config (integer thresholds ≥ 0, `maxNonBlocking` nullable, else 400)
 but never contains `enabled` — the master switch is not per-PR and an `enabled` key
 in the payload is dropped.
 
@@ -3504,10 +3527,9 @@ calls `gh`.
      "reviewDecision": "APPROVED", "currentReviewers": [], "ciStatus": "success",
      "statusCheckRollup": [], "running": false,
      "review": {"reviewId": 1499, "score": 6.5, "isFollowup": false, "createdAt": "...",
-                "inlineCommentsPosted": true, "majorConcernsPosted": false, "minorIssuesPosted": false,
-                "critical": {"posted": 0, "found": 0, "titles": []},
-                "major": {"posted": 1, "found": 1, "titles": ["..."]},
-                "minor": {"posted": 0, "found": 2, "titles": ["...", "..."]}},
+                "inlineCommentsPosted": true, "nonBlockingPosted": false,
+                "blocking": {"posted": 1, "found": 1, "titles": ["..."]},
+                "non_blocking": {"posted": 0, "found": 2, "titles": ["...", "..."]}},
      "revLog": [], "rounds": 1, "onBoard": false, "queueItemId": null, "notesCount": 0}
   ]
 }
@@ -3823,7 +3845,10 @@ Gets the status of a specific review.
 
 **POST** `/api/reviews/<review_id>/post-inline-comments`
 
-Posts critical issues from a review as inline comments on the GitHub PR.
+Posts the issues of one review tier as inline comments on the GitHub PR. Body:
+`{"section": "blocking" | "non_blocking", "selected_indices": [..]}` (section defaults
+to `blocking`; any other section, including `disputed` / `deferred`, is 400). The
+sibling `GET /api/reviews/<review_id>/section-issues?section=` previews the same list.
 
 **Response** (Success):
 ```json
@@ -3837,7 +3862,7 @@ Posts critical issues from a review as inline comments on the GitHub PR.
 **Response** (No Issues Found):
 ```json
 {
-  "message": "No critical issues found to post",
+  "message": "No blocking issues found to post",
   "issues_posted": 0,
   "issues_found": 0
 }
@@ -3858,7 +3883,7 @@ Posts a formal PR review verdict (Approve, Request Changes, or Comment) to GitHu
 ```json
 {
   "event": "APPROVE",
-  "body": "Looks good! All critical issues addressed."
+  "body": "Looks good! All blocking issues addressed."
 }
 ```
 
@@ -4109,14 +4134,13 @@ Returns a single review with full content in both structured JSON and generated 
   "review_file_path": "/path/to/reviews/owner-repo-pr-123.md",
   "score": 8,
   "content_json": {
-    "schema_version": "1.0.0",
+    "schema_version": "2.0.0",
     "metadata": { "pr_number": 123, "repository": "owner/repo", "author": "developer" },
     "summary": "Overall review summary...",
     "score": { "overall": 8, "breakdown": [] },
     "sections": [
-      { "type": "critical", "display_name": "Critical Issues", "issues": [] },
-      { "type": "major", "display_name": "Major Concerns", "issues": [] },
-      { "type": "minor", "display_name": "Minor Issues", "issues": [] }
+      { "type": "blocking", "display_name": "Blocking Issues", "issues": [] },
+      { "type": "non_blocking", "display_name": "Non-Blocking Issues", "issues": [] }
     ]
   },
   "content": "# Code Review for PR #123\n\n## Summary\n...",
@@ -4246,7 +4270,7 @@ Returns review lifecycle events, newest first. Powers the Review Logs tab.
       "review_id": 969,
       "score": 8.0,
       "pid": 196753,
-      "issue_counts": { "critical": 0, "major": 5, "minor": 4 }
+      "issue_counts": { "blocking": 5, "non_blocking": 4 }
     }
   ],
   "total": 1
@@ -4343,7 +4367,7 @@ and validated server-side; see those feature sections for their shapes.
 | `cache_ttl_seconds` | integer | 300 | Cache time-to-live in seconds (5 minutes) |
 | `workflow_cache_ttl_minutes` | integer | 60 | Workflow cache TTL in minutes (stale-while-revalidate) |
 | `workflow_cache_max_runs` | integer | 1000 | Maximum unfiltered workflow runs to cache per repo |
-| `review_section_names` | object | `{"critical": "Critical Issues", "major": "Major Concerns", "minor": "Minor Issues"}` | Custom display names for review sections |
+| `review_section_names` | object | `{"blocking": "Blocking Issues", "non_blocking": "Non-Blocking Issues", "disputed": "Disputed", "deferred": "Deferred"}` | Custom display names for review sections |
 | `reviews_dir` | string | `~/code-reviews` | Directory where Claude code reviews (`.md`/`.json`) are written. Supports `~` and `$VAR` expansion so it stays machine-agnostic. Falls back to `~/code-reviews` if omitted. |
 | `post_review_started_comment` | boolean | true | Master switch for all PR status comments (the name is historical): review started/retry/gave-up, stale-stop, orphan-requeued, verdict suppressed/deferred/error/skipped, and the automation enrolled/waiting/expired/failed/unidentified comments, plus the supersede-deletes. Set to `false` to suppress everything. See "PR Status Comments". |
 | `review_max_attempts` | integer | 3 | Total review attempts (including the first) before a review is recorded as failed. Clamped to 1–5; `1` disables retries. |
@@ -4386,9 +4410,8 @@ and validated server-side; see those feature sections for their shapes.
   "log_retention_days": 30,
   "post_review_started_comment": true,
   "review_section_names": {
-    "critical": "Critical Issues",
-    "major": "Major Concerns",
-    "minor": "Minor Issues"
+    "blocking": "Blocking Issues",
+    "non_blocking": "Non-Blocking Issues"
   },
   "pr_sync": {
     "enabled": true,
@@ -4778,11 +4801,13 @@ records a valid `head_commit_sha`.
 
 Reviews are stored as structured JSON in the `content_json` column. The schema is versioned to support future evolution.
 
-#### Schema Version: 1.0.0
+**Schema history.** 1.0.0 carried three severity sections (`critical`, `major`, `minor`). 2.0.0 (September 2026) folds them into two tiers: `blocking` (critical + major — must be fixed in this PR) and `non_blocking` (minor). `normalize_legacy_sections` in `review_schema.py` performs the fold — merging every critical and major section into one blocking section (critical issues first), renaming minor, remapping the `severity` recorded on disputed/deferred issues, and bumping `schema_version` — and returns its input untouched when nothing is legacy. It is applied at every boundary: `save_review_to_db` before validation (so a reviewer agent still emitting the old vocabulary is accepted), `markdown_to_json` (which still recognises the old headings), and the shared read helper `load_content_json` used by `count_issues`, the auto-verdict loader, card/pipeline payloads and inline posting — so a row restored from an old backup can never tally as zero issues. The `severity_two_tier_v1` migration rewrote all stored documents once. The validator itself accepts only the 2.0.0 vocabulary.
+
+#### Schema Version: 2.0.0
 
 ```json
 {
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
   "metadata": {
     "pr_number": 123,
     "repository": "owner/repo",
@@ -4807,8 +4832,8 @@ Reviews are stored as structured JSON in the `content_json` column. The schema i
   },
   "sections": [
     {
-      "type": "critical",
-      "display_name": "Critical Issues",
+      "type": "blocking",
+      "display_name": "Blocking Issues",
       "issues": [
         {
           "title": "Race condition in check_and_hold",
@@ -4818,8 +4843,7 @@ Reviews are stored as structured JSON in the `content_json` column. The schema i
         }
       ]
     },
-    { "type": "major", "display_name": "Major Concerns", "issues": [] },
-    { "type": "minor", "display_name": "Minor Issues", "issues": [] }
+    { "type": "non_blocking", "display_name": "Non-Blocking Issues", "issues": [] }
   ],
   "highlights": [
     "Good test coverage for the new endpoint.",
@@ -4832,14 +4856,14 @@ Reviews are stored as structured JSON in the `content_json` column. The schema i
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `schema_version` | string | Yes | Semver version of the schema (currently `"1.0.0"`) |
+| `schema_version` | string | Yes | Semver version of the schema (currently `"2.0.0"`) |
 | `metadata` | object | Yes | PR identification and review context |
 | `metadata.repository` | string | Yes | Repository in `owner/repo` format |
 | `summary` | string | Yes | Brief overall assessment |
 | `score.overall` | integer | Yes | Overall score (0-10) |
 | `score.breakdown` | array | No | Optional array of `{category, score, comment}` |
-| `sections` | array | Yes | Array of `{type, display_name, issues}` objects; `type` ∈ `critical`, `major`, `minor` (findings to fix) plus `disputed` / `deferred` (set aside by an author disposition; follow-ups only) — `SECTION_TYPES` in `review_schema.py` |
-| `sections[].issues[].severity` | string | In `disputed`/`deferred` only | The severity the finding had when first raised (`critical` / `major` / `minor`); rejected on issues in a severity section |
+| `sections` | array | Yes | Array of `{type, display_name, issues}` objects; `type` ∈ `blocking` (must be fixed in this PR), `non_blocking` (everything else worth reporting) plus `disputed` / `deferred` (set aside by an author disposition; follow-ups only) — `SECTION_TYPES` in `review_schema.py` |
+| `sections[].issues[].severity` | string | In `disputed`/`deferred` only | The severity the finding had when first raised (`blocking` / `non_blocking`); rejected on issues in a severity section |
 | `sections[].issues[].disposition` | string | In `disputed`/`deferred` only | The author's one-line rationale (disputed) or follow-up target (deferred) |
 | `highlights` | array | No | Positive aspects of the PR |
 | `followup` | object | No | Follow-ups only: `{previous_review_id, resolution_status[]}` |
@@ -4853,7 +4877,8 @@ The `review_schema.py` service module provides:
 - **`json_to_markdown(data)`**: Converts structured JSON to human-readable markdown for display and file export
 - **`markdown_to_json(text)`**: Best-effort conversion of legacy markdown reviews into the structured JSON format
 - **`get_section_display_names()`**: Returns the configured display names for each section key (customizable via `review_section_names` in config)
-- **`SCHEMA_VERSION`**: Current schema version constant (`"1.0.0"`)
+- **`normalize_legacy_sections(data, display_names=None)`** / **`load_content_json(raw)`**: Fold a 1.0.0 document into the two tiers (see Schema history); the loader also parses and returns `None` for unusable input
+- **`SCHEMA_VERSION`**: Current schema version constant (`"2.0.0"`)
 
 The formal JSON Schema specification is available at `backend/services/review_schema_spec.json` for use by external tools and agents.
 
@@ -5062,7 +5087,7 @@ gh-pr-explorer/
 │   │   ├── analytics_rollup.py     # Pure rollup builder (build_rows) + needs_rebuild/rebuild_repo orchestration
 │   │   ├── bot_filter.py           # is_bot_login/normalize_login for analytics attribution
 │   │   ├── review_service.py       # Claude CLI subprocess management
-│   │   ├── inline_comments_service.py  # Critical issue parsing + posting to GitHub
+│   │   ├── inline_comments_service.py  # Per-tier issue parsing + posting to GitHub
 │   │   ├── workflow_service.py     # Parallel batch workflow data fetching
 │   │   ├── timeline_service.py     # PR timeline: normalize + fetch + cache-aware get
 │   │   ├── review_schema.py        # Review JSON schema, validation, JSON<->markdown conversion

@@ -8,6 +8,12 @@ import { Spinner } from '../common/Spinner'
 import { getReviewDetail, postVerdict, checkPRReviewed } from '../../api/reviews'
 import { getAuditDetail, checkPRAudited } from '../../api/audits'
 import { SECTION_KEY_BY_TYPE, getReviewSections, type ReviewSection } from '../../utils/reviewSections'
+import {
+  INLINE_ELIGIBLE_SECTION_KEYS,
+  severityFromSectionKey,
+  severityLabel,
+  severityRank,
+} from '../../utils/severity'
 import { SectionEditModal, type EditableIssue } from './SectionEditModal'
 import type {
   VerdictEvent,
@@ -22,24 +28,11 @@ import type {
 const buildInlineSummaryTable = (comments: VerdictInlineComment[]): string => {
   if (comments.length === 0) return ''
 
-  const severityRank: Record<'critical' | 'major' | 'minor', number> = {
-    critical: 0,
-    major: 1,
-    minor: 2,
-  }
-  const severityLabel: Record<'critical' | 'major' | 'minor', string> = {
-    critical: 'Critical',
-    major: 'Major',
-    minor: 'Minor',
-  }
-
-  // Stable sort: critical → major → minor, preserving original order within each group
+  // Stable sort: blocking → non-blocking, preserving original order within each group
   const indexed = comments.map((c, i) => ({ c, i }))
   indexed.sort((a, b) => {
-    const aKey = (a.c.section ?? '') as 'critical' | 'major' | 'minor'
-    const bKey = (b.c.section ?? '') as 'critical' | 'major' | 'minor'
-    const ra = severityRank[aKey] ?? 99
-    const rb = severityRank[bKey] ?? 99
+    const ra = severityRank(a.c.section)
+    const rb = severityRank(b.c.section)
     if (ra !== rb) return ra - rb
     return a.i - b.i
   })
@@ -59,8 +52,7 @@ const buildInlineSummaryTable = (comments: VerdictInlineComment[]): string => {
   }
 
   const rows = indexed.map(({ c }) => {
-    const sectionKey = (c.section ?? '') as 'critical' | 'major' | 'minor'
-    const sev = severityLabel[sectionKey] ?? '—'
+    const sev = severityLabel(c.section)
     const title = escapeCell(c.title ?? '(untitled)')
     return `| ${sev} | ${title} | ${formatLoc(c)} |`
   })
@@ -147,7 +139,7 @@ const EVENT_OPTIONS: { value: VerdictEvent; label: string }[] = [
 ]
 
 // Section keys that support inline posting (have file locations)
-const INLINE_ELIGIBLE_KEYS = new Set(['critical-issues', 'major-concerns', 'minor-issues'])
+const INLINE_ELIGIBLE_KEYS = INLINE_ELIGIBLE_SECTION_KEYS
 
 const MIN_PANEL_WIDTH = 300
 const MIN_PANEL_HEIGHT = 250
@@ -558,12 +550,7 @@ export function VerdictModal({
   }
 
   /** Map section keys to backend section types. */
-  const sectionKeyToType = (key: string): string | undefined => {
-    if (key === 'critical-issues') return 'critical'
-    if (key === 'major-concerns') return 'major'
-    if (key === 'minor-issues') return 'minor'
-    return undefined
-  }
+  const sectionKeyToType = (key: string): string | undefined => severityFromSectionKey(key)
 
   /** Build inline comment payloads from inline-marked sections. */
   const buildInlineComments = (): VerdictInlineComment[] => {
@@ -693,7 +680,7 @@ export function VerdictModal({
           for (const [section, details] of Object.entries(result.section_details)) {
             if (details.failed_titles.length > 0) {
               failedDetails.push(
-                `${section}: ${details.failed_titles.join(', ')}`
+                `${severityLabel(section, section)}: ${details.failed_titles.join(', ')}`
               )
             }
           }

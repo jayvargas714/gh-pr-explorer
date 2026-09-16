@@ -184,7 +184,7 @@ def test_per_pr_override_enables_followup_when_global_is_off(harness, monkeypatc
     )
     _arm(harness)
     harness.arming.set_criteria(REPO, PR, {
-        "maxCritical": 0, "maxMajor": 0, "maxMinor": 99,
+        "maxBlocking": 0, "maxNonBlocking": None,
         "allowAutoApprove": False, "autoFollowupReview": True,
     })
     _review(harness)
@@ -197,7 +197,7 @@ def test_per_pr_override_enables_followup_when_global_is_off(harness, monkeypatc
 def test_per_pr_override_disables_followup_when_global_is_on(harness):
     _arm(harness)
     harness.arming.set_criteria(REPO, PR, {
-        "maxCritical": 0, "maxMajor": 0, "maxMinor": 99,
+        "maxBlocking": 0, "maxNonBlocking": None,
         "allowAutoApprove": False, "autoFollowupReview": False,
     })
     _review(harness)

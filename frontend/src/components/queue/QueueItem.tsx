@@ -10,6 +10,7 @@ import { NotesModal } from './NotesModal'
 import { VerdictModal } from './VerdictModal'
 import { QueueDescriptionModal } from './QueueDescriptionModal'
 import { QueueReviewButton } from '../reviews/QueueReviewButton'
+import { SEVERITY_LABELS } from '../../utils/severity'
 import { AutomationPipelineControl } from '../common/AutomationPipelineControl'
 import { AuditButton } from '../audits/AuditButton'
 import { AutoVerdictToggle } from '../autoVerdict/AutoVerdictToggle'
@@ -266,24 +267,17 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
               </span>
             )}
             {item.autoVerdict?.last && <AutoVerdictBadge record={item.autoVerdict.last} />}
-            {!!item.inlineCommentsPosted && (item.criticalFoundCount ?? 0) > 0 && (
-              <span data-tooltip={buildInlineTooltip('Critical', item.criticalIssueTitles, item.criticalPostedCount, item.criticalFoundCount)}>
-                <Badge variant={item.criticalPostedCount !== null && item.criticalPostedCount < (item.criticalFoundCount ?? 0) ? 'warning' : 'info'}>
-                  Critical {item.criticalPostedCount ?? '?'}/{item.criticalFoundCount ?? '?'}
+            {!!item.inlineCommentsPosted && (item.blockingFoundCount ?? 0) > 0 && (
+              <span data-tooltip={buildInlineTooltip(SEVERITY_LABELS.blocking, item.blockingIssueTitles, item.blockingPostedCount, item.blockingFoundCount)}>
+                <Badge variant={item.blockingPostedCount !== null && item.blockingPostedCount < (item.blockingFoundCount ?? 0) ? 'warning' : 'info'}>
+                  {SEVERITY_LABELS.blocking} {item.blockingPostedCount ?? '?'}/{item.blockingFoundCount ?? '?'}
                 </Badge>
               </span>
             )}
-            {!!item.majorConcernsPosted && (item.majorFoundCount ?? 0) > 0 && (
-              <span data-tooltip={buildInlineTooltip('Major', item.majorIssueTitles, item.majorPostedCount, item.majorFoundCount)}>
-                <Badge variant={item.majorPostedCount !== null && item.majorPostedCount < (item.majorFoundCount ?? 0) ? 'warning' : 'info'}>
-                  Major {item.majorPostedCount ?? '?'}/{item.majorFoundCount ?? '?'}
-                </Badge>
-              </span>
-            )}
-            {!!item.minorIssuesPosted && (item.minorFoundCount ?? 0) > 0 && (
-              <span data-tooltip={buildInlineTooltip('Minor', item.minorIssueTitles, item.minorPostedCount, item.minorFoundCount)}>
-                <Badge variant={item.minorPostedCount !== null && item.minorPostedCount < (item.minorFoundCount ?? 0) ? 'warning' : 'info'}>
-                  Minor {item.minorPostedCount ?? '?'}/{item.minorFoundCount ?? '?'}
+            {!!item.nonBlockingPosted && (item.nonBlockingFoundCount ?? 0) > 0 && (
+              <span data-tooltip={buildInlineTooltip(SEVERITY_LABELS.non_blocking, item.nonBlockingIssueTitles, item.nonBlockingPostedCount, item.nonBlockingFoundCount)}>
+                <Badge variant={item.nonBlockingPostedCount !== null && item.nonBlockingPostedCount < (item.nonBlockingFoundCount ?? 0) ? 'warning' : 'info'}>
+                  {SEVERITY_LABELS.non_blocking} {item.nonBlockingPostedCount ?? '?'}/{item.nonBlockingFoundCount ?? '?'}
                 </Badge>
               </span>
             )}

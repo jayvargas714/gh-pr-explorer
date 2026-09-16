@@ -5,12 +5,9 @@ import { Alert } from '../common/Alert'
 import { Spinner } from '../common/Spinner'
 import { fetchSectionIssues, postInlineComments } from '../../api/reviews'
 import type { SectionIssuePreview } from '../../api/types'
+import { SEVERITY_SECTION_HEADINGS } from '../../utils/severity'
 
-const SECTION_LABELS: Record<string, string> = {
-  critical: 'Critical Issues',
-  major: 'Major Concerns',
-  minor: 'Minor Issues',
-}
+const SECTION_LABELS: Record<string, string> = SEVERITY_SECTION_HEADINGS
 
 interface InlineIssuePickerModalProps {
   reviewId: number

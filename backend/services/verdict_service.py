@@ -137,7 +137,7 @@ def post_verdict(owner, repo, pr_number, event, body, inline_comments=None, revi
         body: Review body text.
         inline_comments: Optional list of inline comment dicts with keys:
             path (str), body (str), start_line (int|None), end_line (int|None),
-            title (str, optional), section (str, optional: 'critical'|'major'|'minor').
+            title (str, optional), section (str, optional: 'blocking'|'non_blocking').
         review_id: Optional review ID — if provided, section-posted counts
             will be updated in the database after posting.
 

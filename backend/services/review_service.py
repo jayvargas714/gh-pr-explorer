@@ -45,7 +45,9 @@ from backend.services.review_event_log import (
 )
 from backend.services.review_schema import (
     extract_markdown_summary,
+    get_section_display_names,
     markdown_to_json,
+    normalize_legacy_sections,
     validate_review_json,
     json_to_markdown,
     SCHEMA_VERSION,
@@ -56,19 +58,21 @@ logger = logging.getLogger(__name__)
 # Compact schema instructions embedded in the review prompt
 _SCHEMA_INSTRUCTIONS = (
     "The JSON must have these top-level keys: "
-    '"schema_version" (set to "1.0.0"), '
+    f'"schema_version" (set to "{SCHEMA_VERSION}"), '
     '"metadata" (object with pr_number, repository, pr_url, pr_title, author, branch {head, base}, '
     "review_date, review_type, files_changed, additions, deletions), "
     '"summary" (string), '
-    '"sections" (array of objects with type=critical|major|minor|disputed|deferred, display_name, and issues array), '
+    '"sections" (array of objects with type=blocking|non_blocking|disputed|deferred, display_name, and issues array — '
+    "blocking = findings the author must fix in this PR before it can merge; non_blocking = everything else "
+    "worth reporting), "
     '"highlights" (array of strings), '
     '"score" (object with overall 0-10, optional breakdown array of {category, score, comment}, optional summary). '
     "Each issue MUST have: title (string), location (object with file, start_line, end_line), "
     "problem (string), and optionally principle (string — the engineering principle violated, "
     "e.g. 'DRY / Single Source of Truth (violates DRY)'), fix (string), and code_snippet (string). "
-    "Issues in a disputed or deferred section MUST also have severity (critical|major|minor — the "
+    "Issues in a disputed or deferred section MUST also have severity (blocking|non_blocking — the "
     "severity the finding had when first raised) and disposition (string — the author's one-line "
-    "rationale or follow-up target). Never put severity on issues in critical/major/minor sections. "
+    "rationale or follow-up target). Never put severity on issues in blocking/non_blocking sections. "
     "Disputed and deferred sections appear only in follow-up reviews. "
 )
 
@@ -414,6 +418,10 @@ def save_review_to_db(key, review, status, reviews_db):
                     try:
                         raw = json_path.read_text(encoding="utf-8")
                         parsed = json.loads(raw)
+                        # Agents still emitting critical/major/minor are folded
+                        # into the two tiers before validation and storage.
+                        if isinstance(parsed, dict):
+                            parsed = normalize_legacy_sections(parsed, get_section_display_names())
                         valid, errs = validate_review_json(parsed)
                         if valid:
                             review_json_data = parsed
@@ -1119,7 +1127,7 @@ _DISPOSITION_INSTRUCTIONS = (
     "previous review's disputed or deferred sections stay there verbatim unless the author's new "
     "replies change their position. Never silently drop a finding the author disputed. Disputed "
     "and deferred findings do not count toward the verdict; the application routes the PR to "
-    "human mediation when enough critical/major findings are disputed. Findings the author did "
+    "human mediation when enough blocking findings are disputed. Findings the author did "
     "not address keep the usual statuses (resolved / partially_addressed / not_addressed / wont_fix). "
 )
 

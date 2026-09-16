@@ -13,8 +13,10 @@ from backend.database import (
     get_queue_db, get_reviews_db, get_audits_db, get_auto_verdicts_db,
     get_automation_dispatches_db, get_auto_verdict_arming_db,
 )
+from backend.services.auto_verdict_config import upgrade_legacy_criteria
 from backend.services.github_service import fetch_pr_queue_data
 from backend.services.pr_service import get_ci_status, get_current_reviewers, get_review_status
+from backend.services.review_schema import SEVERITIES, load_content_json
 
 
 def enrich_queue_items(items: List[Dict[str, Any]], max_workers: int = 5) -> List[Dict[str, Any]]:
@@ -124,17 +126,13 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db, auto_verd
         "reviewScore": rs.get("score"),
         "reviewId": rs.get("reviewId"),
         "inlineCommentsPosted": rs.get("inlineCommentsPosted", False),
-        "majorConcernsPosted": rs.get("majorConcernsPosted", False),
-        "minorIssuesPosted": rs.get("minorIssuesPosted", False),
-        "criticalPostedCount": rs.get("critical", {}).get("posted"),
-        "criticalFoundCount": rs.get("critical", {}).get("found"),
-        "majorPostedCount": rs.get("major", {}).get("posted"),
-        "majorFoundCount": rs.get("major", {}).get("found"),
-        "minorPostedCount": rs.get("minor", {}).get("posted"),
-        "minorFoundCount": rs.get("minor", {}).get("found"),
-        "criticalIssueTitles": rs.get("critical", {}).get("titles"),
-        "majorIssueTitles": rs.get("major", {}).get("titles"),
-        "minorIssueTitles": rs.get("minor", {}).get("titles"),
+        "nonBlockingPosted": rs.get("nonBlockingPosted", False),
+        "blockingPostedCount": rs.get("blocking", {}).get("posted"),
+        "blockingFoundCount": rs.get("blocking", {}).get("found"),
+        "nonBlockingPostedCount": rs.get("non_blocking", {}).get("posted"),
+        "nonBlockingFoundCount": rs.get("non_blocking", {}).get("found"),
+        "blockingIssueTitles": rs.get("blocking", {}).get("titles"),
+        "nonBlockingIssueTitles": rs.get("non_blocking", {}).get("titles"),
         "isFollowup": rs.get("isFollowup", False),
         "autoVerdict": format_auto_verdict_state(
             get_auto_verdict_arming_db().get(item["repo"], item["pr_number"]) or {},
@@ -154,28 +152,27 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db, auto_verd
 
 def summarize_reviews(pr_reviews: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Summarize the newest review of a PR (rows newest first) for card and
-    pipeline payloads: score, follow-up flag, posted flags and per-severity
+    pipeline payloads: score, follow-up flag, posted flags and per-tier
     posted/found counts + issue titles. None when the PR has no review."""
     if not pr_reviews:
         return None
     latest = pr_reviews[0]
-    critical_titles, major_titles, minor_titles = _extract_issue_titles(latest.get("content_json"))
-    titles = {"critical": critical_titles, "major": major_titles, "minor": minor_titles}
+    titles = _extract_issue_titles(latest.get("content_json"))
     return {
         "reviewId": latest.get("id"),
         "score": latest.get("score"),
         "isFollowup": bool(latest.get("is_followup", False)),
         "createdAt": latest.get("review_timestamp"),
+        # inline_comments_posted is the blocking tier's posted flag.
         "inlineCommentsPosted": bool(latest.get("inline_comments_posted", False)),
-        "majorConcernsPosted": bool(latest.get("major_concerns_posted", False)),
-        "minorIssuesPosted": bool(latest.get("minor_issues_posted", False)),
+        "nonBlockingPosted": bool(latest.get("non_blocking_posted", False)),
         **{
             sev: {
                 "posted": latest.get(f"{sev}_posted_count"),
                 "found": latest.get(f"{sev}_found_count"),
                 "titles": titles[sev],
             }
-            for sev in ("critical", "major", "minor")
+            for sev in SEVERITIES
         },
     }
 
@@ -215,7 +212,7 @@ def format_auto_verdict_state(item: Dict[str, Any], last: Optional[Dict[str, Any
         try:
             parsed = json.loads(raw) if isinstance(raw, str) else raw
             if isinstance(parsed, dict):
-                override = parsed
+                override = upgrade_legacy_criteria(parsed)
         except (json.JSONDecodeError, TypeError):
             pass
     return {
@@ -234,9 +231,8 @@ def _format_auto_verdict(row):
         "event": row.get("event"),
         "outcome": row.get("outcome"),
         "reason": row.get("reason"),
-        "criticalCount": row.get("critical_count"),
-        "majorCount": row.get("major_count"),
-        "minorCount": row.get("minor_count"),
+        "blockingCount": row.get("blocking_count"),
+        "nonBlockingCount": row.get("non_blocking_count"),
         "disputedCount": row.get("disputed_count"),
         "deferredCount": row.get("deferred_count"),
         "createdAt": row.get("created_at"),
@@ -301,26 +297,22 @@ def build_rev_log(reviews, audits, auto_verdicts=None):
 
 
 def _extract_issue_titles(content_json_raw):
-    """Return (critical_titles, major_titles, minor_titles) — each a list of strings or None."""
-    if not content_json_raw:
-        return None, None, None
-    try:
-        data = content_json_raw if isinstance(content_json_raw, dict) else json.loads(content_json_raw)
-        section_map = {"critical": [], "major": [], "minor": []}
-        for section in data.get("sections", []):
-            stype = section.get("type", "")
-            if stype in section_map:
-                for issue in section.get("issues", []):
-                    title = issue.get("title", "").strip()
-                    if title:
-                        section_map[stype].append(title)
-        return (
-            section_map["critical"] or None,
-            section_map["major"] or None,
-            section_map["minor"] or None,
-        )
-    except (json.JSONDecodeError, TypeError, AttributeError):
-        return None, None, None
+    """Return ``{tier: [titles] | None}`` for each severity tier. Legacy
+    critical/major/minor documents are folded into the two tiers on read."""
+    section_map = {sev: [] for sev in SEVERITIES}
+    data = load_content_json(content_json_raw)
+    if data is not None:
+        try:
+            for section in data.get("sections", []):
+                stype = section.get("type", "")
+                if stype in section_map:
+                    for issue in section.get("issues", []):
+                        title = issue.get("title", "").strip()
+                        if title:
+                            section_map[stype].append(title)
+        except (TypeError, AttributeError):
+            section_map = {sev: [] for sev in SEVERITIES}
+    return {sev: titles or None for sev, titles in section_map.items()}
 
 
 def _review_requested_from_me(queue_data) -> bool:

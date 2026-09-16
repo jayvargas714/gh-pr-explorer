@@ -359,9 +359,9 @@ def test_dispatch_window_expiry():
 # --- follow-up prompt: conversation + dispositions ------------------------------
 
 PREV_CONTENT = json.dumps({
-    "schema_version": "1.0.0", "metadata": {"pr_number": PR, "repository": f"{OWNER}/{REPO}"},
+    "schema_version": "2.0.0", "metadata": {"pr_number": PR, "repository": f"{OWNER}/{REPO}"},
     "summary": "Prior summary.", "score": {"overall": 5},
-    "sections": [{"type": "critical", "display_name": "Critical Issues", "issues": [
+    "sections": [{"type": "blocking", "display_name": "Blocking Issues", "issues": [
         {"title": "Null check missing", "location": {"file": "a.py", "start_line": 1, "end_line": 2},
          "problem": "p", "fix": "f"}]}],
 })
@@ -417,7 +417,8 @@ def test_initial_prompt_has_no_followup_scope_rule(spawn_env):
 def test_schema_instructions_describe_set_aside_sections(spawn_env):
     review_service.start_review_process(PR_URL, OWNER, REPO, PR)
     prompt = _prompt_of(spawn_env)
-    assert "type=critical|major|minor|disputed|deferred" in prompt
+    assert "type=blocking|non_blocking|disputed|deferred" in prompt
+    assert '"schema_version" (set to "2.0.0")' in prompt
     assert "severity" in prompt and "disposition" in prompt
 
 
