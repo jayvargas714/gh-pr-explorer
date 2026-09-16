@@ -6,7 +6,7 @@ commit that closed out that feature set.
 
 | Version | Date | Theme |
 |---|---|---|
-| [v1.2.0](v1.2.0.md) | 2026-09-16 | Two-tier review severity (Blocking / Non-Blocking), `maxBlocking` / `maxNonBlocking` criteria, one-shot data migration |
+| [v1.2.0](v1.2.0.md) | 2026-09-16 | Two-tier review severity (Blocking / Non-Blocking), `maxBlocking` / `maxNonBlocking` criteria, one-shot data migration, reviewers report problems without proposing fixes |
 | [v1.1.0](v1.1.0.md) | 2026-09-11 | Analytics rebuilt on a local daily rollup, inception history backfill, commit sync, avg review rounds |
 | [v1.0.0](v1.0.0.md) | 2026-09-04 | Pipeline overlay, review-request follow-ups, disputed/deferred + mediation, review hardening, PR status comments |
 | [v0.9.0](v0.9.0.md) | 2026-08-31 | Automation tab and auto-review pipeline |

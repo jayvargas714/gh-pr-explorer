@@ -151,6 +151,28 @@ def load_content_json(raw: Any) -> Optional[Dict[str, Any]]:
     return normalize_legacy_sections(data)
 
 
+def strip_fixes(content_json: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop the ``fix`` field from every issue in every section.
+
+    Reviewers report problems, never solutions (September 2026); the save path
+    applies this so a reviewer that still emits a fix cannot get one stored,
+    rendered or posted. Reviews stored before then keep their historical Fix
+    lines — this is deliberately not part of normalize_legacy_sections.
+    Returns the input object itself when there is nothing to strip.
+    """
+    sections = content_json.get("sections") or []
+    if not any(isinstance(s, dict) and any(isinstance(i, dict) and "fix" in i for i in (s.get("issues") or []))
+               for s in sections):
+        return content_json
+    out = copy.deepcopy(content_json)
+    for section in out.get("sections") or []:
+        if isinstance(section, dict):
+            for issue in section.get("issues") or []:
+                if isinstance(issue, dict):
+                    issue.pop("fix", None)
+    return out
+
+
 def count_issues(content_json: Dict[str, Any]) -> Dict[str, int]:
     """Tally a review's content_json.
 

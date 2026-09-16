@@ -48,6 +48,7 @@ from backend.services.review_schema import (
     get_section_display_names,
     markdown_to_json,
     normalize_legacy_sections,
+    strip_fixes,
     validate_review_json,
     json_to_markdown,
     SCHEMA_VERSION,
@@ -69,7 +70,8 @@ _SCHEMA_INSTRUCTIONS = (
     '"score" (object with overall 0-10, optional breakdown array of {category, score, comment}, optional summary). '
     "Each issue MUST have: title (string), location (object with file, start_line, end_line), "
     "problem (string), and optionally principle (string — the engineering principle violated, "
-    "e.g. 'DRY / Single Source of Truth (violates DRY)'), fix (string), and code_snippet (string). "
+    "e.g. 'DRY / Single Source of Truth (violates DRY)') and code_snippet (string — the offending "
+    "code, never a corrected version). Issues have no fix key. "
     "Issues in a disputed or deferred section MUST also have severity (blocking|non_blocking — the "
     "severity the finding had when first raised) and disposition (string — the author's one-line "
     "rationale or follow-up target). Never put severity on issues in blocking/non_blocking sections. "
@@ -85,6 +87,16 @@ _NO_VERDICT_INSTRUCTIONS = (
     "mediation / blocked, and no 'verdict-leaning' line. The application decides the verdict "
     "from the severity counts against configured criteria. Report findings, severities, "
     "dispositions, highlights, and the score only. "
+)
+
+# Reviewers report problems, never solutions. Enforced in the prompt for every
+# registered reviewer; save_review_to_db additionally strips any `fix` an agent
+# still emits, so no proposed solution reaches the DB, the UI or GitHub.
+_NO_FIX_INSTRUCTIONS = (
+    "Do NOT propose a fix, solution, replacement text, corrected code, or recommendation for "
+    "any issue — report the problem only (what is wrong, where, and what it causes). Do not "
+    "write a 'Fix:' line in the markdown and do not add a 'fix' key to any JSON issue. The "
+    "author decides how to address each finding. "
 )
 
 # The wrapper CLI must not hand the review off to a background agent. In
@@ -460,6 +472,11 @@ def save_review_to_db(key, review, status, reviews_db):
                             review_json_data["summary"] = md_summary
                     except Exception as e:
                         logger.warning(f"Could not extract markdown summary for {key}: {e}")
+
+            # Reviewers report problems, never solutions: drop any fix an
+            # agent emitted anyway (stored history keeps its legacy fixes).
+            if review_json_data is not None:
+                review_json_data = strip_fixes(review_json_data)
 
             # Build content_json string
             if review_json_data is None:
@@ -1214,6 +1231,7 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
             f'Do NOT use "title", "details", or "id" as alternative field names. '
             f"Use the {agent_name} agent. "
             f"{_NO_VERDICT_INSTRUCTIONS}"
+            f"{_NO_FIX_INSTRUCTIONS}"
             f"{_FOREGROUND_INSTRUCTIONS}"
             f"{workspace_instructions}"
             f"Write the review to {review_file}. "
@@ -1227,6 +1245,7 @@ def start_review_process(pr_url, owner, repo, pr_number, is_followup=False, prev
             f"{pb_context}"
             f"Use the {agent_name} agent. "
             f"{_NO_VERDICT_INSTRUCTIONS}"
+            f"{_NO_FIX_INSTRUCTIONS}"
             f"{_FOREGROUND_INSTRUCTIONS}"
             f"{workspace_instructions}"
             f"Write the review to {review_file}. "

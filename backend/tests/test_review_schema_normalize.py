@@ -8,7 +8,8 @@ import pytest
 from backend.services.review_schema import (
     DEFAULT_SECTION_NAMES, LEGACY_SEVERITY_MAP, SCHEMA_SPEC_PATH, SCHEMA_VERSION, SECTION_TYPES,
     SEVERITIES, _empty_review, count_issues, format_issue_lines, json_to_markdown,
-    load_content_json, markdown_to_json, normalize_legacy_sections, validate_review_json,
+    load_content_json, markdown_to_json, normalize_legacy_sections, strip_fixes,
+    validate_review_json,
 )
 
 
@@ -227,3 +228,36 @@ def test_markdown_summary_stops_at_two_tier_heading():
     md = "**Summary**\n\nthe summary\n**Blocking Issues**\n\nNone\n"
     parsed = markdown_to_json(md, {"pr_number": 1, "repository": "o/r"})
     assert parsed["summary"] == "the summary"
+
+
+# --- strip_fixes: reviewers report problems, never solutions -------------------
+
+def test_strip_fixes_removes_fix_from_every_section():
+    review = _legacy([
+        _sec("blocking", _issue("B1", fix="do this"), _issue("B2")),
+        _sec("non_blocking", _issue("n1", fix="do that")),
+        _sec("disputed", _issue("D1", severity="blocking", disposition="no", fix="ignored")),
+    ], version="2.0.0")
+    out = strip_fixes(review)
+    assert all("fix" not in i for s in out["sections"] for i in s["issues"])
+    assert out["sections"][0]["issues"][0]["problem"] == "p"
+    assert out["sections"][2]["issues"][0]["disposition"] == "no"
+
+
+def test_strip_fixes_returns_input_unchanged_when_nothing_to_strip():
+    review = _legacy([_sec("blocking", _issue("B1")), _sec("non_blocking")], version="2.0.0")
+    assert strip_fixes(review) is review
+
+
+def test_strip_fixes_does_not_mutate_input():
+    review = _legacy([_sec("blocking", _issue("B1", fix="do this"))], version="2.0.0")
+    snapshot = copy.deepcopy(review)
+    strip_fixes(review)
+    assert review == snapshot
+
+
+def test_markdown_parser_still_reads_legacy_fix_lines():
+    """History re-parses keep their recommendations; only the save path strips."""
+    md = "**Blocking Issues**\n\n**1. B1**\n- Location: `a.rs:1`\n- Problem: p\n- Fix: do this\n"
+    parsed = markdown_to_json(md, {"pr_number": 1, "repository": "o/r"})
+    assert parsed["sections"][0]["issues"][0]["fix"] == "do this"

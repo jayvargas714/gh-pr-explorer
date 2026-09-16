@@ -1864,13 +1864,15 @@ In the UI the outcome renders as `🤖 locked — human mediation` (badge), the 
 
 **No review agent renders a verdict.** The pipeline prompt tells every registered reviewer not to state approve / request changes / readiness / mediation anywhere in the review (`_NO_VERDICT_INSTRUCTIONS` in `review_service.py`, in both the initial and follow-up prompts); the verdict is computed here from the configured criteria. The agent files (`ed-reviewer`, `product-brief-reviewer`, `elite-code-reviewer`) carry the same rule.
 
+**No review agent proposes a fix.** Since September 2026 findings report the problem only — what is wrong, where, and what it causes — and leave the remedy to the author. The prompt says so (`_NO_FIX_INSTRUCTIONS`, alongside the no-verdict rule), the agent files carry a *No Proposed Fixes* section in place of their former fix-authoring rules, and `save_review_to_db` strips any `fix` an agent still emits (`strip_fixes` in `review_schema.py`) so no solution reaches the DB, the UI, a verdict body or an inline comment. Reviews stored before then keep their historical Fix lines, which still render; the verdict composer keeps its per-issue Fix editor so a human can add a remedy when posting.
+
 #### Follow-Up Scope
 
 A follow-up prompt scopes the round explicitly (`_FOLLOWUP_SCOPE_INSTRUCTIONS`): review only the diff since the previous review, the previous review's findings, and the author's dispositions in the conversation. The reviewer must not re-review sections the diff did not touch nor raise new findings against unchanged text; a new finding must be anchored in the changed lines or be a residual of a fix the author took. The previous behaviour — a full five-pass "fresh-eyes" review on every push — produced two to four new Majors per round on a large ED indefinitely.
 
 #### Verdict Body
 
-The body is composed by `compose_report_body(content_json)` to match what the manual verdict modal posts by default: the summary (with any verdict, verdict-leaning or readiness line the reviewer wrote anyway stripped by `strip_verdict_lines` — line-anchored, so prose that merely mentions a verdict is kept), each severity section that has issues (with Location/Problem/Fix per issue), then the Disputed and Deferred sections when present (each issue also showing `Severity:` and `Disposition:`; set-aside issues are never posted inline), and — for follow-ups with a `followup.resolution_status` — a **Dispositions** section (`- **Status** — issue: notes`, via `format_resolution_lines`) so the author sees which pushback was accepted (`withdrawn`), which was held (`disputed`), and what was deferred (`deferred`), joined with horizontal rules. The frontend composer (`sectionsFromJSON` in `frontend/src/utils/reviewSections.ts`) offers the same Dispositions section. The report title, metadata block, positive highlights, and the 0-10 score are deliberately excluded so auto-posted verdicts are indistinguishable in format from manually posted ones. It is truncated at 60 000 characters (GitHub's cap is 65 536) with a trailing notice. No inline comments are posted, and no auto-generated header is injected into the body; the auto-generated marker lives in the UI badge instead.
+The body is composed by `compose_report_body(content_json)` to match what the manual verdict modal posts by default: the summary (with any verdict, verdict-leaning or readiness line the reviewer wrote anyway stripped by `strip_verdict_lines` — line-anchored, so prose that merely mentions a verdict is kept), each severity section that has issues (Location/Problem per issue — a `Fix` line renders only for reviews stored before reviewers stopped proposing solutions), then the Disputed and Deferred sections when present (each issue also showing `Severity:` and `Disposition:`; set-aside issues are never posted inline), and — for follow-ups with a `followup.resolution_status` — a **Dispositions** section (`- **Status** — issue: notes`, via `format_resolution_lines`) so the author sees which pushback was accepted (`withdrawn`), which was held (`disputed`), and what was deferred (`deferred`), joined with horizontal rules. The frontend composer (`sectionsFromJSON` in `frontend/src/utils/reviewSections.ts`) offers the same Dispositions section. The report title, metadata block, positive highlights, and the 0-10 score are deliberately excluded so auto-posted verdicts are indistinguishable in format from manually posted ones. It is truncated at 60 000 characters (GitHub's cap is 65 536) with a trailing notice. No inline comments are posted, and no auto-generated header is injected into the body; the auto-generated marker lives in the UI badge instead.
 
 Note there is no per-issue resolved/dismissed state anywhere in the system, so "remaining issues" necessarily means *the issues in the latest review*. For a follow-up review that is already the remaining set.
 
@@ -4838,8 +4840,7 @@ Reviews are stored as structured JSON in the `content_json` column. The schema i
         {
           "title": "Race condition in check_and_hold",
           "location": { "file": "src/service.rs", "start_line": 123, "end_line": 145 },
-          "problem": "Concurrent access without lock.",
-          "fix": "Wrap in mutex guard."
+          "problem": "Concurrent access without lock."
         }
       ]
     },
@@ -4865,6 +4866,7 @@ Reviews are stored as structured JSON in the `content_json` column. The schema i
 | `sections` | array | Yes | Array of `{type, display_name, issues}` objects; `type` ∈ `blocking` (must be fixed in this PR), `non_blocking` (everything else worth reporting) plus `disputed` / `deferred` (set aside by an author disposition; follow-ups only) — `SECTION_TYPES` in `review_schema.py` |
 | `sections[].issues[].severity` | string | In `disputed`/`deferred` only | The severity the finding had when first raised (`blocking` / `non_blocking`); rejected on issues in a severity section |
 | `sections[].issues[].disposition` | string | In `disputed`/`deferred` only | The author's one-line rationale (disputed) or follow-up target (deferred) |
+| `sections[].issues[].fix` | string | Legacy only | Reviewers report problems, never solutions; `strip_fixes` removes the key on save. Present only on reviews stored before September 2026 |
 | `highlights` | array | No | Positive aspects of the PR |
 | `followup` | object | No | Follow-ups only: `{previous_review_id, resolution_status[]}` |
 | `followup.resolution_status[]` | array | No | `{issue, status, notes}` per previous finding; `status` ∈ `resolved`, `partially_addressed`, `not_addressed`, `wont_fix`, `withdrawn` (author rationale accepted, finding dropped), `disputed` (author pushback rejected, issue moved to the `disputed` section), `deferred` (author agreed to a named follow-up, issue moved to the `deferred` section) — `RESOLUTION_STATUSES` in `review_schema.py` |
@@ -4878,6 +4880,7 @@ The `review_schema.py` service module provides:
 - **`markdown_to_json(text)`**: Best-effort conversion of legacy markdown reviews into the structured JSON format
 - **`get_section_display_names()`**: Returns the configured display names for each section key (customizable via `review_section_names` in config)
 - **`normalize_legacy_sections(data, display_names=None)`** / **`load_content_json(raw)`**: Fold a 1.0.0 document into the two tiers (see Schema history); the loader also parses and returns `None` for unusable input
+- **`strip_fixes(data)`**: Drop `fix` from every issue (save path only; history keeps its legacy fixes)
 - **`SCHEMA_VERSION`**: Current schema version constant (`"2.0.0"`)
 
 The formal JSON Schema specification is available at `backend/services/review_schema_spec.json` for use by external tools and agents.

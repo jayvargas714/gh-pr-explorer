@@ -423,6 +423,16 @@ def test_schema_instructions_describe_set_aside_sections(spawn_env):
 
 
 @pytest.mark.parametrize("followup", [False, True])
+def test_every_prompt_forbids_proposing_a_fix(spawn_env, followup):
+    kwargs = dict(is_followup=True, previous_review_content=PREV_CONTENT,
+                  head_sha="abc123", conversation="x") if followup else {}
+    review_service.start_review_process(PR_URL, OWNER, REPO, PR, **kwargs)
+    prompt = _prompt_of(spawn_env)
+    assert "Do NOT propose a fix" in prompt
+    assert "fix (string)" not in prompt
+
+
+@pytest.mark.parametrize("followup", [False, True])
 def test_every_prompt_forbids_a_verdict(spawn_env, followup):
     kwargs = dict(is_followup=True, previous_review_content=PREV_CONTENT,
                   head_sha="abc123", conversation="x") if followup else {}

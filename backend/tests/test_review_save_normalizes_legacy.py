@@ -105,5 +105,38 @@ def test_two_tier_json_is_stored_as_is(env):
 
     stored = _save(reviews_db, md)
 
-    assert stored["sections"] == TWO_TIER_JSON["sections"]
+    expected = json.loads(json.dumps(TWO_TIER_JSON["sections"]))
+    for section in expected:
+        for issue in section["issues"]:
+            issue.pop("fix", None)
+    assert stored["sections"] == expected
     assert stored["schema_version"] == "2.0.0"
+
+
+# --- reviewers report problems, never solutions ---------------------------------
+
+def _no_fix_anywhere(content):
+    return all("fix" not in issue for section in content["sections"] for issue in section["issues"])
+
+
+def test_fix_emitted_in_json_is_stripped_on_save(env):
+    reviews_db, tmp_path = env
+    md = tmp_path / "review.md"
+    md.write_text("# Code Review: PR #42\n\n---\n\n**Summary**\n\nTwo-tier summary.\n")
+    md.with_suffix(".json").write_text(json.dumps(TWO_TIER_JSON))
+
+    stored = _save(reviews_db, md)
+
+    assert stored["sections"][0]["issues"][0]["problem"] == "p"
+    assert _no_fix_anywhere(stored)
+
+
+def test_fix_lines_in_legacy_markdown_are_stripped_on_save(env):
+    reviews_db, tmp_path = env
+    md = tmp_path / "review.md"
+    md.write_text(LEGACY_MD)
+
+    stored = _save(reviews_db, md)
+
+    assert stored["sections"][0]["issues"][0]["problem"] == "p"
+    assert _no_fix_anywhere(stored)
