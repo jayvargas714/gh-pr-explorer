@@ -166,7 +166,7 @@ The backend is organized as a Python package with clear separation of concerns:
 | `static_bp` | `/`, `/assets/<path>` |
 | `auth_bp` | `/api/user`, `/api/orgs` |
 | `repo_bp` | `/api/repos`, contributors, labels, branches, milestones, teams |
-| `pr_bp` | `/api/repos/.../prs`, `/api/repos/.../prs/divergence` + /prs/:n/timeline |
+| `pr_bp` | `/api/repos/.../prs`, `/api/repos/.../prs/divergence` + /prs/:n/timeline, /prs/:n/draft, /prs/:n/merge |
 | `analytics_bp` | `/api/repos/.../analytics/daily` — the precomputed per-developer, per-day rollup |
 | `workflow_bp` | `/api/repos/.../workflow-runs` |
 | `queue_bp` | `/api/merge-queue` CRUD, reorder, notes |
@@ -565,6 +565,11 @@ The pre-existing CRUD methods (`register_repo()`, `get_repo()`, `list_repos()`, 
 | `set_history_error()` | Records the last history-slice failure |
 | `get_states_by_numbers()` | Batch lookup of PR state by number, chunked at 500 to stay under SQLite's bound-variable limit |
 | `get_pr_rollup_rows()` | One row per synced PR shaped for `analytics_rollup.build_rows()` (author, dates, base ref, additions/deletions, bot flag, parsed reviews); uses one multi-path `json_extract()` per query on SQLite ≥ 3.9.0, falling back to four single-path extracts otherwise |
+| `get_behind_state()` | `{pr_number: {behind_by, behind_base_sha, behind_head_sha}}` for a repo's OPEN rows (the behind-count stage's staleness check) |
+| `get_behind_by()` | Cached commits-behind count for one PR, or `None` (read by queue enrichment) |
+| `set_behind()` | Stores a computed count with the base/head SHA pair it was computed against |
+| `set_draft()` | Writes a draft toggle through to `is_draft` and the JSON `isDraft` (called by `POST .../draft`) |
+| `set_state()` | Writes a state change through to `state` and the JSON `state` (called by `POST .../merge` with `MERGED`) |
 
 #### SyncedCommitsDB Methods
 
@@ -1038,6 +1043,19 @@ Shows how far behind the base branch each open PR's head branch is:
 
 Divergence data is automatically fetched after the PR list loads. The backend uses `ThreadPoolExecutor` (5 workers) to batch-fetch the GitHub compare API for all open PRs in parallel. The badge displays the `behind_by` count from the GitHub compare endpoint.
 
+The same thresholds render through the shared `BehindBadge` component (`components/common/BehindBadge.tsx`, colour from `behindVariant()` in `utils/prActions.ts`) on the PR list, swimlane/merge-queue cards and the pipeline's Behind column. Board, queue and pipeline read the sync worker's cached `behindBy` instead of calling compare live (see [PR List Sync](#pr-list-sync)); the badge is hidden for non-open PRs and until a count has been computed.
+
+#### Draft Toggle and Merge Actions
+
+PR list cards, swimlane/merge-queue cards (`QueueItem`) and pipeline rows share two action controls:
+
+| Control | Shown when | Action |
+|---------|------------|--------|
+| `DraftToggleButton` — "✓ Ready" / "✎ Draft" | PR is `OPEN` | `POST /api/repos/<o>/<r>/prs/<n>/draft` (`gh pr ready`, `--undo` to convert back). No confirm; the label flips once GitHub accepts, then the host refreshes. A refusal shows a ⚠ with GitHub's message as its tooltip. |
+| `MergeButton` — "⇪ Merge" | `canMerge()`: `OPEN`, not draft, `reviewDecision === 'APPROVED'` | Opens a confirm dialog: merge method (Squash default / Merge commit / Rebase), "Delete branch after merge" (default on), non-blocking warnings when CI isn't `success` or the branch is behind. Confirm calls `POST /api/repos/<o>/<r>/prs/<n>/merge`; GitHub's refusal (branch protection, conflicts, head moved) shows in the dialog. |
+
+The merge request carries the head SHA the surface was showing (`currentSha` on cards, `headSha` on pipeline rows, `headRefOid` on PR cards) as `--match-head-commit`, so a push that lands after the operator looked makes GitHub refuse instead of merging unseen commits. Marking a draft ready also makes an enrolled PR eligible for automated dispatch on the worker's next pass (drafts are gated out). Both endpoints write the result through to `synced_prs` and mark the pipeline snapshot dirty; hosts refresh via `onRefresh` (cards), `refreshPipelineRow` → `patchRow` (pipeline) or `refreshPR` → `updatePR` (PR list).
+
 #### Approved-by-Me Card Highlight
 
 PR cards in the Pull Requests list and merge queue items are tinted with a subtle neon-green background, border, and glow when the current user has an `APPROVED` review on the PR. Approval is detected by cross-referencing the personal account's `login` (from `useAccountStore.accounts.find(a => a.is_personal)`) against `currentReviewers[].login` with `state === 'APPROVED'`.
@@ -1273,6 +1291,7 @@ The Merge Queue feature allows users to organize PRs they intend to review or me
 | `reviewScore` | integer | Latest review score (0-10) |
 | `reviewId` | integer | Database ID of latest review |
 | `inlineCommentsPosted` | boolean | True if inline comments have been posted |
+| `behindBy` | integer \| null | Commits behind base from the sync worker's cache (`synced_prs.behind_by`, a DB read — no `gh` call); null until computed |
 
 #### UI Components
 
@@ -1293,6 +1312,8 @@ The Merge Queue feature allows users to organize PRs they intend to review or me
 | Review Score Badge | Queue Item | Shows review score if PR has been reviewed |
 | New Commits Badge | Queue Item | Indicates new commits since last review |
 | Timeline Button | Queue Item | Opens the PR Timelines modal for this PR |
+| Behind Badge | Queue Item | `BehindBadge` from `behindBy` (open PRs only) — shared with the swimlane board |
+| Merge / Draft Buttons | Queue Item | `MergeButton` (open, non-draft, approved) and `DraftToggleButton` (open) — see [Draft Toggle and Merge Actions](#draft-toggle-and-merge-actions); the swimlane board renders the same `QueueItem` |
 
 ### Swimlane Board (Kanban view of merge queue)
 
@@ -2360,16 +2381,20 @@ from SQLite.
   data is dropped), and `fetched_at`. `reviewStatus` / `ciStatus` /
   `currentReviewers` are never stored; they are computed at serve time by the same
   `pr_service` helpers as the live path. `get_pr_rollup_rows()` reads this table
-  for the analytics rollup (see [Analytics Daily](#analytics-daily)).
+  for the analytics rollup (see [Analytics Daily](#analytics-daily)). Three
+  nullable **commits-behind cache** columns — `behind_by`, `behind_base_sha`,
+  `behind_head_sha` — are written only by the behind-count stage (below);
+  `upsert_pr` never touches them, and `get_prs()` / `get_prs_by_numbers()`
+  expose `behind_by` as `behindBy` on each PR dict.
 - `synced_commit_branches` / `synced_commits` (`backend/database/synced_commits.py`)
   — per-branch commit sync state and rows; see **Commit sync** below.
 
 **Sync worker** (`backend/services/pr_sync_worker.py`, daemon thread started from
 `app.py` behind the `pr_sync.enabled` flag and the WERKZEUG reloader guard). One
-cycle per eligible repo runs four exception-isolated stages in order —
-**incremental PR sync → history backfill slice → commit sync → rollup
-rebuild** (skipped on a fresh repo's first cycle, which runs backfill instead of
-the first two stages):
+cycle per eligible repo runs five exception-isolated stages in order —
+**incremental PR sync → history backfill slice → behind counts → commit sync →
+rollup rebuild** (skipped on a fresh repo's first cycle, which runs backfill
+instead of the first three stages):
 
 - **Backfill** (first visit): fetch PR *numbers only* (open, then
   `is:closed updated:>=<180-day cutoff>`), then hydrate each number with one
@@ -2408,6 +2433,17 @@ the first two stages):
     `history_cursor` yet, so `history_backfill_slice` self-initializes it to
     tomorrow (UTC) on its first call, and the walk continues in that same
     cycle.
+- **Behind counts** (`sync_behind_counts`): refreshes the commits-behind cache
+  for open PRs that carry both `headRefOid` and `baseRefName`. One REST call
+  per distinct base ref resolves its head SHA (`repos/{o}/{r}/commits/{ref}`);
+  a PR is stale when its stored `(behind_base_sha, behind_head_sha)` differs
+  from `(base head, headRefOid)`. Up to `behind_per_cycle` (default 40) stale
+  PRs are computed per cycle, in PR-number order, with a SHA-to-SHA
+  `compare/{base_sha}...{head_sha}` (works for fork PRs); leftovers finish on
+  later cycles. A failed base lookup skips only that base's PRs, a failed
+  compare only that PR. Cost is REST-only: roughly one compare per open PR each
+  time the base branch moves. Feeds the Behind badge on board/queue cards and
+  the pipeline's Behind column; does not mark the analytics rollup dirty.
 - **Commit sync** (`sync_commits`, per `commit_branches`, default `["main"]`):
   see **Commit sync** below.
 - Eligible repos: registered minus `exclude_repos`, most-recently-visited first,
@@ -2493,7 +2529,8 @@ to the live path), `exclude_repos` ([]), `history_backfill_budget` (60,
 (30, clamped 1-90), `min_graphql_remaining` (1500, best-effort: the history
 slice skips when `gh api rate_limit` reports GraphQL remaining below this;
 `history_backfill_budget` is the hard bound on hydrations), `commit_branches`
-(`["main"]`), `commit_pages_per_cycle` (40).
+(`["main"]`), `commit_pages_per_cycle` (40), `behind_per_cycle` (40, REST
+compare calls per cycle for the commits-behind cache; minimum 1).
 See [Configuration](#configuration) for the full defaults/sanitization table.
 
 ### Automation (Full Auto Review Pipeline)
@@ -2733,7 +2770,7 @@ header carries a ⚙ action that closes the overlay and opens the Automation tab
 **Data**: one endpoint, `GET /api/automation/pipeline`, served from an in-memory
 **snapshot** built entirely from local tables — `automation_dispatches` ⨝
 `synced_prs` (title, author, state, draft, base branch, review decision +
-reviewers, CI rollup, +/−, `updatedAt`) ⨝ `auto_verdict_arming` ⨝ reviews /
+reviewers, CI rollup, +/−, `updatedAt`, cached `behindBy`) ⨝ `auto_verdict_arming` ⨝ reviews /
 audits / auto_verdicts (rev log via `build_rev_log`, latest review summary via the
 `summarize_reviews` helper shared with board enrichment) ⨝ the in-memory
 `active_reviews` registry (running now) ⨝ `merge_queue` (`onBoard`,
@@ -2757,7 +2794,7 @@ derived `stage`:
 `prDataSyncedAt` (the PR sync worker's most recent completed cycle for the repos in the snapshot). A daemon thread
 rebuilds every 10 s, or immediately after any writer calls `mark_dirty()`
 (dispatch status changes, arming changes, review saves, verdict records,
-enroll/opt-out, row refresh, queue add/remove). Clients poll with `?version=N`
+enroll/opt-out, row refresh, queue add/remove, draft toggle, merge). Clients poll with `?version=N`
 and get `{unchanged: true}` when nothing moved, so idle polling is free.
 GitHub freshness is the PR sync worker's cadence; a per-row refresh
 (`POST …/pipeline/<owner>/<repo>/<pr>/refresh`) re-hydrates one PR with a single
@@ -2769,7 +2806,7 @@ GitHub freshness is the PR sync worker's cadence; a per-row refresh
 |-----------|----------------|
 | `PipelineModal` | Overlay shell; `load()` on open, 10 s visibility-aware poll while open |
 | `PipelineHeader` | Counts strip (`N · waiting a · reviewing b · reviewed c · attention d`), freshness (`Updated 8s ago · PR data 3m ago`, `refreshing…`), search, stage chips, badge-filter popover (chip vocabulary shared with the swimlane board), repo + reviewer selects, `rounds ≥`, include-closed toggle, ⚙, refresh, close |
-| `PipelineTable` / `PipelineRow` | Sortable columns: ☐ · PR · Stage (icon + reason) · Rounds (`RevLogBadge` hover) · Auto (`AutoVerdictToggle`) · CI · Review (decision + `ReviewersBadge`) · Issues · Updated · actions (`AutomationPipelineControl`, watch/remove board, refresh row, expand) |
+| `PipelineTable` / `PipelineRow` | Sortable columns: ☐ · PR · Stage (icon + reason) · Rounds (`RevLogBadge` hover) · Auto (`AutoVerdictToggle`) · CI · Behind (`BehindBadge` from the cached count, open rows only; first click sorts most-behind first, unknown/closed last) · Review (decision + `ReviewersBadge`) · Issues · Updated · actions (`MergeButton`, `DraftToggleButton`, `AutomationPipelineControl`, watch/remove board, refresh row, expand) |
 | `PipelineRowDetail` | One expanded row at a time: rev-log list, latest review + score → viewer, verdict composer, review picker, audit, timeline, description, notes (when on board), criteria override, dispatch detail (rule, matched rules, attempts, classification) |
 | `BulkActionBar` | On any selection: Opt out · Re-enroll · Arm · Disarm · Watch on board, run per row with done/failed progress |
 
@@ -2784,7 +2821,12 @@ pure helpers live in `pipelineFilters.ts` (`stagePresentation`,
 
 `AutoVerdictToggle` and `AutomationPipelineControl` are keyed by
 `(repo, prNumber)` and hit the PR-scoped auto-verdict routes, so the identical
-control renders on PR-list rows, board cards and pipeline rows.
+control renders on PR-list rows, board cards and pipeline rows. `MergeButton`
+and `DraftToggleButton` follow the same rule (see
+[Draft Toggle and Merge Actions](#draft-toggle-and-merge-actions)); after either
+succeeds the row re-fetches itself via the per-row refresh. A pipeline row's
+`headSha` is the synced one, so a push the sync worker hasn't seen yet makes the
+merge fail with GitHub's head-moved message rather than merge it.
 
 ---
 
@@ -3078,6 +3120,41 @@ Batch-fetches branch ahead/behind information for open PRs using the GitHub comp
 **Error Responses**:
 - `400`: Missing `prs` in request body
 - `500`: Failed to fetch divergence data
+
+### PR Actions (Draft Toggle, Merge)
+
+Both run a `gh` write under the authenticated account with `-R owner/repo` (never
+touching a local checkout), write the result through to `synced_prs` when the PR
+has a row there, and mark the pipeline snapshot dirty. Shared error mapping:
+`400` bad body (no `gh` call made) · `422` GitHub refused, `error` is GitHub's
+message with the `gh command failed:` prefix stripped · `429` rate limit ·
+`503` transient upstream 5xx (`transient: true`).
+
+**POST** `/api/repos/<owner>/<repo>/prs/<pr_number>/draft`
+
+Converts a PR to draft (`gh pr ready N --undo`) or marks it ready for review
+(`gh pr ready N`).
+
+**Request Body**: `{ "draft": true }` — `draft` must be a boolean.
+
+**Response**: `{ "isDraft": true }`
+
+**POST** `/api/repos/<owner>/<repo>/prs/<pr_number>/merge`
+
+Merges a PR: `gh pr merge N --<method> [--delete-branch] [--match-head-commit SHA]`.
+
+**Request Body**:
+```json
+{ "method": "squash", "deleteBranch": true, "headSha": "4f2c9e1d0b7a" }
+```
+
+| Field | Default | Rule |
+|-------|---------|------|
+| `method` | `squash` | one of `squash`, `merge`, `rebase` |
+| `deleteBranch` | `true` | boolean; deletes the remote head branch after merging |
+| `headSha` | — | optional 7–40 hex chars; GitHub refuses the merge if the head moved |
+
+**Response**: `{ "merged": true }` (the synced row's `state` becomes `MERGED`).
 
 ---
 
@@ -4381,7 +4458,7 @@ and validated server-side; see those feature sections for their shapes.
 | `review_log_retention_days` | integer | 90 | How long review lifecycle events are kept. Purged once on startup; `0` disables purging. |
 | `log_retention_days` | integer | 30 | How long per-run process log files (`logs/pr-explorer_*.log`) are kept. Pruned once on startup; `0` disables pruning. `logs/error.log` is never pruned. See "Logging" under Technical Details. |
 | `past_reviews_dir` | string | `<reviews_dir>/past-reviews` | Legacy reviews directory used only by the one-time `migrate_data.py` import. Supports `~`/`$VAR` expansion. |
-| `pr_sync` | object | see below | PR List Sync worker settings. Optional block; every key has an internal default. `enabled` (bool, true) — master switch; `false` reverts the PR list to live fetching. `poll_interval_seconds` (int, 120) — worker cycle interval. `history_days` (int, 180) — fast-backfill window for closed/merged PRs. `retain_days` (int, 0) — prune CLOSED/MERGED rows older than this; `0` = keep forever. `max_synced_repos` (int, 10) — most-recently-visited repos kept in sync; the rest fall back to the live path. `exclude_repos` (list, `[]`) — `"owner/name"` strings never synced. `history_backfill_budget` (int, 60) — max `gh pr view` hydrations per cycle for the inception history walk. `history_chunk_days` (int, 30, clamped 1-90) — created-date window width per history search. `min_graphql_remaining` (int, 1500) — best-effort: skips a slice when `gh api rate_limit` reports GraphQL remaining below this threshold; `history_backfill_budget` is the hard bound on hydrations. `commit_branches` (list, `["main"]`) — branches whose commits are synced via REST. `commit_pages_per_cycle` (int, 40) — REST pages (100 commits each) per cycle per branch. |
+| `pr_sync` | object | see below | PR List Sync worker settings. Optional block; every key has an internal default. `enabled` (bool, true) — master switch; `false` reverts the PR list to live fetching. `poll_interval_seconds` (int, 120) — worker cycle interval. `history_days` (int, 180) — fast-backfill window for closed/merged PRs. `retain_days` (int, 0) — prune CLOSED/MERGED rows older than this; `0` = keep forever. `max_synced_repos` (int, 10) — most-recently-visited repos kept in sync; the rest fall back to the live path. `exclude_repos` (list, `[]`) — `"owner/name"` strings never synced. `history_backfill_budget` (int, 60) — max `gh pr view` hydrations per cycle for the inception history walk. `history_chunk_days` (int, 30, clamped 1-90) — created-date window width per history search. `min_graphql_remaining` (int, 1500) — best-effort: skips a slice when `gh api rate_limit` reports GraphQL remaining below this threshold; `history_backfill_budget` is the hard bound on hydrations. `commit_branches` (list, `["main"]`) — branches whose commits are synced via REST. `commit_pages_per_cycle` (int, 40) — REST pages (100 commits each) per cycle per branch. `behind_per_cycle` (int, 40, minimum 1; malformed → default) — max REST compare calls per cycle for the commits-behind cache. |
 | `analytics` | object | see below | Analytics settings. Optional block. `bot_logins` (list of str, see [Configuration](#configuration) example) — logins excluded from Analytics tab attribution, in addition to the `app/`-prefix and `[bot]`-suffix checks that always apply. |
 
 ### Example Configuration
@@ -4426,7 +4503,8 @@ and validated server-side; see those feature sections for their shapes.
     "history_chunk_days": 30,
     "min_graphql_remaining": 1500,
     "commit_branches": ["main"],
-    "commit_pages_per_cycle": 40
+    "commit_pages_per_cycle": 40,
+    "behind_per_cycle": 40
   },
   "analytics": {
     "bot_logins": [
@@ -5112,7 +5190,7 @@ gh-pr-explorer/
 │       ├── static_routes.py        # / and /assets/<path>
 │       ├── auth_routes.py          # /api/user, /api/orgs
 │       ├── repo_routes.py          # /api/repos, contributors, labels, branches, milestones, teams
-│       ├── pr_routes.py            # /api/repos/.../prs, prs/divergence
+│       ├── pr_routes.py            # /api/repos/.../prs, prs/divergence, prs/:n/draft, prs/:n/merge
 │       ├── analytics_routes.py     # /api/repos/.../analytics/daily — precomputed rollup
 │       ├── workflow_routes.py      # /api/repos/.../workflow-runs
 │       ├── queue_routes.py         # /api/merge-queue CRUD + reorder + notes

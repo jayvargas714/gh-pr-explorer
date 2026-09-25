@@ -179,10 +179,11 @@ class SyncedPRsDB:
     def _pr_row(row) -> Dict[str, Any]:
         pr = json.loads(row["data"])
         pr["fetchedAt"] = row["fetched_at"]
+        pr["behindBy"] = row["behind_by"]
         return pr
 
     def get_prs(self, repo: str, states: Optional[Set[str]] = None) -> List[Dict[str, Any]]:
-        query = "SELECT data, fetched_at FROM synced_prs WHERE repo = ?"
+        query = "SELECT data, fetched_at, behind_by FROM synced_prs WHERE repo = ?"
         params: List[Any] = [repo]
         if states:
             placeholders = ",".join("?" for _ in states)
@@ -198,11 +199,66 @@ class SyncedPRsDB:
         placeholders = ",".join("?" for _ in numbers)
         with self.db.connection() as conn:
             rows = conn.execute(
-                f"SELECT pr_number, data, fetched_at FROM synced_prs "
+                f"SELECT pr_number, data, fetched_at, behind_by FROM synced_prs "
                 f"WHERE repo = ? AND pr_number IN ({placeholders})",
                 [repo] + list(numbers),
             ).fetchall()
             return {row["pr_number"]: self._pr_row(row) for row in rows}
+
+    def set_draft(self, repo: str, pr_number: int, is_draft: bool) -> None:
+        """Write a draft toggle through to the row (column + JSON) so views
+        reflect it before the next sync re-hydrates the PR."""
+        with self.db.connection() as conn:
+            conn.execute(
+                """UPDATE synced_prs SET is_draft = ?, data = json_set(data, '$.isDraft', json(?))
+                   WHERE repo = ? AND pr_number = ?""",
+                (1 if is_draft else 0, "true" if is_draft else "false", repo, pr_number),
+            )
+
+    def set_state(self, repo: str, pr_number: int, state: str) -> None:
+        """Write a state change (e.g. MERGED after a merge) through to the row."""
+        with self.db.connection() as conn:
+            conn.execute(
+                """UPDATE synced_prs SET state = ?, data = json_set(data, '$.state', ?)
+                   WHERE repo = ? AND pr_number = ?""",
+                (state, state, repo, pr_number),
+            )
+
+    # -- commits-behind cache ---------------------------------------------------
+
+    def get_behind_state(self, repo: str) -> Dict[int, Dict[str, Any]]:
+        """Cached behind count + the SHA pair it was computed against, per OPEN PR."""
+        with self.db.connection() as conn:
+            rows = conn.execute(
+                """SELECT pr_number, behind_by, behind_base_sha, behind_head_sha
+                   FROM synced_prs WHERE repo = ? AND state = 'OPEN'""",
+                (repo,),
+            ).fetchall()
+            return {
+                row["pr_number"]: {
+                    "behind_by": row["behind_by"],
+                    "behind_base_sha": row["behind_base_sha"],
+                    "behind_head_sha": row["behind_head_sha"],
+                }
+                for row in rows
+            }
+
+    def get_behind_by(self, repo: str, pr_number: int) -> Optional[int]:
+        with self.db.connection() as conn:
+            row = conn.execute(
+                "SELECT behind_by FROM synced_prs WHERE repo = ? AND pr_number = ?",
+                (repo, pr_number),
+            ).fetchone()
+            return row["behind_by"] if row else None
+
+    def set_behind(self, repo: str, pr_number: int, behind_by: int,
+                   base_sha: str, head_sha: str) -> None:
+        with self.db.connection() as conn:
+            conn.execute(
+                """UPDATE synced_prs SET behind_by = ?, behind_base_sha = ?, behind_head_sha = ?
+                   WHERE repo = ? AND pr_number = ?""",
+                (behind_by, base_sha, head_sha, repo, pr_number),
+            )
 
     def get_states_by_numbers(self, repo: str, numbers: List[int]) -> Dict[int, str]:
         """Batch lookup of the scalar state column (no JSON parse). PRs the

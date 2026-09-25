@@ -22,6 +22,7 @@ def test_defaults_when_block_missing(monkeypatch):
         "min_graphql_remaining": 1500,
         "commit_branches": ["main"],
         "commit_pages_per_cycle": 40,
+        "behind_per_cycle": 40,
     }
 
 
@@ -145,3 +146,14 @@ def test_get_analytics_config_malformed_falls_back(monkeypatch):
     _with_config(monkeypatch, {"analytics": {"bot_logins": ["ok", 5]}})
     cfg = get_analytics_config()
     assert cfg["bot_logins"][0] == "github-actions"
+
+
+def test_behind_per_cycle_minimum_one(monkeypatch):
+    _with_config(monkeypatch, {"pr_sync": {"behind_per_cycle": 0}})
+    assert get_pr_sync_config()["behind_per_cycle"] == 40  # malformed -> default
+
+    _with_config(monkeypatch, {"pr_sync": {"behind_per_cycle": 5}})
+    assert get_pr_sync_config()["behind_per_cycle"] == 5
+
+    _with_config(monkeypatch, {"pr_sync": {"behind_per_cycle": "lots"}})
+    assert get_pr_sync_config()["behind_per_cycle"] == 40

@@ -13,8 +13,9 @@ from datetime import datetime, timedelta, timezone
 from backend.config import DEFAULT_PR_SYNC, get_pr_sync_config
 from backend.services import analytics_rollup
 from backend.services.github_service import (
-    fetch_commits_page, fetch_full_pr, fetch_graphql_remaining, fetch_pr_numbers,
-    fetch_repo_created_at, get_authenticated_login,
+    fetch_branch_head_sha, fetch_commits_page, fetch_full_pr, fetch_graphql_remaining,
+    fetch_pr_behind_by, fetch_pr_numbers, fetch_repo_created_at, get_authenticated_login,
+    RateLimitError,
 )
 
 logger = logging.getLogger(__name__)
@@ -190,6 +191,57 @@ def history_backfill_slice(store, repo_full, cfg):
         logger.warning(f"PR sync: history backfill slice failed for {repo_full}: {e}")
 
     return total
+
+
+def sync_behind_counts(store, repo_full, cfg):
+    """Refresh the cached commits-behind count for open PRs. Returns how many
+    were computed.
+
+    A PR's count is stale when its base branch head or its own head moved
+    since the stored pair. Base heads cost one REST call per distinct base
+    ref; stale PRs cost one compare each, capped by behind_per_cycle so a
+    burst of merges to main drains over several cycles instead of the REST
+    quota. One base's or one PR's failure never blocks the rest.
+    """
+    owner, name = repo_full.split("/", 1)
+    cap = cfg.get("behind_per_cycle", DEFAULT_PR_SYNC["behind_per_cycle"])
+    cached = store.get_behind_state(repo_full)
+    candidates = sorted(
+        (pr for pr in store.get_prs(repo_full, {"OPEN"})
+         if pr.get("headRefOid") and pr.get("baseRefName")),
+        key=lambda pr: pr["number"],
+    )
+
+    base_shas = {}
+    for base in sorted({pr["baseRefName"] for pr in candidates}):
+        try:
+            base_shas[base] = fetch_branch_head_sha(owner, name, base)
+        except RuntimeError as e:
+            logger.warning(f"PR sync: base head lookup failed for {repo_full}@{base}: {e}")
+
+    stale = []
+    for pr in candidates:
+        base_sha = base_shas.get(pr["baseRefName"])
+        if not base_sha:
+            continue
+        prev = cached.get(pr["number"]) or {}
+        if (prev.get("behind_base_sha"), prev.get("behind_head_sha")) != (base_sha, pr["headRefOid"]):
+            stale.append((pr["number"], base_sha, pr["headRefOid"]))
+
+    computed = 0
+    for number, base_sha, head_sha in stale[:cap]:
+        try:
+            # SHA-to-SHA compare, so PRs from forks resolve too.
+            behind = fetch_pr_behind_by(owner, name, base_sha, head_sha)
+        except RateLimitError as e:
+            logger.warning(f"PR sync: behind counts for {repo_full} paused, rate limited: {e}")
+            break
+        except RuntimeError as e:
+            logger.warning(f"PR sync: behind count failed for {repo_full}#{number}: {e}")
+            continue
+        store.set_behind(repo_full, number, behind, base_sha, head_sha)
+        computed += 1
+    return computed
 
 
 def _record_review_requests(store, repo_full, numbers, old_rows):
@@ -432,6 +484,11 @@ def sync_cycle(store=None, cfg=None, commits_db=None):
                 changed += history_backfill_slice(store, repo_full, cfg)
             except Exception:
                 logger.exception(f"PR sync: history backfill slice failed for {repo_full}")
+            try:
+                # Not added to `changed`: the analytics rollup doesn't read it.
+                sync_behind_counts(store, repo_full, cfg)
+            except Exception:
+                logger.exception(f"PR sync: behind-count refresh failed for {repo_full}")
 
         try:
             changed += sync_commits(store, commits_db, repo_full, cfg)

@@ -25,7 +25,7 @@ export interface PipelineFilters {
 }
 
 export type PipelineSortColumn =
-  | 'pr' | 'stage' | 'rounds' | 'auto' | 'ci' | 'review' | 'issues' | 'updated'
+  | 'pr' | 'stage' | 'rounds' | 'auto' | 'ci' | 'behind' | 'review' | 'issues' | 'updated'
 
 export interface PipelineSort {
   column: PipelineSortColumn
@@ -194,6 +194,12 @@ function issuesFound(row: PipelineRow): number {
   return (r.blocking.found ?? 0) + (r.non_blocking.found ?? 0)
 }
 
+/** Commits behind base for open rows; -1 when unknown or not open (a merged
+ * PR's cached count is stale, so it never ranks as "behind"). */
+export function behindForSort(row: PipelineRow): number {
+  return row.prState === 'OPEN' && row.behindBy != null ? row.behindBy : -1
+}
+
 function columnCompare(column: PipelineSortColumn, a: PipelineRow, b: PipelineRow): number {
   switch (column) {
     case 'pr':
@@ -206,6 +212,8 @@ function columnCompare(column: PipelineSortColumn, a: PipelineRow, b: PipelineRo
       return Number(!!b.autoVerdict?.enabled) - Number(!!a.autoVerdict?.enabled)
     case 'ci':
       return (CI_RANK[a.ciStatus ?? ''] ?? 3) - (CI_RANK[b.ciStatus ?? ''] ?? 3)
+    case 'behind':
+      return behindForSort(a) - behindForSort(b)
     case 'review':
       return (DECISION_RANK[a.reviewDecision ?? ''] ?? 3) - (DECISION_RANK[b.reviewDecision ?? ''] ?? 3)
     case 'issues':

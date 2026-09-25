@@ -1,5 +1,6 @@
-"""PR routes: list PRs with filters, batch divergence."""
+"""PR routes: list PRs with filters, batch divergence, draft toggle, merge."""
 
+import re
 from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, jsonify, request
@@ -14,7 +15,7 @@ from backend.database import (
 )
 from backend.services.auto_verdict_config import validate_override
 from backend.services.github_service import (
-    run_gh_command, parse_json_output, TransientGitHubError,
+    run_gh_command, parse_json_output, RateLimitError, TransientGitHubError,
     PR_LIST_JSON_FIELDS as PR_JSON_FIELDS, fetch_full_pr, get_authenticated_login,
 )
 from backend.services.pr_local_filter import (
@@ -27,6 +28,8 @@ from backend.services.timeline_service import get_timeline
 pr_bp = Blueprint("pr", __name__)
 
 VALID_AUTO_VERDICT_MODES = ("verdict", "comment")
+MERGE_METHODS = ("squash", "merge", "rebase")
+_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 
 # Map computed reviewStatus back to uppercase reviewDecision for frontend badges
 _STATUS_TO_DECISION = {
@@ -364,6 +367,81 @@ def get_pr_divergence(owner, repo):
 
     except Exception as e:
         return error_response("Internal server error", 500, f"Failed to fetch divergence: {e}")
+
+
+def _gh_action_error(e, action, repo_full, pr_number):
+    """Map a failed gh write action to an HTTP error carrying GitHub's reason."""
+    if isinstance(e, RateLimitError):
+        return jsonify({"error": "GitHub API rate limit hit. Try again later."}), 429
+    if isinstance(e, TransientGitHubError):
+        return jsonify({
+            "error": "GitHub is having a moment (upstream 5xx). Try again in a few seconds.",
+            "transient": True,
+        }), 503
+    message = str(e).removeprefix("gh command failed:").strip() or f"{action} failed"
+    logger.warning(f"{action} refused for {repo_full}#{pr_number}: {message}")
+    return jsonify({"error": message}), 422
+
+
+def _after_pr_write():
+    from backend.services import pipeline_snapshot
+    pipeline_snapshot.mark_dirty()
+
+
+@pr_bp.route("/api/repos/<owner>/<repo>/prs/<int:pr_number>/draft", methods=["POST"])
+def set_pr_draft(owner, repo, pr_number):
+    """Convert a PR to draft ({"draft": true}) or mark it ready for review."""
+    repo_full = f"{owner}/{repo}"
+    data = request.get_json(silent=True) or {}
+    draft = data.get("draft")
+    if not isinstance(draft, bool):
+        return jsonify({"error": "'draft' must be true or false"}), 400
+
+    args = ["pr", "ready", str(pr_number), "-R", repo_full]
+    if draft:
+        args.append("--undo")
+    try:
+        run_gh_command(args)
+    except RuntimeError as e:
+        return _gh_action_error(e, "Draft toggle", repo_full, pr_number)
+
+    get_synced_prs_db().set_draft(repo_full, pr_number, draft)
+    _after_pr_write()
+    logger.info(f"{repo_full}#{pr_number} {'converted to draft' if draft else 'marked ready for review'}")
+    return jsonify({"isDraft": draft})
+
+
+@pr_bp.route("/api/repos/<owner>/<repo>/prs/<int:pr_number>/merge", methods=["POST"])
+def merge_pr(owner, repo, pr_number):
+    """Merge a PR. Body: {method: squash|merge|rebase, deleteBranch: bool,
+    headSha?: str}. headSha pins the merge to the commit the operator saw."""
+    repo_full = f"{owner}/{repo}"
+    data = request.get_json(silent=True) or {}
+    method = data.get("method", "squash")
+    delete_branch = data.get("deleteBranch", True)
+    head_sha = data.get("headSha")
+    if method not in MERGE_METHODS:
+        return jsonify({"error": f"'method' must be one of {', '.join(MERGE_METHODS)}"}), 400
+    if not isinstance(delete_branch, bool):
+        return jsonify({"error": "'deleteBranch' must be true or false"}), 400
+    if head_sha is not None and not (isinstance(head_sha, str) and _SHA_RE.match(head_sha)):
+        return jsonify({"error": "'headSha' must be a commit SHA"}), 400
+
+    # -R keeps gh away from any local checkout (--delete-branch only deletes the remote branch).
+    args = ["pr", "merge", str(pr_number), "-R", repo_full, f"--{method}"]
+    if delete_branch:
+        args.append("--delete-branch")
+    if head_sha:
+        args.extend(["--match-head-commit", head_sha])
+    try:
+        run_gh_command(args)
+    except RuntimeError as e:
+        return _gh_action_error(e, "Merge", repo_full, pr_number)
+
+    get_synced_prs_db().set_state(repo_full, pr_number, "MERGED")
+    _after_pr_write()
+    logger.info(f"Merged {repo_full}#{pr_number} ({method}, delete_branch={delete_branch})")
+    return jsonify({"merged": True})
 
 
 @pr_bp.route("/api/repos/<owner>/<repo>/prs/<int:pr_number>/timeline")

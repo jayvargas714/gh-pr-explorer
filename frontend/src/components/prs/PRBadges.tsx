@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { PullRequest, DivergenceInfo } from '../../api/types'
 import { Badge } from '../common/Badge'
+import { BehindBadge } from '../common/BehindBadge'
 import { ReviewersBadge } from '../common/ReviewersBadge'
 import { CIStatusBadge } from '../common/CIStatusBadge'
 import { ChangesRequestedModal } from '../common/ChangesRequestedModal'
@@ -62,28 +63,7 @@ export function PRBadges({ pr, divergence, repoFull }: PRBadgesProps) {
 
   const getDivergenceBadge = () => {
     if (!divergence || pr.state !== 'OPEN') return null
-
-    const { behind_by } = divergence
-
-    if (behind_by === 0) {
-      return (
-        <Badge variant="success" key="divergence">
-          ✓ Up to date
-        </Badge>
-      )
-    } else if (behind_by <= 10) {
-      return (
-        <Badge variant="warning" key="divergence">
-          ⚠ {behind_by} behind
-        </Badge>
-      )
-    } else {
-      return (
-        <Badge variant="error" key="divergence">
-          ⚠ {behind_by} behind
-        </Badge>
-      )
-    }
+    return <BehindBadge behindBy={divergence.behind_by} key="divergence" />
   }
 
   const getStateBadge = () => {

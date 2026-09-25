@@ -243,3 +243,55 @@ def test_earliest_created_at(store):
 
 def test_earliest_created_at_no_prs(store):
     assert store.earliest_created_at("a/b") is None
+
+
+# -- commits-behind cache + write-through setters --------------------------
+
+def test_behind_columns_survive_upsert(store):
+    store.upsert_pr("acme/widgets", _pr(1))
+    store.set_behind("acme/widgets", 1, 4, "base1", "head1")
+    store.upsert_pr("acme/widgets", _pr(1, title="renamed"))
+    assert store.get_behind_by("acme/widgets", 1) == 4
+    assert store.get_behind_state("acme/widgets")[1] == {
+        "behind_by": 4, "behind_base_sha": "base1", "behind_head_sha": "head1",
+    }
+
+
+def test_pr_rows_expose_behind_by(store):
+    store.upsert_pr("acme/widgets", _pr(1))
+    store.upsert_pr("acme/widgets", _pr(2))
+    store.set_behind("acme/widgets", 1, 0, "b", "h")
+    rows = {p["number"]: p for p in store.get_prs("acme/widgets")}
+    assert rows[1]["behindBy"] == 0
+    assert rows[2]["behindBy"] is None
+    by_number = store.get_prs_by_numbers("acme/widgets", [1, 2])
+    assert by_number[1]["behindBy"] == 0
+    assert by_number[2]["behindBy"] is None
+
+
+def test_get_behind_by_unknown_pr_is_none(store):
+    assert store.get_behind_by("acme/widgets", 99) is None
+
+
+def test_get_behind_state_open_only(store):
+    store.upsert_pr("acme/widgets", _pr(1))
+    store.upsert_pr("acme/widgets", _pr(2, state="MERGED"))
+    assert set(store.get_behind_state("acme/widgets")) == {1}
+    assert store.get_behind_state("acme/widgets")[1]["behind_by"] is None
+
+
+def test_set_draft_updates_column_and_json(store):
+    store.upsert_pr("acme/widgets", _pr(1))
+    store.set_draft("acme/widgets", 1, True)
+    assert store.get_prs_by_numbers("acme/widgets", [1])[1]["isDraft"] is True
+    with store.db.connection() as conn:
+        assert conn.execute("SELECT is_draft FROM synced_prs").fetchone()[0] == 1
+    store.set_draft("acme/widgets", 1, False)
+    assert store.get_prs_by_numbers("acme/widgets", [1])[1]["isDraft"] is False
+
+
+def test_set_state_updates_column_and_json(store):
+    store.upsert_pr("acme/widgets", _pr(1))
+    store.set_state("acme/widgets", 1, "MERGED")
+    assert store.get_prs_by_numbers("acme/widgets", [1])[1]["state"] == "MERGED"
+    assert store.get_prs("acme/widgets", {"MERGED"})[0]["number"] == 1

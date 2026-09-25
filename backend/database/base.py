@@ -458,6 +458,23 @@ class Database:
                     except sqlite3.OperationalError:
                         pass
 
+            # Migration: commits-behind cache on synced_prs (sync worker's
+            # sync_behind_counts stage), plus the SHA pair it was computed against
+            cursor.execute("PRAGMA table_info(synced_prs)")
+            synced_prs_columns = {row[1] for row in cursor.fetchall()}
+
+            for col_name, col_type in (
+                ("behind_by", "INTEGER"),
+                ("behind_base_sha", "TEXT"),
+                ("behind_head_sha", "TEXT"),
+            ):
+                if col_name not in synced_prs_columns:
+                    try:
+                        cursor.execute(f"ALTER TABLE synced_prs ADD COLUMN {col_name} {col_type}")
+                        logger.info(f"Added column {col_name} to synced_prs table")
+                    except sqlite3.OperationalError:
+                        pass
+
             # Commit sync: per-branch backfill/incremental state, and the commits themselves
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS synced_commit_branches (

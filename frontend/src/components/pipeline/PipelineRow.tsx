@@ -8,6 +8,9 @@ import { refreshPipelineRow } from '../../api/pipeline'
 import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
 import { CIStatusBadge } from '../common/CIStatusBadge'
+import { BehindBadge } from '../common/BehindBadge'
+import { DraftToggleButton } from '../common/DraftToggleButton'
+import { MergeButton } from '../common/MergeButton'
 import { ReviewersBadge } from '../common/ReviewersBadge'
 import { AutomationPipelineControl } from '../common/AutomationPipelineControl'
 import { AutoVerdictToggle } from '../autoVerdict/AutoVerdictToggle'
@@ -234,6 +237,14 @@ export function PipelineRow({ row, selected, expanded }: PipelineRowProps) {
           )}
         </td>
 
+        <td className="mx-pipe-table__col-behind">
+          {row.prState === 'OPEN' && row.behindBy !== null ? (
+            <BehindBadge behindBy={row.behindBy} size="sm" />
+          ) : (
+            <span className="mx-pipe-muted">—</span>
+          )}
+        </td>
+
         <td className="mx-pipe-table__col-review" onClick={stop}>
           <div className="mx-pipe-badges">
             {decisionBadge(row.reviewDecision)}
@@ -258,6 +269,25 @@ export function PipelineRow({ row, selected, expanded }: PipelineRowProps) {
 
         <td className="mx-pipe-table__col-actions" onClick={stop}>
           <div className="mx-pipe-actions">
+            <MergeButton
+              repo={row.repo}
+              prNumber={row.prNumber}
+              title={row.title}
+              prState={row.prState}
+              isDraft={row.isDraft}
+              reviewDecision={row.reviewDecision}
+              ciStatus={row.ciStatus}
+              behindBy={row.behindBy}
+              headSha={row.headSha}
+              onDone={handleRefreshRow}
+            />
+            <DraftToggleButton
+              repo={row.repo}
+              prNumber={row.prNumber}
+              isDraft={row.isDraft}
+              prState={row.prState}
+              onDone={handleRefreshRow}
+            />
             <AutomationPipelineControl
               repo={row.repo}
               prNumber={row.prNumber}

@@ -1,5 +1,6 @@
 import { api } from './client'
 import { PRsResponse, DivergenceResponse, PullRequest } from './types'
+import type { MergeMethod } from '../utils/prActions'
 
 /**
  * Fetch PRs with filters
@@ -67,5 +68,34 @@ export async function fetchDivergence(
 ): Promise<DivergenceResponse> {
   return api.post<DivergenceResponse>(`/repos/${owner}/${repo}/prs/divergence`, {
     prs,
+  })
+}
+
+/**
+ * Convert a PR to draft (`draft: true`) or mark it ready for review.
+ */
+export async function setPRDraft(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  draft: boolean
+): Promise<{ isDraft: boolean }> {
+  return api.post(`/repos/${owner}/${repo}/prs/${prNumber}/draft`, { draft })
+}
+
+/**
+ * Merge a PR. `headSha` pins the merge to the commit the operator saw, so a
+ * push that lands after the dialog opened makes GitHub refuse it.
+ */
+export async function mergePR(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  opts: { method: MergeMethod; deleteBranch: boolean; headSha?: string | null }
+): Promise<{ merged: boolean }> {
+  return api.post(`/repos/${owner}/${repo}/prs/${prNumber}/merge`, {
+    method: opts.method,
+    deleteBranch: opts.deleteBranch,
+    ...(opts.headSha ? { headSha: opts.headSha } : {}),
   })
 }

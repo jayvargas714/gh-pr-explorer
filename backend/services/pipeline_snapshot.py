@@ -281,6 +281,7 @@ def _build_row(dispatch, pr, pr_reviews, pr_audits, pr_verdicts, arming_row, que
         "prUpdatedAt": pr.get("updatedAt"),
         "prSyncedAt": pr.get("fetchedAt"),
         "headSha": head_sha,
+        "behindBy": pr.get("behindBy"),
         "stage": derive_stage(dispatch["status"], dispatch.get("detail"), pr_state, is_running,
                               (last_verdict or {}).get("outcome")),
         "dispatch": {

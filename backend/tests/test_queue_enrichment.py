@@ -200,3 +200,38 @@ def test_auto_verdict_last_carries_set_aside_counts():
     assert (last["blockingCount"], last["nonBlockingCount"]) == (1, 0)
     assert last["disputedCount"] == 3
     assert last["deferredCount"] == 1
+
+
+def test_enriched_card_carries_cached_behind_by(tmp_path, monkeypatch):
+    """behindBy is read from the synced_prs cache (no gh call of its own)."""
+    from backend.database.audits import AuditsDB
+    from backend.database.auto_verdict_arming import AutoVerdictArmingDB
+    from backend.database.auto_verdicts import AutoVerdictsDB
+    from backend.database.automation_dispatches import AutomationDispatchesDB
+    from backend.database.base import Database
+    from backend.database.merge_queue import MergeQueueDB
+    from backend.database.reviews import ReviewsDB
+    from backend.database.synced_prs import SyncedPRsDB
+    from backend.services import queue_enrichment as qe
+
+    db = Database(tmp_path / "enrich.db")
+    synced = SyncedPRsDB(db)
+    synced.upsert_pr("acme/widgets", {"number": 5, "state": "OPEN", "isDraft": False,
+                                      "author": {"login": "a"}})
+    synced.set_behind("acme/widgets", 5, 12, "b", "h")
+    monkeypatch.setattr(qe, "get_synced_prs_db", lambda: synced)
+    monkeypatch.setattr(qe, "get_auto_verdict_arming_db", lambda: AutoVerdictArmingDB(db))
+    monkeypatch.setattr(qe, "get_automation_dispatches_db", lambda: AutomationDispatchesDB(db))
+    monkeypatch.setattr(qe, "fetch_pr_queue_data", lambda o, r, n: {
+        "state": "OPEN", "headRefOid": "h", "reviewDecision": None, "statusCheckRollup": None,
+        "isDraft": False, "reviews": None, "reviewRequests": None,
+    })
+
+    def item(number):
+        return {"id": number, "repo": "acme/widgets", "pr_number": number, "pr_title": "t",
+                "pr_url": "u", "pr_author": "a", "additions": 1, "deletions": 1,
+                "added_at": "2026-09-01", "pr_state": "OPEN"}
+
+    args = (MergeQueueDB(db), ReviewsDB(db), AuditsDB(db), AutoVerdictsDB(db))
+    assert qe._enrich_one(item(5), *args)["behindBy"] == 12
+    assert qe._enrich_one(item(6), *args)["behindBy"] is None

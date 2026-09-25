@@ -104,7 +104,7 @@ interface PipelineState {
 
 const DEFAULT_SORT: PipelineSort = { column: 'stage', dir: 'asc' }
 // Newest-first reads better for these; everything else defaults ascending.
-const DESC_FIRST: PipelineSortColumn[] = ['updated', 'rounds', 'issues']
+const DESC_FIRST: PipelineSortColumn[] = ['updated', 'rounds', 'issues', 'behind']
 
 /** Keep the selection inside the current row set (rows can leave the
  * snapshot when they close or the include-closed toggle flips). */

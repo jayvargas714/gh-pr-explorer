@@ -14,6 +14,7 @@ const COLUMNS: { key: PipelineSortColumn; label: string; tooltip?: string }[] = 
   { key: 'rounds', label: 'Rounds', tooltip: 'Review rounds recorded (hover the badge for the rev log)' },
   { key: 'auto', label: 'Auto', tooltip: 'Auto-verdict arming' },
   { key: 'ci', label: 'CI' },
+  { key: 'behind', label: 'Behind', tooltip: 'Commits behind the base branch (refreshed by the PR sync worker)' },
   { key: 'review', label: 'Review' },
   { key: 'issues', label: 'Issues', tooltip: 'Blocking / Non-Blocking — posted/found' },
   { key: 'updated', label: 'Updated' },

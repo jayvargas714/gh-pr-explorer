@@ -18,6 +18,9 @@ import { AutoVerdictBadge } from '../autoVerdict/AutoVerdictBadge'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
 import { CIStatusBadge } from '../common/CIStatusBadge'
+import { BehindBadge } from '../common/BehindBadge'
+import { DraftToggleButton } from '../common/DraftToggleButton'
+import { MergeButton } from '../common/MergeButton'
 import { RevLogBadge } from './RevLogBadge'
 import { AuditViewer } from '../audits/AuditViewer'
 import { ChangesRequestedModal } from '../common/ChangesRequestedModal'
@@ -220,6 +223,7 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
                 <ReviewersBadge reviewers={item.currentReviewers} />
               )}
               {getCIStatusBadge()}
+              {item.prState === 'OPEN' && <BehindBadge behindBy={item.behindBy} />}
               {getAutomationBadge()}
               <RevLogBadge
                 entries={item.revLog ?? []}
@@ -297,6 +301,25 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
               📌
             </Button>
           )}
+          <MergeButton
+            repo={item.repo}
+            prNumber={item.number}
+            title={item.title}
+            prState={item.prState}
+            isDraft={item.isDraft}
+            reviewDecision={item.reviewDecision}
+            ciStatus={item.ciStatus}
+            behindBy={item.behindBy}
+            headSha={item.currentSha}
+            onDone={onRefresh}
+          />
+          <DraftToggleButton
+            repo={item.repo}
+            prNumber={item.number}
+            isDraft={item.isDraft}
+            prState={item.prState}
+            onDone={onRefresh}
+          />
           {item.hasReview && item.reviewId && (
             <>
               <Button

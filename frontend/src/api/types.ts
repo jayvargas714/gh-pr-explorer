@@ -55,6 +55,7 @@ export interface PullRequest {
   url: string
   body: string
   headRefName: string
+  headRefOid?: string
   baseRefName: string
   labels: Label[]
   assignees: Assignee[]
@@ -359,6 +360,9 @@ export interface MergeQueueItem {
   reviewDecision: string | null
   ciStatus: string | null
   isDraft: boolean
+  // Commits the branch is behind its base, cached by the PR sync worker.
+  // null until computed; absent on optimistic placeholder cards.
+  behindBy?: number | null
   currentReviewers: Reviewer[]
   statusCheckRollup?: StatusCheck[] | null
   // Swimlane-only: whether the card is pinned within its lane. Present on cards
@@ -494,6 +498,7 @@ export interface PipelineRow {
   prUpdatedAt: string | null      // GitHub updatedAt
   prSyncedAt: string | null       // synced_prs.fetched_at
   headSha: string | null          // synced headRefOid; null until the PR re-syncs
+  behindBy: number | null         // commits behind base (sync-worker cache); null until computed
   hasNewCommits: boolean          // headSha known and != the latest review's SHA
   stage: PipelineStage
   dispatch: PipelineDispatch

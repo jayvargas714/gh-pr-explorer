@@ -207,6 +207,7 @@ DEFAULT_PR_SYNC = {
     "min_graphql_remaining": 1500,   # skip the history slice below this GraphQL quota
     "commit_branches": ["main"],     # branches whose commits are synced via REST
     "commit_pages_per_cycle": 40,    # REST pages (100 commits) per cycle per branch
+    "behind_per_cycle": 40,          # max REST compare calls per cycle for the commits-behind cache
 }
 
 # Analytics defaults; overridable via config.json's "analytics" block.
@@ -282,6 +283,14 @@ def get_pr_sync_config() -> Dict[str, Any]:
         merged["commit_pages_per_cycle"] = pages
     except (TypeError, ValueError):
         merged["commit_pages_per_cycle"] = DEFAULT_PR_SYNC["commit_pages_per_cycle"]
+
+    try:
+        behind = int(merged["behind_per_cycle"])
+        if behind < 1:
+            raise ValueError
+        merged["behind_per_cycle"] = behind
+    except (TypeError, ValueError):
+        merged["behind_per_cycle"] = DEFAULT_PR_SYNC["behind_per_cycle"]
 
     if isinstance(merged["commit_branches"], list):
         merged["commit_branches"] = [

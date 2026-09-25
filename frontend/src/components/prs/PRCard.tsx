@@ -12,6 +12,8 @@ import { Card } from '../common/Card'
 import { Badge } from '../common/Badge'
 import { Button } from '../common/Button'
 import { PRBadges } from './PRBadges'
+import { DraftToggleButton } from '../common/DraftToggleButton'
+import { MergeButton } from '../common/MergeButton'
 import { ReviewButton } from '../reviews/ReviewButton'
 import { AuditButton } from '../audits/AuditButton'
 import { DescriptionModal } from '../modals/DescriptionModal'
@@ -181,6 +183,27 @@ export function PRCard({ pr }: PRCardProps) {
         </Button>
 
         <ReviewButton pr={pr} />
+
+        <MergeButton
+          repo={repoFullName}
+          prNumber={pr.number}
+          title={pr.title}
+          prState={pr.state}
+          isDraft={pr.isDraft}
+          reviewDecision={pr.reviewDecision}
+          ciStatus={pr.ciStatus}
+          behindBy={divergence?.behind_by}
+          headSha={pr.headRefOid}
+          onDone={handleRefreshPR}
+        />
+
+        <DraftToggleButton
+          repo={repoFullName}
+          prNumber={pr.number}
+          isDraft={pr.isDraft}
+          prState={pr.state}
+          onDone={handleRefreshPR}
+        />
 
         <AuditButton
           owner={selectedRepo?.owner.login ?? ''}

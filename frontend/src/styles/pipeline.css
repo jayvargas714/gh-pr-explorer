@@ -291,6 +291,10 @@
   white-space: nowrap;
 }
 
+.mx-pipe-table__col-behind {
+  white-space: nowrap;
+}
+
 .mx-pipe-table__no-match {
   text-align: center;
   color: var(--mx-color-text-muted);

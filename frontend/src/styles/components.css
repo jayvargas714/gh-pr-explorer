@@ -752,3 +752,79 @@
   text-align: left;
   line-height: 1.4;
 }
+
+/* ── PR actions: draft toggle + merge (shared by cards and pipeline rows) ── */
+
+.mx-pr-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.mx-pr-action__error {
+  color: var(--mx-color-error);
+  cursor: help;
+  font-size: 0.8rem;
+}
+
+.mx-merge-btn {
+  color: var(--mx-color-success);
+}
+
+.mx-merge-modal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-spacing-3);
+}
+
+.mx-merge-modal__title {
+  margin: 0;
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-xs);
+}
+
+.mx-merge-modal__methods {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mx-spacing-2);
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.mx-merge-modal__label {
+  margin-bottom: var(--mx-spacing-1);
+  color: var(--mx-color-text-secondary);
+  font-size: var(--mx-font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.mx-merge-modal__method {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: var(--mx-spacing-2);
+  align-items: center;
+  cursor: pointer;
+}
+
+.mx-merge-modal__method-hint {
+  grid-column: 2;
+  color: var(--mx-color-text-tertiary);
+  font-size: 0.7rem;
+}
+
+.mx-merge-modal__checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--mx-spacing-2);
+  cursor: pointer;
+}
+
+.mx-merge-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--mx-spacing-2);
+  padding-top: var(--mx-spacing-3);
+  border-top: 1px solid var(--mx-color-border);
+}

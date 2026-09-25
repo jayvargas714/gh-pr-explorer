@@ -11,7 +11,7 @@ from typing import List, Dict, Any, Optional
 
 from backend.database import (
     get_queue_db, get_reviews_db, get_audits_db, get_auto_verdicts_db,
-    get_automation_dispatches_db, get_auto_verdict_arming_db,
+    get_automation_dispatches_db, get_auto_verdict_arming_db, get_synced_prs_db,
 )
 from backend.services.auto_verdict_config import upgrade_legacy_criteria
 from backend.services.github_service import fetch_pr_queue_data
@@ -145,6 +145,8 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db, auto_verd
         "ciStatus": ci_status,
         "statusCheckRollup": status_check_rollup,
         "isDraft": is_draft,
+        # Cached by the PR sync worker; None until it has computed one.
+        "behindBy": get_synced_prs_db().get_behind_by(item["repo"], item["pr_number"]),
         "currentReviewers": current_reviewers,
         "revLog": rev_log,
     }
