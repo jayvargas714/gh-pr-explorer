@@ -166,7 +166,7 @@ The backend is organized as a Python package with clear separation of concerns:
 | `static_bp` | `/`, `/assets/<path>` |
 | `auth_bp` | `/api/user`, `/api/orgs` |
 | `repo_bp` | `/api/repos`, contributors, labels, branches, milestones, teams |
-| `pr_bp` | `/api/repos/.../prs`, `/api/repos/.../prs/divergence` + /prs/:n/timeline, /prs/:n/draft, /prs/:n/merge |
+| `pr_bp` | `/api/repos/.../prs`, `/api/repos/.../prs/divergence` + /prs/:n/timeline, /prs/:n/draft, /prs/:n/merge, /prs/:n/merge-info |
 | `analytics_bp` | `/api/repos/.../analytics/daily` — the precomputed per-developer, per-day rollup |
 | `workflow_bp` | `/api/repos/.../workflow-runs` |
 | `queue_bp` | `/api/merge-queue` CRUD, reorder, notes |
@@ -1052,9 +1052,9 @@ PR list cards, swimlane/merge-queue cards (`QueueItem`) and pipeline rows share 
 | Control | Shown when | Action |
 |---------|------------|--------|
 | `DraftToggleButton` — "✓ Ready" / "✎ Draft" | PR is `OPEN` | `POST /api/repos/<o>/<r>/prs/<n>/draft` (`gh pr ready`, `--undo` to convert back). No confirm; the label flips once GitHub accepts, then the host refreshes. A refusal shows a ⚠ with GitHub's message as its tooltip. |
-| `MergeButton` — "⇪ Merge" | `canMerge()`: `OPEN`, not draft, `reviewDecision === 'APPROVED'` | Opens a confirm dialog: merge method (Squash default / Merge commit / Rebase), "Delete branch after merge" (default on), non-blocking warnings when CI isn't `success` or the branch is behind. Confirm calls `POST /api/repos/<o>/<r>/prs/<n>/merge`; GitHub's refusal (branch protection, conflicts, head moved) shows in the dialog. |
+| `MergeButton` — "⇪ Merge" | `canMerge()`: `OPEN`, not draft, `reviewDecision === 'APPROVED'` | Opens a confirm dialog that first loads `GET .../prs/<n>/merge-info`: merge method (Squash default, else the first method the repo allows; disallowed methods are greyed out "Disabled in repo settings"), an editable commit subject + description pre-filled with GitHub's own merge-box text for the selected method (one draft per method, "Reset to GitHub default" once edited; hidden for rebase, which keeps each commit's message), "Delete branch after merge" (default on), and non-blocking warnings when CI isn't `success` or the branch is behind. Confirm calls `POST /api/repos/<o>/<r>/prs/<n>/merge`; GitHub's refusal (branch protection, conflicts, head moved) shows in the dialog. |
 
-The merge request carries the head SHA the surface was showing (`currentSha` on cards, `headSha` on pipeline rows, `headRefOid` on PR cards) as `--match-head-commit`, so a push that lands after the operator looked makes GitHub refuse instead of merging unseen commits. Marking a draft ready also makes an enrolled PR eligible for automated dispatch on the worker's next pass (drafts are gated out). Both endpoints write the result through to `synced_prs` and mark the pipeline snapshot dirty; hosts refresh via `onRefresh` (cards), `refreshPipelineRow` → `patchRow` (pipeline) or `refreshPR` → `updatePR` (PR list).
+Only the parts of the message the operator changed are sent (`messageOverrides()` in `utils/prActions.ts`), so an untouched message lets GitHub apply its default exactly; a cleared description is sent as an empty body, and a blank subject disables Confirm. If `merge-info` fails, the fields start empty with a note, and anything left empty falls back to GitHub's default. The merge request carries the head SHA the surface was showing (`currentSha` on cards, `headSha` on pipeline rows, `headRefOid` on PR cards) as `--match-head-commit`, so a push that lands after the operator looked makes GitHub refuse instead of merging unseen commits. Marking a draft ready also makes an enrolled PR eligible for automated dispatch on the worker's next pass (drafts are gated out). Both endpoints write the result through to `synced_prs` and mark the pipeline snapshot dirty; hosts refresh via `onRefresh` (cards), `refreshPipelineRow` → `patchRow` (pipeline) or `refreshPR` → `updatePR` (PR list).
 
 #### Approved-by-Me Card Highlight
 
@@ -3139,13 +3139,35 @@ Converts a PR to draft (`gh pr ready N --undo`) or marks it ready for review
 
 **Response**: `{ "isDraft": true }`
 
+**GET** `/api/repos/<owner>/<repo>/prs/<pr_number>/merge-info`
+
+Feeds the merge dialog with one GraphQL call (`fetch_merge_info`): the merge
+methods the repo allows (`squashMergeAllowed` / `mergeCommitAllowed` /
+`rebaseMergeAllowed`) and the commit message GitHub pre-fills in its own merge
+box for the viewer (`viewerMergeHeadlineText` / `viewerMergeBodyText`, per
+method). Rebase replays commits, so it carries no message.
+
+**Response**:
+```json
+{
+  "methods": {
+    "squash": { "allowed": true, "subject": "Add widgets (#7)", "body": "* commit one\n* commit two" },
+    "merge": { "allowed": false, "subject": "Merge pull request #7 from acme/widgets", "body": "Add widgets" },
+    "rebase": { "allowed": true }
+  }
+}
+```
+
+`404` when GitHub can't resolve the PR; other `gh` failures use the shared
+error mapping above.
+
 **POST** `/api/repos/<owner>/<repo>/prs/<pr_number>/merge`
 
-Merges a PR: `gh pr merge N --<method> [--delete-branch] [--match-head-commit SHA]`.
+Merges a PR: `gh pr merge N --<method> [--delete-branch] [--match-head-commit SHA] [--subject S] [--body B]`.
 
 **Request Body**:
 ```json
-{ "method": "squash", "deleteBranch": true, "headSha": "4f2c9e1d0b7a" }
+{ "method": "squash", "deleteBranch": true, "headSha": "4f2c9e1d0b7a", "subject": "Add widgets (#7)" }
 ```
 
 | Field | Default | Rule |
@@ -3153,6 +3175,8 @@ Merges a PR: `gh pr merge N --<method> [--delete-branch] [--match-head-commit SH
 | `method` | `squash` | one of `squash`, `merge`, `rebase` |
 | `deleteBranch` | `true` | boolean; deletes the remote head branch after merging |
 | `headSha` | — | optional 7–40 hex chars; GitHub refuses the merge if the head moved |
+| `subject` | GitHub's default | optional non-blank string overriding the merge commit subject; `400` with `rebase` |
+| `body` | GitHub's default | optional string (empty allowed) overriding the merge commit description; `400` with `rebase` |
 
 **Response**: `{ "merged": true }` (the synced row's `state` becomes `MERGED`).
 
@@ -5190,7 +5214,7 @@ gh-pr-explorer/
 │       ├── static_routes.py        # / and /assets/<path>
 │       ├── auth_routes.py          # /api/user, /api/orgs
 │       ├── repo_routes.py          # /api/repos, contributors, labels, branches, milestones, teams
-│       ├── pr_routes.py            # /api/repos/.../prs, prs/divergence, prs/:n/draft, prs/:n/merge
+│       ├── pr_routes.py            # /api/repos/.../prs, prs/divergence, prs/:n/draft, prs/:n/merge(-info)
 │       ├── analytics_routes.py     # /api/repos/.../analytics/daily — precomputed rollup
 │       ├── workflow_routes.py      # /api/repos/.../workflow-runs
 │       ├── queue_routes.py         # /api/merge-queue CRUD + reorder + notes

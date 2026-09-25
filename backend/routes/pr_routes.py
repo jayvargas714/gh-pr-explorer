@@ -16,7 +16,8 @@ from backend.database import (
 from backend.services.auto_verdict_config import validate_override
 from backend.services.github_service import (
     run_gh_command, parse_json_output, RateLimitError, TransientGitHubError,
-    PR_LIST_JSON_FIELDS as PR_JSON_FIELDS, fetch_full_pr, get_authenticated_login,
+    PR_LIST_JSON_FIELDS as PR_JSON_FIELDS, fetch_full_pr, fetch_merge_info,
+    get_authenticated_login,
 )
 from backend.services.pr_local_filter import (
     filter_prs_locally, needs_github_search, sort_prs_locally, states_for,
@@ -411,21 +412,45 @@ def set_pr_draft(owner, repo, pr_number):
     return jsonify({"isDraft": draft})
 
 
+@pr_bp.route("/api/repos/<owner>/<repo>/prs/<int:pr_number>/merge-info")
+def get_merge_info(owner, repo, pr_number):
+    """Allowed merge methods + GitHub's pre-filled commit message per method,
+    for the merge dialog."""
+    repo_full = f"{owner}/{repo}"
+    try:
+        methods = fetch_merge_info(owner, repo, pr_number)
+    except RuntimeError as e:
+        return _gh_action_error(e, "Merge info", repo_full, pr_number)
+    if methods is None:
+        return jsonify({"error": "PR not found"}), 404
+    return jsonify({"methods": methods})
+
+
 @pr_bp.route("/api/repos/<owner>/<repo>/prs/<int:pr_number>/merge", methods=["POST"])
 def merge_pr(owner, repo, pr_number):
     """Merge a PR. Body: {method: squash|merge|rebase, deleteBranch: bool,
-    headSha?: str}. headSha pins the merge to the commit the operator saw."""
+    headSha?: str, subject?: str, body?: str}. headSha pins the merge to the
+    commit the operator saw; subject/body override GitHub's default message
+    (omit them to keep it)."""
     repo_full = f"{owner}/{repo}"
     data = request.get_json(silent=True) or {}
     method = data.get("method", "squash")
     delete_branch = data.get("deleteBranch", True)
     head_sha = data.get("headSha")
+    subject = data.get("subject")
+    body = data.get("body")
     if method not in MERGE_METHODS:
         return jsonify({"error": f"'method' must be one of {', '.join(MERGE_METHODS)}"}), 400
     if not isinstance(delete_branch, bool):
         return jsonify({"error": "'deleteBranch' must be true or false"}), 400
     if head_sha is not None and not (isinstance(head_sha, str) and _SHA_RE.match(head_sha)):
         return jsonify({"error": "'headSha' must be a commit SHA"}), 400
+    if method == "rebase" and (subject is not None or body is not None):
+        return jsonify({"error": "A rebase merge keeps each commit's message; omit subject/body"}), 400
+    if subject is not None and not (isinstance(subject, str) and subject.strip()):
+        return jsonify({"error": "'subject' must be a non-empty string"}), 400
+    if body is not None and not isinstance(body, str):
+        return jsonify({"error": "'body' must be a string"}), 400
 
     # -R keeps gh away from any local checkout (--delete-branch only deletes the remote branch).
     args = ["pr", "merge", str(pr_number), "-R", repo_full, f"--{method}"]
@@ -433,6 +458,10 @@ def merge_pr(owner, repo, pr_number):
         args.append("--delete-branch")
     if head_sha:
         args.extend(["--match-head-commit", head_sha])
+    if subject is not None:
+        args.extend(["--subject", subject])
+    if body is not None:
+        args.extend(["--body", body])
     try:
         run_gh_command(args)
     except RuntimeError as e:

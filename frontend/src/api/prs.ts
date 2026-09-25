@@ -1,6 +1,6 @@
 import { api } from './client'
 import { PRsResponse, DivergenceResponse, PullRequest } from './types'
-import type { MergeMethod } from '../utils/prActions'
+import type { MergeInfo, MergeMethod } from '../utils/prActions'
 
 /**
  * Fetch PRs with filters
@@ -91,11 +91,27 @@ export async function mergePR(
   owner: string,
   repo: string,
   prNumber: number,
-  opts: { method: MergeMethod; deleteBranch: boolean; headSha?: string | null }
+  opts: {
+    method: MergeMethod
+    deleteBranch: boolean
+    headSha?: string | null
+    /** Override GitHub's default commit message; omit to keep it. */
+    subject?: string
+    body?: string
+  }
 ): Promise<{ merged: boolean }> {
   return api.post(`/repos/${owner}/${repo}/prs/${prNumber}/merge`, {
     method: opts.method,
     deleteBranch: opts.deleteBranch,
     ...(opts.headSha ? { headSha: opts.headSha } : {}),
+    ...(opts.subject !== undefined ? { subject: opts.subject } : {}),
+    ...(opts.body !== undefined ? { body: opts.body } : {}),
   })
+}
+
+/**
+ * Allowed merge methods and GitHub's pre-filled commit message per method.
+ */
+export async function fetchMergeInfo(owner: string, repo: string, prNumber: number): Promise<MergeInfo> {
+  return api.get(`/repos/${owner}/${repo}/prs/${prNumber}/merge-info`)
 }

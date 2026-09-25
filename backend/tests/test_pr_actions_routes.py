@@ -1,4 +1,6 @@
 """Draft toggle + merge endpoints, with gh fully mocked."""
+import json
+
 import pytest
 
 from backend import create_app
@@ -153,3 +155,87 @@ def test_merge_transient_and_rate_limit_errors(client, gh):
     assert client.post(f"/api/repos/{REPO}/prs/7/merge", json={}).status_code == 503
     gh.error = RateLimitError("gh command failed: API rate limit exceeded")
     assert client.post(f"/api/repos/{REPO}/prs/7/merge", json={}).status_code == 429
+
+
+def test_merge_passes_custom_subject_and_body(client, gh):
+    resp = client.post(f"/api/repos/{REPO}/prs/7/merge", json={
+        "method": "squash", "deleteBranch": False,
+        "subject": "Ship it (#7)", "body": "Line one\n\nLine two",
+    })
+    assert resp.status_code == 200
+    assert gh.calls == [["pr", "merge", "7", "-R", REPO, "--squash",
+                         "--subject", "Ship it (#7)", "--body", "Line one\n\nLine two"]]
+
+
+def test_merge_empty_body_is_sent_as_is(client, gh):
+    """An operator who clears the body wants an empty message, not GitHub's default."""
+    resp = client.post(f"/api/repos/{REPO}/prs/7/merge",
+                       json={"method": "merge", "deleteBranch": False, "body": ""})
+    assert resp.status_code == 200
+    assert gh.calls == [["pr", "merge", "7", "-R", REPO, "--merge", "--body", ""]]
+
+
+@pytest.mark.parametrize("body", [
+    {"method": "rebase", "subject": "x"}, {"method": "rebase", "body": "x"},
+    {"subject": ""}, {"subject": "   "}, {"subject": 5}, {"body": ["x"]},
+])
+def test_merge_rejects_bad_message(client, gh, body):
+    resp = client.post(f"/api/repos/{REPO}/prs/7/merge", json=body)
+    assert resp.status_code == 400
+    assert gh.calls == []
+
+
+# -- merge info ------------------------------------------------------------------
+
+def _merge_info_payload(pr=True):
+    return json.dumps({"data": {"repository": {
+        "squashMergeAllowed": True, "mergeCommitAllowed": False, "rebaseMergeAllowed": True,
+        "pullRequest": {
+            "sqHead": "Add widgets (#7)", "sqBody": "* commit one\n* commit two",
+            "mHead": "Merge pull request #7 from acme/widgets-branch", "mBody": "Add widgets",
+        } if pr else None,
+    }}})
+
+
+def test_merge_info_returns_prefilled_messages_and_allowed_methods(client, gh, monkeypatch):
+    import backend.services.github_service as gs
+    calls = []
+    monkeypatch.setattr(gs, "run_gh_command", lambda args, **kw: (calls.append(args), _merge_info_payload())[1])
+    resp = client.get(f"/api/repos/{REPO}/prs/7/merge-info")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"methods": {
+        "squash": {"allowed": True, "subject": "Add widgets (#7)", "body": "* commit one\n* commit two"},
+        "merge": {"allowed": False, "subject": "Merge pull request #7 from acme/widgets-branch",
+                  "body": "Add widgets"},
+        "rebase": {"allowed": True},
+    }}
+    args = calls[0]
+    assert args[:2] == ["api", "graphql"]
+    assert "owner=acme" in args and "name=widgets" in args and "number=7" in args
+
+
+def test_merge_info_unknown_pr_is_404(client, monkeypatch):
+    import backend.services.github_service as gs
+    monkeypatch.setattr(gs, "run_gh_command", lambda args, **kw: _merge_info_payload(pr=False))
+    assert client.get(f"/api/repos/{REPO}/prs/7/merge-info").status_code == 404
+
+
+def test_merge_info_gh_errors_are_mapped(client, monkeypatch):
+    import backend.services.github_service as gs
+
+    def boom(args, **kw):
+        raise TransientGitHubError("gh command failed: HTTP 502")
+
+    monkeypatch.setattr(gs, "run_gh_command", boom)
+    assert client.get(f"/api/repos/{REPO}/prs/7/merge-info").status_code == 503
+
+
+def test_merge_info_unresolvable_pr_error_is_404(client, monkeypatch):
+    """Real gh reports an unknown PR as a GraphQL error (non-zero exit), not a null."""
+    import backend.services.github_service as gs
+
+    def not_found(args, **kw):
+        raise RuntimeError("gh command failed: gh: Could not resolve to a PullRequest with the number of 99.")
+
+    monkeypatch.setattr(gs, "run_gh_command", not_found)
+    assert client.get(f"/api/repos/{REPO}/prs/99/merge-info").status_code == 404

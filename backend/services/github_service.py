@@ -193,6 +193,49 @@ def fetch_branch_head_sha(owner, repo, ref):
     return output
 
 
+_MERGE_INFO_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed
+    pullRequest(number: $number) {
+      sqHead: viewerMergeHeadlineText(mergeType: SQUASH)
+      sqBody: viewerMergeBodyText(mergeType: SQUASH)
+      mHead: viewerMergeHeadlineText(mergeType: MERGE)
+      mBody: viewerMergeBodyText(mergeType: MERGE)
+    }
+  }
+}
+"""
+
+
+def fetch_merge_info(owner, repo, pr_number):
+    """The merge methods the repo allows plus the commit subject/body GitHub
+    pre-fills in its own merge box, per method (rebase has no message).
+    One GraphQL call. Returns None when the PR doesn't exist; raises
+    RuntimeError (or a subclass) on gh failure."""
+    try:
+        output = run_gh_command([
+            "api", "graphql", "-f", f"query={_MERGE_INFO_QUERY}",
+            "-F", f"owner={owner}", "-F", f"name={repo}", "-F", f"number={pr_number}",
+        ])
+    except RuntimeError as e:
+        if "Could not resolve to a PullRequest" in str(e):
+            return None
+        raise
+    data = (parse_json_output(output) or {}).get("data") or {}
+    repository = data.get("repository") or {}
+    pr = repository.get("pullRequest")
+    if not pr:
+        return None
+    return {
+        "squash": {"allowed": bool(repository.get("squashMergeAllowed")),
+                   "subject": pr.get("sqHead") or "", "body": pr.get("sqBody") or ""},
+        "merge": {"allowed": bool(repository.get("mergeCommitAllowed")),
+                  "subject": pr.get("mHead") or "", "body": pr.get("mBody") or ""},
+        "rebase": {"allowed": bool(repository.get("rebaseMergeAllowed"))},
+    }
+
+
 def fetch_pr_numbers(owner, repo, state="open", search=None, limit=1000):
     """Fetch PR numbers only (tiny, 504-resistant query), in GitHub's order."""
     args = ["pr", "list", "-R", f"{owner}/{repo}", "--state", state,
