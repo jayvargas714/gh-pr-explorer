@@ -419,6 +419,9 @@ export interface AutomationConfig {
   maxPipelineSize: number
   ignorePatterns: string[]
   defaultRule: AutomationDefaultRule
+  /** Route unidentified PRs (files spanning rules, or a rule plus unmatched
+   * files) to defaultRule instead of parking them for manual routing. */
+  routeUnidentifiedToDefault: boolean
   rules: AutomationRule[]
 }
 

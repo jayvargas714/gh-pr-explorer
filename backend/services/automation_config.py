@@ -26,6 +26,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "maxPipelineSize": 1000,           # max pending pipeline rows; new candidates are refused at the cap
     "ignorePatterns": [],              # globs stripped before classification
     "defaultRule": {"reviewerKey": "default", "autoVerdict": False, "autoVerdictMode": "verdict"},
+    "routeUnidentifiedToDefault": False,  # unidentified PRs (files span rules / mix rule + unmatched) go to defaultRule instead of waiting for a human
     "rules": [],                       # ordered: [{name, patterns, reviewerKey, autoVerdict, autoVerdictMode}]
 }
 
@@ -150,6 +151,9 @@ def validate_config(payload: Dict[str, Any], valid_reviewer_keys: Iterable[str])
         valid_keys, require_name=False,
     )
 
+    config["routeUnidentifiedToDefault"] = bool(
+        payload.get("routeUnidentifiedToDefault", DEFAULT_CONFIG["routeUnidentifiedToDefault"]))
+
     rules = payload.get("rules", [])
     if not isinstance(rules, list):
         raise ValueError("rules must be a list")
@@ -159,11 +163,21 @@ def validate_config(payload: Dict[str, Any], valid_reviewer_keys: Iterable[str])
 
 
 def save_config(payload: Dict[str, Any], valid_reviewer_keys: Iterable[str]) -> Dict[str, Any]:
-    """Validate and persist the config. Returns the stored value."""
-    from backend.database import get_settings_db
+    """Validate and persist the config. Returns the stored value.
 
+    Turning `routeUnidentifiedToDefault` on (off -> on) also requeues every
+    `unidentified` dispatch row: those PRs were parked only because routing
+    needed a human, and the next worker cycle now has a rule for them.
+    """
+    from backend.database import get_automation_dispatches_db, get_settings_db
+
+    was_enabled = get_config()["routeUnidentifiedToDefault"]
     config = validate_config(payload, valid_reviewer_keys)
     get_settings_db().set_setting(SETTINGS_KEY, config)
     logger.info(f"Saved automation config: scope={config['scope']}, "
                 f"repos={len(config['repoAllowlist'])}, rules={len(config['rules'])}")
+    if config["routeUnidentifiedToDefault"] and not was_enabled:
+        requeued = get_automation_dispatches_db().requeue_by_status(
+            "unidentified", detail="requeued: unidentified PRs now route to the default reviewer")
+        logger.info(f"Automation: requeued {requeued} unidentified dispatch rows for the default reviewer")
     return config

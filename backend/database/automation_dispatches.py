@@ -138,6 +138,23 @@ class AutomationDispatchesDB:
             )
         _mark_pipeline_dirty()
 
+    def requeue_by_status(self, status: str, detail: str) -> int:
+        """requeue() every row in `status`. Returns the number of rows moved."""
+        if status not in VALID_STATUSES:
+            raise ValueError(f"Invalid dispatch status: {status}")
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE automation_dispatches "
+                "SET status = 'pending', attempts = 0, detail = ?, "
+                "updated_at = CURRENT_TIMESTAMP, enrolled_at = CURRENT_TIMESTAMP WHERE status = ?",
+                (detail, status),
+            )
+            moved = cursor.rowcount
+        if moved:
+            _mark_pipeline_dirty()
+        return moved
+
     def reset_attempts(self, dispatch_id: int) -> None:
         """Clear the attempt counter after a clean evaluation, so transient
         errors spread over a long wait never add up to a permanent failure."""

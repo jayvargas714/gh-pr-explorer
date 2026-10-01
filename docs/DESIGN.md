@@ -2027,7 +2027,8 @@ reading the current blob, still shows it; that is how scala#3636 was missed on
 is routed when the login is in `reviewRequests` and the pipeline is not acting
 on it: no dispatch row, or `skipped`/`failed`, or `dispatched` with no
 `review_requests` row. `pending` rows are already waiting on gates,
-`unidentified` rows stay a human decision, and any existing `review_requests`
+`unidentified` rows stay a human decision (none are created while
+`routeUnidentifiedToDefault` is on), and any existing `review_requests`
 row — even a terminal one — is left alone, because reviving it every cycle
 would loop a follow-up whenever a posted review failed to clear the GitHub
 request (that residual case still needs a fresh appear-transition, i.e. remove
@@ -2046,7 +2047,7 @@ human asked explicitly. Then, by the PR's `automation_dispatches` row:
 | none | `record_candidate` + detail `review requested` (cap applies) | review requested — enrolled |
 | `pending` | nothing (already waiting on gates) | — |
 | `skipped` / `failed` (incl. `manual opt-out`) | `requeue` (fresh window) | review requested — re-enrolled |
-| `unidentified` | nothing — routing stays a human decision | review requested — needs manual routing |
+| `unidentified` | nothing — routing stays a human decision (enabling `routeUnidentifiedToDefault` requeues these rows) | review requested — needs manual routing |
 | `dispatched` | `ReviewRequestsDB.record` → pending follow-up demand | review requested — follow-up queued |
 
 When scope is off or the repo is not allowlisted nothing is queued; the card
@@ -2574,6 +2575,7 @@ maps over `useAutomationStore.reviewers` instead of local constants.
 | `maxPipelineSize` | `1000` | max pending pipeline rows; new candidates are refused at the cap |
 | `ignorePatterns` | `[]` | globs stripped before classification (index files) |
 | `defaultRule` | default reviewer, verdict off | applies when no rule matches |
+| `routeUnidentifiedToDefault` | `false` | when on, PRs that would classify `unidentified` (files span rules, or mix a rule with unmatched files — e.g. an ED plus source code) get `defaultRule` instead of parking for manual routing. Saving the flag off → on also requeues every `unidentified` dispatch row (`requeue_by_status`), so the backlog is re-classified and dispatched on the next cycles |
 | `rules` | `[]` | ordered `{name, patterns[], reviewerKey, autoVerdict, autoVerdictMode}` |
 
 All defaults are off/empty: installing the feature dispatches nothing until the
@@ -2636,7 +2638,9 @@ ignore-pattern files, then attributes each remaining file to the first rule (lis
 order) with a matching pattern:
 - every file → the same single rule → **matched** (that rule's reviewer)
 - no file matches any rule (or all files ignored / empty) → **default**
-- files span ≥2 rules, or mix rule + unmatched → **unidentified**
+- files span ≥2 rules, or mix rule + unmatched → **unidentified**, unless
+  `routeUnidentifiedToDefault` is on, in which case → **default** (the
+  `matched_rules` / `unmatched_count` detail is still recorded in `outcome_json`)
 
 **Dispatch worker** (`backend/services/automation_dispatch_worker.py`, daemon
 started unconditionally from `app.py`, 60s interval; the loop's own
@@ -2732,19 +2736,21 @@ tooltip carries the blocking reason while a pending row waits on the dispatch
 conditions), or `🤖 Auto skipped` (neutral, tooltip carries the skip reason —
 e.g. the PR closed before conditions held). The swimlane badge filter
 gains an `auto:unidentified` chip in the Auto Verdict group. Routing an
-unidentified PR is manual by design: the operator uses the normal review
-button/picker and AutoVerdictToggle on the card.
+unidentified PR is manual by default: the operator uses the normal review
+button/picker and AutoVerdictToggle on the card — or enables
+`routeUnidentifiedToDefault` in Reviewer Routing Rules, which hands those PRs
+(new and already-flagged) to the default rule's reviewer.
 
 **Automation tab** (`frontend/src/components/automation/`): `AutomationPanel`
 (draft state, one explicit Save for the config blob, dirty indicator) opens with
 `ActiveConfigSummary` — a read-only ●&nbsp;ACTIVE/○&nbsp;OFF strip of the SAVED
-config (scope + authors, allowlisted repos, rule→reviewer routing map, dispatch
-conditions, concurrency), distinct from the unsaved draft below — followed by
+config (scope + authors, allowlisted repos, rule→reviewer routing map incl.
+`unidentified → <reviewer|manual>`, dispatch conditions, concurrency), distinct from the unsaved draft below — followed by
 the sections: `ScopeSection` (off/authors/all cards,
 author + repo chip lists, concurrency, max pipeline size), `RoutingRulesSection`
 (ordered rules with ↑/↓, pattern chips,
 reviewer select, per-rule verdict toggle + mode, ignore patterns, pinned default
-rule), `ReviewerRegistrySection` (table + inline add/edit/delete, builtins
+rule with its "Also route unidentified PRs here" toggle), `ReviewerRegistrySection` (table + inline add/edit/delete, builtins
 locked), and `AutoVerdictCriteriaSection` — the global auto-verdict criteria form
 relocated from the old header modal (storage and API unchanged; the shared form
 lives in `AutoVerdictCriteriaForm`, still used by the per-PR override modal).
@@ -3598,6 +3604,8 @@ Returns `{"config": {...}}` — stored `automation_config` merged over the defau
 
 **PUT** `/api/automation/config` — body `{"config": {...}}` (or the bare object).
 Validates and persists; 400 with a message on bad scope/mode/rule/reviewer key.
+Flipping `routeUnidentifiedToDefault` off → on requeues every `unidentified`
+dispatch row to `pending` as a side effect (see Automation config).
 
 **GET** `/api/automation/pipeline`
 

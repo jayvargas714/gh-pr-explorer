@@ -19,7 +19,8 @@ const MODE_OPTIONS = [
 /** Ordered file-pattern routing rules, global ignore patterns, and the pinned
  * default rule. Matching: first rule (top-down) whose pattern matches a file
  * claims it; a PR whose files span rules — or mix a rule with unmatched
- * files — is flagged unidentified and not auto-reviewed. */
+ * files — is flagged unidentified and not auto-reviewed, unless
+ * routeUnidentifiedToDefault sends it to the default rule. */
 export function RoutingRulesSection({ draft, setDraft, saving }: RoutingRulesSectionProps) {
   const reviewers = useAutomationStore((s) => s.reviewers)
   const reviewerOptions = reviewers.map((r) => ({ value: r.key, label: `${r.label} (${r.key})` }))
@@ -87,9 +88,9 @@ export function RoutingRulesSection({ draft, setDraft, saving }: RoutingRulesSec
         A new PR's changed files decide its reviewer. Files matching an ignore pattern are
         skipped first. If every remaining file matches the same rule, that rule's reviewer
         runs; if no file matches any rule, the default reviewer runs; a mix is flagged
-        <strong> unidentified</strong> — the PR still lands in the Auto lane, but no review
-        starts until you route it manually. Globs match the full path or the file name;
-        <code> *</code> also crosses <code>/</code>.
+        <strong> unidentified</strong> — no review starts until you route it manually,
+        unless the default rule below is set to pick those PRs up too. Globs match the
+        full path or the file name; <code> *</code> also crosses <code>/</code>.
       </p>
 
       <div className="mx-automation__field">
@@ -174,6 +175,19 @@ export function RoutingRulesSection({ draft, setDraft, saving }: RoutingRulesSec
         {renderVerdictControls(draft.defaultRule, (updates) =>
           setDraft({ ...draft, defaultRule: { ...draft.defaultRule, ...updates } })
         )}
+        <div className="mx-automation__field mx-automation__field--inline">
+          <Toggle
+            checked={draft.routeUnidentifiedToDefault}
+            onChange={(routeUnidentifiedToDefault) => setDraft({ ...draft, routeUnidentifiedToDefault })}
+            label="Also route unidentified PRs here"
+            disabled={saving}
+          />
+          <small className="mx-automation__hint">
+            PRs whose files span rules, or mix a rule with unmatched files (e.g. an ED plus
+            source code), get the default reviewer instead of waiting for manual routing.
+            Turning this on re-queues every PR currently flagged unidentified.
+          </small>
+        </div>
       </div>
     </section>
   )

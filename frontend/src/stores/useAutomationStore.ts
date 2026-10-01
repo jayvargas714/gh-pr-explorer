@@ -21,6 +21,7 @@ export const DEFAULT_AUTOMATION_CONFIG: AutomationConfig = {
   maxPipelineSize: 1000,
   ignorePatterns: [],
   defaultRule: { reviewerKey: 'default', autoVerdict: false, autoVerdictMode: 'verdict' },
+  routeUnidentifiedToDefault: false,
   rules: [],
 }
 

@@ -147,3 +147,83 @@ def test_get_config_ignores_unknown_stored_keys(settings_db):
     loaded = automation_config.get_config()
     assert loaded["scope"] == "all"
     assert "bogus" not in loaded
+
+
+# --- routeUnidentifiedToDefault ---
+
+def test_route_unidentified_to_default_defaults_off(settings_db):
+    assert automation_config.get_config()["routeUnidentifiedToDefault"] is False
+
+
+def test_validate_route_unidentified_to_default_is_boolean():
+    assert automation_config.validate_config(
+        _valid_config(routeUnidentifiedToDefault=True), KEYS)["routeUnidentifiedToDefault"] is True
+    assert automation_config.validate_config(
+        _valid_config(routeUnidentifiedToDefault=0), KEYS)["routeUnidentifiedToDefault"] is False
+    # Legacy payloads without the key keep the flag off.
+    assert automation_config.validate_config(
+        _valid_config(), KEYS)["routeUnidentifiedToDefault"] is False
+
+
+@pytest.fixture
+def dispatches_db(settings_db, monkeypatch):
+    from backend.database.automation_dispatches import AutomationDispatchesDB
+    ddb = AutomationDispatchesDB(settings_db.db)
+    import backend.database as db_pkg
+    monkeypatch.setattr(db_pkg, "get_automation_dispatches_db", lambda: ddb)
+    return ddb
+
+
+def _seed_rows(ddb):
+    for n in (1, 2, 3):
+        ddb.record_candidate("o/r", n)
+    ddb.set_status(ddb.get_by_pr("o/r", 1)["id"], "unidentified",
+                   detail="files span multiple rules or mix rule and unmatched files")
+    ddb.set_status(ddb.get_by_pr("o/r", 2)["id"], "unidentified",
+                   detail="files span multiple rules or mix rule and unmatched files")
+    ddb.set_status(ddb.get_by_pr("o/r", 3)["id"], "dispatched", reviewer_key="pb")
+
+
+def test_enabling_route_unidentified_requeues_unidentified_rows(settings_db, dispatches_db):
+    automation_config.save_config(_valid_config(routeUnidentifiedToDefault=False), KEYS)
+    _seed_rows(dispatches_db)
+
+    automation_config.save_config(_valid_config(routeUnidentifiedToDefault=True), KEYS)
+
+    for n in (1, 2):
+        row = dispatches_db.get_by_pr("o/r", n)
+        assert row["status"] == "pending"
+        assert row["attempts"] == 0
+        assert "default reviewer" in row["detail"]
+    # Rows the worker already acted on are untouched.
+    assert dispatches_db.get_by_pr("o/r", 3)["status"] == "dispatched"
+
+
+def test_enabling_from_legacy_config_without_key_requeues(settings_db, dispatches_db):
+    # A blob saved before the key existed reads as off, so turning it on is a flip.
+    legacy = automation_config.validate_config(_valid_config(), KEYS)
+    legacy.pop("routeUnidentifiedToDefault")
+    settings_db.set_setting(automation_config.SETTINGS_KEY, legacy)
+    _seed_rows(dispatches_db)
+
+    automation_config.save_config(_valid_config(routeUnidentifiedToDefault=True), KEYS)
+
+    assert dispatches_db.get_by_pr("o/r", 1)["status"] == "pending"
+
+
+def test_saving_with_flag_already_on_does_not_requeue(settings_db, dispatches_db):
+    automation_config.save_config(_valid_config(routeUnidentifiedToDefault=True), KEYS)
+    _seed_rows(dispatches_db)
+
+    automation_config.save_config(_valid_config(routeUnidentifiedToDefault=True), KEYS)
+
+    assert dispatches_db.get_by_pr("o/r", 1)["status"] == "unidentified"
+
+
+def test_disabling_flag_does_not_touch_rows(settings_db, dispatches_db):
+    automation_config.save_config(_valid_config(routeUnidentifiedToDefault=True), KEYS)
+    _seed_rows(dispatches_db)
+
+    automation_config.save_config(_valid_config(routeUnidentifiedToDefault=False), KEYS)
+
+    assert dispatches_db.get_by_pr("o/r", 1)["status"] == "unidentified"

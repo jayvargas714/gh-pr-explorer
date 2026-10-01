@@ -99,3 +99,33 @@ def test_rule_order_wins_for_a_file_matching_two_rules():
 def test_empty_rules_list_falls_to_default():
     result = classify_files(["anything.py"], _config(rules=[]))
     assert result["outcome"] == "default"
+
+
+# --- routeUnidentifiedToDefault ---
+
+def test_route_unidentified_to_default_resolves_spanned_rules():
+    config = _config()
+    config["routeUnidentifiedToDefault"] = True
+    result = classify_files(["briefs/PB-008-a.md", "docs/designs/ED-052-b.md"], config)
+    assert result["outcome"] == "default"
+    assert result["rule"]["reviewerKey"] == "default"
+    # The spanned rules are still reported so the pipeline row shows why.
+    assert set(result["matched_rules"]) == {"PB", "ED"}
+
+
+def test_route_unidentified_to_default_resolves_rule_plus_unmatched():
+    config = _config()
+    config["routeUnidentifiedToDefault"] = True
+    result = classify_files(["docs/designs/ED-052-b.md", "src/app.py"], config)
+    assert result["outcome"] == "default"
+    assert result["rule"]["reviewerKey"] == "default"
+    assert result["matched_rules"] == ["ED"]
+    assert result["unmatched_count"] == 1
+
+
+def test_route_unidentified_to_default_off_keeps_unidentified():
+    config = _config()
+    config["routeUnidentifiedToDefault"] = False
+    result = classify_files(["docs/designs/ED-052-b.md", "src/app.py"], config)
+    assert result["outcome"] == "unidentified"
+    assert result["rule"] is None

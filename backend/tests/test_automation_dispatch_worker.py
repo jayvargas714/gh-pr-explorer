@@ -866,3 +866,32 @@ def test_review_request_never_touches_merge_queue_or_swimlanes(env, monkeypatch)
     assert env["queue"].get_queue() == []
     with env["db"].connection() as conn:
         assert conn.execute("SELECT COUNT(*) AS n FROM swimlane_assignments").fetchone()["n"] == 0
+
+
+def test_unidentified_pr_routes_to_default_reviewer_when_enabled(env, monkeypatch, comments):
+    _patch_config(monkeypatch, routeUnidentifiedToDefault=True,
+                  defaultRule={"reviewerKey": "default", "autoVerdict": True,
+                               "autoVerdictMode": "comment"})
+    env["dispatches"].record_candidate(REPO, 7)
+
+    with _gates(), \
+         patch("backend.services.github_service.fetch_pr_files",
+               return_value=["docs/designs/ED-052-b.md", "src/main.rs"]), \
+         patch("backend.services.review_service.begin_review",
+               return_value=({"review_id": 1}, 201)) as mock_begin:
+        process_pending_dispatches()
+
+    assert mock_begin.call_args.kwargs["reviewer_type"] == "default"
+    row = env["dispatches"].get_by_pr(REPO, 7)
+    assert row["status"] == "dispatched"
+    assert row["reviewer_key"] == "default"
+    outcome = json.loads(row["outcome_json"])
+    assert outcome["outcome"] == "default"
+    assert outcome["matched_rules"] == ["ED"]
+    assert outcome["unmatched_count"] == 1
+    # Armed per the default rule, like any no-match PR.
+    arming = env["arming"].get(REPO, 7)
+    assert arming["auto_verdict_enabled"] == 1
+    assert arming["auto_verdict_mode"] == "comment"
+    # No "needs manual routing" comment: the PR was routed.
+    assert _kinds(comments) == ["enrolled"]

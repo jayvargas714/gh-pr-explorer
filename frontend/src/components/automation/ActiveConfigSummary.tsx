@@ -52,6 +52,7 @@ export function ActiveConfigSummary() {
           <dt>Routing</dt>
           <dd>
             {routingText} · other files → {reviewerLabel(config.defaultRule.reviewerKey)}
+            {` · unidentified → ${config.routeUnidentifiedToDefault ? reviewerLabel(config.defaultRule.reviewerKey) : 'manual'}`}
             {config.ignorePatterns.length > 0 &&
               ` · ${config.ignorePatterns.length} ignore pattern${config.ignorePatterns.length === 1 ? '' : 's'}`}
           </dd>

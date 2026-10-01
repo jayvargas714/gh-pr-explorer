@@ -23,8 +23,9 @@ def classify_files(files: List[str], config: Dict[str, Any]) -> Dict[str, Any]:
     """Classify a PR's changed files against the configured routing rules.
 
     Returns a dict:
-        outcome: 'matched' (single rule), 'default' (no rule matched anything),
-                 or 'unidentified' (files span rules, or mix rule + unmatched)
+        outcome: 'matched' (single rule), 'default' (no rule matched anything,
+                 or the mix below with routeUnidentifiedToDefault on), or
+                 'unidentified' (files span rules, or mix rule + unmatched)
         rule: the winning rule dict ('matched'), the defaultRule ('default'),
               or None ('unidentified')
         matched_rules: names of rules that matched at least one file
@@ -55,7 +56,7 @@ def classify_files(files: List[str], config: Dict[str, Any]) -> Dict[str, Any]:
 
     if len(matched_rule_names) == 1 and unmatched_count == 0:
         outcome, rule = "matched", winning_rule
-    elif not matched_rule_names:
+    elif not matched_rule_names or config.get("routeUnidentifiedToDefault"):
         outcome, rule = "default", config.get("defaultRule")
     else:
         outcome, rule = "unidentified", None
