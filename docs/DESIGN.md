@@ -2047,7 +2047,7 @@ human asked explicitly. Then, by the PR's `automation_dispatches` row:
 | none | `record_candidate` + detail `review requested` (cap applies) | review requested — enrolled |
 | `pending` | nothing (already waiting on gates) | — |
 | `skipped` / `failed` (incl. `manual opt-out`) | `requeue` (fresh window) | review requested — re-enrolled |
-| `unidentified` | nothing — routing stays a human decision (enabling `routeUnidentifiedToDefault` requeues these rows) | review requested — needs manual routing |
+| `unidentified` | nothing — routing stays a human decision (enabling `routeUnidentifiedToDefault` requeues these rows for open PRs) | review requested — needs manual routing |
 | `dispatched` | `ReviewRequestsDB.record` → pending follow-up demand | review requested — follow-up queued |
 
 When scope is off or the repo is not allowlisted nothing is queued; the card
@@ -2575,7 +2575,7 @@ maps over `useAutomationStore.reviewers` instead of local constants.
 | `maxPipelineSize` | `1000` | max pending pipeline rows; new candidates are refused at the cap |
 | `ignorePatterns` | `[]` | globs stripped before classification (index files) |
 | `defaultRule` | default reviewer, verdict off | applies when no rule matches |
-| `routeUnidentifiedToDefault` | `false` | when on, PRs that would classify `unidentified` (files span rules, or mix a rule with unmatched files — e.g. an ED plus source code) get `defaultRule` instead of parking for manual routing. Saving the flag off → on also requeues every `unidentified` dispatch row (`requeue_by_status`), so the backlog is re-classified and dispatched on the next cycles |
+| `routeUnidentifiedToDefault` | `false` | when on, PRs that would classify `unidentified` (files span rules, or mix a rule with unmatched files — e.g. an ED plus source code) get `defaultRule` instead of parking for manual routing. Saving the flag off → on also requeues every `unidentified` dispatch row whose synced PR is still `OPEN` (`requeue_open_by_status`; merged/closed rows are left alone), so the open backlog is re-classified and dispatched on the next cycles |
 | `rules` | `[]` | ordered `{name, patterns[], reviewerKey, autoVerdict, autoVerdictMode}` |
 
 All defaults are off/empty: installing the feature dispatches nothing until the
@@ -3605,7 +3605,7 @@ Returns `{"config": {...}}` — stored `automation_config` merged over the defau
 **PUT** `/api/automation/config` — body `{"config": {...}}` (or the bare object).
 Validates and persists; 400 with a message on bad scope/mode/rule/reviewer key.
 Flipping `routeUnidentifiedToDefault` off → on requeues every `unidentified`
-dispatch row to `pending` as a side effect (see Automation config).
+dispatch row for a still-open PR to `pending` as a side effect (see Automation config).
 
 **GET** `/api/automation/pipeline`
 

@@ -138,8 +138,11 @@ class AutomationDispatchesDB:
             )
         _mark_pipeline_dirty()
 
-    def requeue_by_status(self, status: str, detail: str) -> int:
-        """requeue() every row in `status`. Returns the number of rows moved."""
+    def requeue_open_by_status(self, status: str, detail: str) -> int:
+        """requeue() every row in `status` whose synced PR is still open.
+        Rows for merged/closed PRs stay as they are (nothing to review), so a
+        bulk requeue never churns the worker through a dead backlog.
+        Returns the number of rows moved."""
         if status not in VALID_STATUSES:
             raise ValueError(f"Invalid dispatch status: {status}")
         with self.db.connection() as conn:
@@ -147,7 +150,11 @@ class AutomationDispatchesDB:
             cursor.execute(
                 "UPDATE automation_dispatches "
                 "SET status = 'pending', attempts = 0, detail = ?, "
-                "updated_at = CURRENT_TIMESTAMP, enrolled_at = CURRENT_TIMESTAMP WHERE status = ?",
+                "updated_at = CURRENT_TIMESTAMP, enrolled_at = CURRENT_TIMESTAMP "
+                "WHERE status = ? AND EXISTS ("
+                "  SELECT 1 FROM synced_prs p "
+                "  WHERE p.repo = automation_dispatches.repo "
+                "    AND p.pr_number = automation_dispatches.pr_number AND p.state = 'OPEN')",
                 (detail, status),
             )
             moved = cursor.rowcount

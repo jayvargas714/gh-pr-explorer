@@ -166,8 +166,9 @@ def save_config(payload: Dict[str, Any], valid_reviewer_keys: Iterable[str]) -> 
     """Validate and persist the config. Returns the stored value.
 
     Turning `routeUnidentifiedToDefault` on (off -> on) also requeues every
-    `unidentified` dispatch row: those PRs were parked only because routing
-    needed a human, and the next worker cycle now has a rule for them.
+    `unidentified` dispatch row whose PR is still open: those PRs were parked
+    only because routing needed a human, and the next worker cycle now has a
+    rule for them. Rows for merged/closed PRs are left alone.
     """
     from backend.database import get_automation_dispatches_db, get_settings_db
 
@@ -177,7 +178,7 @@ def save_config(payload: Dict[str, Any], valid_reviewer_keys: Iterable[str]) -> 
     logger.info(f"Saved automation config: scope={config['scope']}, "
                 f"repos={len(config['repoAllowlist'])}, rules={len(config['rules'])}")
     if config["routeUnidentifiedToDefault"] and not was_enabled:
-        requeued = get_automation_dispatches_db().requeue_by_status(
+        requeued = get_automation_dispatches_db().requeue_open_by_status(
             "unidentified", detail="requeued: unidentified PRs now route to the default reviewer")
-        logger.info(f"Automation: requeued {requeued} unidentified dispatch rows for the default reviewer")
+        logger.info(f"Automation: requeued {requeued} open unidentified PRs for the default reviewer")
     return config

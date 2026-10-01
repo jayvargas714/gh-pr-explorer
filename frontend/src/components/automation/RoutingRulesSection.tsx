@@ -185,7 +185,7 @@ export function RoutingRulesSection({ draft, setDraft, saving }: RoutingRulesSec
           <small className="mx-automation__hint">
             PRs whose files span rules, or mix a rule with unmatched files (e.g. an ED plus
             source code), get the default reviewer instead of waiting for manual routing.
-            Turning this on re-queues every PR currently flagged unidentified.
+            Turning this on re-queues every open PR currently flagged unidentified.
           </small>
         </div>
       </div>

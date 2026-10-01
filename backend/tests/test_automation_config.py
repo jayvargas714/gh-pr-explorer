@@ -175,13 +175,23 @@ def dispatches_db(settings_db, monkeypatch):
 
 
 def _seed_rows(ddb):
-    for n in (1, 2, 3):
+    from backend.database.synced_prs import SyncedPRsDB
+    synced = SyncedPRsDB(ddb.db)
+    synced.register_repo("o/r")
+    for n, state in ((1, "OPEN"), (2, "OPEN"), (3, "OPEN"), (4, "MERGED")):
+        synced.upsert_pr("o/r", {
+            "number": n, "title": f"PR {n}", "state": state, "isDraft": False,
+            "author": {"login": "alice"}, "url": f"https://github.com/o/r/pull/{n}",
+            "additions": 1, "deletions": 1, "baseRefName": "main", "headRefName": f"f-{n}",
+            "createdAt": "2026-09-01T00:00:00Z", "updatedAt": "2026-09-01T00:00:00Z",
+            "closedAt": None, "mergedAt": None,
+        })
         ddb.record_candidate("o/r", n)
-    ddb.set_status(ddb.get_by_pr("o/r", 1)["id"], "unidentified",
-                   detail="files span multiple rules or mix rule and unmatched files")
-    ddb.set_status(ddb.get_by_pr("o/r", 2)["id"], "unidentified",
-                   detail="files span multiple rules or mix rule and unmatched files")
+    unidentified = "files span multiple rules or mix rule and unmatched files"
+    ddb.set_status(ddb.get_by_pr("o/r", 1)["id"], "unidentified", detail=unidentified)
+    ddb.set_status(ddb.get_by_pr("o/r", 2)["id"], "unidentified", detail=unidentified)
     ddb.set_status(ddb.get_by_pr("o/r", 3)["id"], "dispatched", reviewer_key="pb")
+    ddb.set_status(ddb.get_by_pr("o/r", 4)["id"], "unidentified", detail=unidentified)
 
 
 def test_enabling_route_unidentified_requeues_unidentified_rows(settings_db, dispatches_db):
@@ -197,6 +207,8 @@ def test_enabling_route_unidentified_requeues_unidentified_rows(settings_db, dis
         assert "default reviewer" in row["detail"]
     # Rows the worker already acted on are untouched.
     assert dispatches_db.get_by_pr("o/r", 3)["status"] == "dispatched"
+    # An unidentified row whose PR has since merged has nothing to review.
+    assert dispatches_db.get_by_pr("o/r", 4)["status"] == "unidentified"
 
 
 def test_enabling_from_legacy_config_without_key_requeues(settings_db, dispatches_db):
