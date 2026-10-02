@@ -185,6 +185,25 @@ def fetch_pr_behind_by(owner, repo, base_ref, head_ref):
         raise RuntimeError(f"Unexpected compare output for {owner}/{repo} {base_ref}...{head_ref}: {output!r}")
 
 
+def fetch_pr_staleness(owner, repo, base_ref, head_ref):
+    """(commits behind, committer date of the oldest base commit head_ref is missing).
+
+    One compare in the reversed direction (head...base): its ahead_by is the
+    behind count and its commits list the missing base commits oldest-first, so
+    per_page=1 yields the oldest. The date is None when head_ref is up to date.
+    Raises RuntimeError on failure.
+    """
+    output = run_gh_command([
+        "api", f"repos/{owner}/{repo}/compare/{head_ref}...{base_ref}?per_page=1",
+        "--jq", '{behind: .ahead_by, oldest: .commits[0].commit.committer.date}',
+    ])
+    try:
+        data = json.loads(output)
+        return int(data["behind"]), data.get("oldest")
+    except (TypeError, ValueError, KeyError):
+        raise RuntimeError(f"Unexpected compare output for {owner}/{repo} {head_ref}...{base_ref}: {output!r}")
+
+
 def fetch_branch_head_sha(owner, repo, ref):
     """Head commit SHA of a branch (REST). Raises RuntimeError on failure."""
     output = run_gh_command(["api", f"repos/{owner}/{repo}/commits/{ref}", "--jq", ".sha"])

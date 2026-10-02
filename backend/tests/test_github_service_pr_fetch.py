@@ -122,6 +122,34 @@ def test_fetch_pr_behind_by_propagates_errors():
             fetch_pr_behind_by("acme", "widgets", "main", "feature-x")
 
 
+def test_fetch_pr_staleness_reads_reversed_compare():
+    """head...base: ahead_by is the behind count, commits[0] the oldest missing base commit."""
+    import json
+    from backend.services.github_service import fetch_pr_staleness
+    with patch("backend.services.github_service.run_gh_command") as mock_run:
+        mock_run.return_value = json.dumps({"behind": 7, "oldest": "2026-10-01T08:00:00Z"})
+        behind, oldest = fetch_pr_staleness("acme", "widgets", "main", "feature-x")
+    assert behind == 7
+    assert oldest == "2026-10-01T08:00:00Z"
+    args = mock_run.call_args[0][0]
+    assert "repos/acme/widgets/compare/feature-x...main?per_page=1" in args
+
+
+def test_fetch_pr_staleness_up_to_date_has_no_oldest_commit():
+    import json
+    from backend.services.github_service import fetch_pr_staleness
+    with patch("backend.services.github_service.run_gh_command",
+               return_value=json.dumps({"behind": 0, "oldest": None})):
+        assert fetch_pr_staleness("acme", "widgets", "main", "feature-x") == (0, None)
+
+
+def test_fetch_pr_staleness_rejects_unexpected_output():
+    from backend.services.github_service import fetch_pr_staleness
+    with patch("backend.services.github_service.run_gh_command", return_value="garbage"):
+        with pytest.raises(RuntimeError):
+            fetch_pr_staleness("acme", "widgets", "main", "feature-x")
+
+
 def test_fetch_pr_queue_data_includes_review_requests(monkeypatch):
     import json
     from backend.services import github_service as gs

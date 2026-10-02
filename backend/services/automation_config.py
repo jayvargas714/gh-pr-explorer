@@ -5,7 +5,7 @@ is dispatched until the operator explicitly enables a scope and lists repos.
 """
 
 import logging
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "maxConcurrentAutoReviews": 2,
     "requireCiPass": True,             # CI must be completed and passing before dispatch
     "requireBaseBranch": "main",       # PR must target this branch to dispatch; "" = any base
-    "maxBehindBase": 10,               # max commits the PR branch may be behind its base head
+    "maxBehindBase": 10,               # max commits the PR branch may be behind its base head; None = off
+    "maxStaleHours": None,             # max whole hours the base may have been ahead of the branch; None = off
     "dispatchTimeoutHours": 0,         # skip rows still waiting after this many hours; 0 = wait forever
     "maxPipelineSize": 1000,           # max pending pipeline rows; new candidates are refused at the cap
     "ignorePatterns": [],              # globs stripped before classification
@@ -57,6 +58,19 @@ def _string_list(value: Any, field: str) -> List[str]:
         if entry:
             result.append(entry)
     return result
+
+
+def _optional_limit(value: Any, field: str) -> Optional[int]:
+    """A non-negative integer limit, or None when that gate is switched off."""
+    if value is None:
+        return None
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be an integer (or null to turn the gate off)")
+    if limit < 0:
+        raise ValueError(f"{field} must be zero or greater")
+    return limit
 
 
 def _validate_rule(rule: Any, valid_reviewer_keys: Iterable[str],
@@ -122,13 +136,8 @@ def validate_config(payload: Dict[str, Any], valid_reviewer_keys: Iterable[str])
         raise ValueError("requireBaseBranch must be a string (empty to allow any base)")
     config["requireBaseBranch"] = base_branch.strip()
 
-    try:
-        max_behind = int(payload.get("maxBehindBase", DEFAULT_CONFIG["maxBehindBase"]))
-    except (TypeError, ValueError):
-        raise ValueError("maxBehindBase must be an integer")
-    if max_behind < 0:
-        raise ValueError("maxBehindBase must be zero or greater")
-    config["maxBehindBase"] = max_behind
+    for field in ("maxBehindBase", "maxStaleHours"):
+        config[field] = _optional_limit(payload.get(field, DEFAULT_CONFIG[field]), field)
 
     try:
         timeout_hours = int(payload.get("dispatchTimeoutHours", DEFAULT_CONFIG["dispatchTimeoutHours"]))

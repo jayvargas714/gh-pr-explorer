@@ -415,7 +415,11 @@ export interface AutomationConfig {
   requireCiPass: boolean
   /** PR must target this branch to dispatch; empty string = any base. */
   requireBaseBranch: string
-  maxBehindBase: number
+  /** Max commits behind the base head; null = commit gate off. */
+  maxBehindBase: number | null
+  /** Max whole hours the base may have been ahead of the branch (age of the
+   * oldest base commit the branch is missing); null = time gate off. */
+  maxStaleHours: number | null
   maxPipelineSize: number
   ignorePatterns: string[]
   defaultRule: AutomationDefaultRule

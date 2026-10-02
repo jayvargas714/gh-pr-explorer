@@ -1,9 +1,19 @@
+import { AutomationConfig } from '../../api/types'
 import { useAutomationStore } from '../../stores/useAutomationStore'
 
 const SCOPE_LABELS: Record<string, string> = {
   off: 'Off',
   authors: 'By author',
   all: 'All new PRs',
+}
+
+/** The behind-base gates that are on, e.g. "≤ 10 behind base · ≤ 24h stale". */
+function behindGateText(config: Pick<AutomationConfig, 'maxBehindBase' | 'maxStaleHours'>): string {
+  const gates = [
+    config.maxBehindBase !== null ? `≤ ${config.maxBehindBase} behind base` : null,
+    config.maxStaleHours !== null ? `≤ ${config.maxStaleHours}h stale` : null,
+  ].filter(Boolean)
+  return gates.length ? gates.join(' · ') : 'no behind-base limit'
 }
 
 /** Read-only strip showing the SAVED (active) automation configuration —
@@ -29,7 +39,7 @@ export function ActiveConfigSummary() {
   const conditions = [
     config.requireCiPass ? 'CI must pass' : 'CI not required',
     config.requireBaseBranch ? `base ${config.requireBaseBranch} only` : 'any base branch',
-    `≤ ${config.maxBehindBase} behind base`,
+    behindGateText(config),
     'no drafts',
     `pipeline cap ${config.maxPipelineSize}`,
   ].join(' · ')

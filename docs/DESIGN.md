@@ -2570,7 +2570,8 @@ maps over `useAutomationStore.reviewers` instead of local constants.
 | `maxConcurrentAutoReviews` | `2` | budget for auto-started spawns, counted against **all** running reviews (manual included). Enforced inside `begin_review()` for every auto path — dispatch worker, follow-up watcher, reconciliation requeue — so no caller can pile past it; the stale-review watcher's cancel-and-replace bypasses it (1-for-1, never raises concurrency). Over-budget requests return 429 with `over_budget: true` and are retried by their caller's next cycle |
 | `requireCiPass` | `true` | CI must be completed and passing before dispatch |
 | `requireBaseBranch` | `"main"` | the PR must target this branch for merge to dispatch; a PR on another base waits (stacked PRs dispatch after retargeting). Empty string = any base |
-| `maxBehindBase` | `10` | max commits the PR branch may be behind its base head |
+| `maxBehindBase` | `10` | max commits the PR branch may be behind its base head; `null` = commit gate off |
+| `maxStaleHours` | `null` | max whole hours the base branch may have been ahead of the PR branch (age of the oldest base commit the branch is missing); `null` = time gate off. Independent of `maxBehindBase`: either, both (both must hold), or neither |
 | `dispatchTimeoutHours` | `0` | rows still `pending` (waiting on gates) this many hours after their `enrolled_at` are `skipped` with "dispatch window expired"; re-enrolling restarts the clock; `0` = wait forever |
 | `maxPipelineSize` | `1000` | max pending pipeline rows; new candidates are refused at the cap |
 | `ignorePatterns` | `[]` | globs stripped before classification (index files) |
@@ -2683,9 +2684,19 @@ unknown base also waits rather than dispatching blind; empty string disables
 the gate), CI is completed and passing
 (`get_ci_status` == pending/failure blocks; a PR with **no checks at all**
 passes, so CI-less repos are never held up; gate disabled via
-`requireCiPass: false`), and the branch is at most `maxBehindBase` commits behind
-its base head (via `fetch_pr_behind_by`, the `gh api …/compare/{base}...{head}`
-`behind_by` count; a compare failure blocks without consuming attempts). A
+`requireCiPass: false`), the branch is at most `maxBehindBase` commits behind
+its base head, and the base has been ahead of the branch for at most
+`maxStaleHours` whole hours. Both behind gates read one REST call,
+`fetch_pr_staleness` — `gh api …/compare/{head}...{base}?per_page=1`, the
+reversed compare, whose `ahead_by` is the behind count and whose `commits[0]`
+is the oldest base commit the branch is missing (commits are oldest-first). The
+staleness clock is now − that commit's committer date (the time it landed on a
+squash/rebase-merge base; a merge-commit base can surface an older
+feature-branch date and overstate it); an up-to-date branch is 0h. Either gate
+is off when `null`, and with both off the compare is skipped entirely. Wait
+reasons are `N commits behind base (max M)` / `main ahead for Nh (max Mh)`
+(commit gate checked first); a compare failure blocks without consuming
+attempts. A
 blocked row stays `pending` with `detail = "waiting: <reason>"` **for as long as
 the PR stays open** — unless `dispatchTimeoutHours` is set, in which case a row
 whose `enrolled_at` is older than that is `skipped` with "dispatch window

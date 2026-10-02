@@ -2,6 +2,7 @@
 
 import json
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -92,11 +93,13 @@ def _patch_config(monkeypatch, **overrides):
 
 
 @contextmanager
-def _gates(state="OPEN", is_draft=False, rollup=CI_SUCCESS, behind=0, batch=..., head_sha="newsha"):
+def _gates(state="OPEN", is_draft=False, rollup=CI_SUCCESS, behind=0, batch=..., head_sha="newsha",
+           stale_hours=None):
     """Patch the live PR condition sources (batched state/draft/CI + divergence).
 
     The worker gates from one fetch_open_prs_queue_data call per repo: a PR
     absent from the map is not open, and a None map means the fetch failed.
+    `stale_hours` backdates the oldest missing base commit; None = up to date.
     """
     if batch is ...:
         if state == "OPEN":
@@ -104,12 +107,15 @@ def _gates(state="OPEN", is_draft=False, rollup=CI_SUCCESS, behind=0, batch=...,
                          "headRefOid": head_sha}}
         else:
             batch = {}  # non-open PRs don't appear in an open-PR listing
-    behind_side = behind if not isinstance(behind, Exception) else None
+    oldest = None
+    if stale_hours is not None:
+        oldest = (datetime.now(timezone.utc) - timedelta(hours=stale_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    staleness = None if isinstance(behind, Exception) else (behind, oldest)
     with patch("backend.services.github_service.fetch_open_prs_queue_data",
                return_value=batch) as mock_batch, \
-         patch("backend.services.github_service.fetch_pr_behind_by",
+         patch("backend.services.github_service.fetch_pr_staleness",
                side_effect=(behind if isinstance(behind, Exception) else None),
-               return_value=behind_side) as mock_behind:
+               return_value=staleness) as mock_behind:
         mock_behind.batch_mock = mock_batch
         yield mock_behind
 
@@ -364,6 +370,91 @@ def test_behind_at_limit_proceeds(env, monkeypatch):
          patch("backend.services.review_service.begin_review",
                return_value=({"message": "started"}, 201)) as mock_begin:
         process_pending_dispatches()
+    assert mock_begin.call_count == 1
+
+
+def test_behind_base_gate_off_ignores_commit_count(env, monkeypatch):
+    _patch_config(monkeypatch, maxBehindBase=None)
+    env["dispatches"].record_candidate(REPO, 7)
+    with _gates(behind=500), \
+         patch("backend.services.github_service.fetch_pr_files",
+               return_value=["briefs/PB-008-a.md"]), \
+         patch("backend.services.review_service.begin_review",
+               return_value=({"message": "started"}, 201)) as mock_begin:
+        process_pending_dispatches()
+    assert mock_begin.call_count == 1
+
+
+def test_stale_branch_waits(env, monkeypatch):
+    _, mock_begin = _run_gated(env, monkeypatch, {"behind": 2, "stale_hours": 30.5},
+                               cfg_overrides={"maxStaleHours": 24})
+    assert mock_begin.call_count == 0
+    row = env["dispatches"].get_by_pr(REPO, 7)
+    assert row["status"] == "pending"
+    assert row["detail"] == "waiting: main ahead for 30h (max 24h)"
+
+
+def test_stale_within_limit_proceeds(env, monkeypatch):
+    """Whole hours only: 24h59m against a 24h limit still dispatches."""
+    _patch_config(monkeypatch, maxStaleHours=24)
+    env["dispatches"].record_candidate(REPO, 7)
+    with _gates(behind=2, stale_hours=24.98), \
+         patch("backend.services.github_service.fetch_pr_files",
+               return_value=["briefs/PB-008-a.md"]), \
+         patch("backend.services.review_service.begin_review",
+               return_value=({"message": "started"}, 201)) as mock_begin:
+        process_pending_dispatches()
+    assert mock_begin.call_count == 1
+
+
+def test_up_to_date_branch_passes_stale_gate(env, monkeypatch):
+    _patch_config(monkeypatch, maxStaleHours=0)
+    env["dispatches"].record_candidate(REPO, 7)
+    with _gates(behind=0, stale_hours=None), \
+         patch("backend.services.github_service.fetch_pr_files",
+               return_value=["briefs/PB-008-a.md"]), \
+         patch("backend.services.review_service.begin_review",
+               return_value=({"message": "started"}, 201)) as mock_begin:
+        process_pending_dispatches()
+    assert mock_begin.call_count == 1
+
+
+def test_time_only_gate_ignores_commit_count(env, monkeypatch):
+    """Rapid main: 40 commits behind but only 3h stale dispatches when the count gate is off."""
+    _patch_config(monkeypatch, maxBehindBase=None, maxStaleHours=24)
+    env["dispatches"].record_candidate(REPO, 7)
+    with _gates(behind=40, stale_hours=3), \
+         patch("backend.services.github_service.fetch_pr_files",
+               return_value=["briefs/PB-008-a.md"]), \
+         patch("backend.services.review_service.begin_review",
+               return_value=({"message": "started"}, 201)) as mock_begin:
+        process_pending_dispatches()
+    assert mock_begin.call_count == 1
+
+
+def test_both_gates_on_either_one_blocks(env, monkeypatch):
+    both = {"maxBehindBase": 10, "maxStaleHours": 24}
+    _, mock_begin = _run_gated(env, monkeypatch, {"behind": 11, "stale_hours": 1},
+                               cfg_overrides=both)
+    assert mock_begin.call_count == 0
+    assert "commits behind base" in env["dispatches"].get_by_pr(REPO, 7)["detail"]
+
+    _, mock_begin = _run_gated(env, monkeypatch, {"behind": 3, "stale_hours": 48},
+                               cfg_overrides=both)
+    assert mock_begin.call_count == 0
+    assert "main ahead for 48h" in env["dispatches"].get_by_pr(REPO, 7)["detail"]
+
+
+def test_both_behind_gates_off_skips_the_compare_call(env, monkeypatch):
+    _patch_config(monkeypatch, maxBehindBase=None, maxStaleHours=None)
+    env["dispatches"].record_candidate(REPO, 7)
+    with _gates() as mock_staleness, \
+         patch("backend.services.github_service.fetch_pr_files",
+               return_value=["briefs/PB-008-a.md"]), \
+         patch("backend.services.review_service.begin_review",
+               return_value=({"message": "started"}, 201)) as mock_begin:
+        process_pending_dispatches()
+    assert mock_staleness.call_count == 0
     assert mock_begin.call_count == 1
 
 

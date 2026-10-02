@@ -18,6 +18,7 @@ export const DEFAULT_AUTOMATION_CONFIG: AutomationConfig = {
   requireCiPass: true,
   requireBaseBranch: 'main',
   maxBehindBase: 10,
+  maxStaleHours: null,
   maxPipelineSize: 1000,
   ignorePatterns: [],
   defaultRule: { reviewerKey: 'default', autoVerdict: false, autoVerdictMode: 'verdict' },

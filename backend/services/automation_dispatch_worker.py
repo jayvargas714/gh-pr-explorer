@@ -75,13 +75,15 @@ def _dispatch_blocker(config, queue_data, pr, owner, repo, pr_number):
 
     Conditions: the PR targets the required base branch (when configured),
     CI completed and passing (when required; a PR with no checks at all
-    passes), and the branch at most maxBehindBase commits behind its base
-    head. State/draft gating happens earlier in _process_one.
+    passes), the branch at most maxBehindBase commits behind its base head,
+    and the base ahead of the branch for at most maxStaleHours whole hours
+    (each behind gate is off when None). State/draft gating happens earlier
+    in _process_one.
 
     The base gate waits rather than skips: a stacked PR is typically retargeted
     to main once its parent merges, and the pending row picks it up then.
     """
-    from backend.services.github_service import fetch_pr_behind_by
+    from backend.services.github_service import fetch_pr_staleness
     from backend.services.pr_service import get_ci_status
 
     required_base = (config.get("requireBaseBranch") or "").strip()
@@ -97,17 +99,35 @@ def _dispatch_blocker(config, queue_data, pr, owner, repo, pr_number):
         ci = get_ci_status(queue_data.get("statusCheckRollup"))
         if ci in ("pending", "failure"):
             return f"CI {ci}"
+    max_behind = config.get("maxBehindBase", 10)
+    max_stale = config.get("maxStaleHours")
     base_ref, head_ref = pr.get("baseRefName"), pr.get("headRefName")
-    if base_ref and head_ref:
+    if base_ref and head_ref and (max_behind is not None or max_stale is not None):
         try:
-            behind = fetch_pr_behind_by(owner, repo, base_ref, head_ref)
+            behind, oldest_missing = fetch_pr_staleness(owner, repo, base_ref, head_ref)
         except Exception as e:
             logger.warning(f"Automation: divergence check failed for {owner}/{repo}#{pr_number}: {e}")
             return "divergence check failed"
-        max_behind = config.get("maxBehindBase", 10)
-        if behind > max_behind:
+        if max_behind is not None and behind > max_behind:
             return f"{behind} commits behind base (max {max_behind})"
+        if max_stale is not None and oldest_missing:
+            stale_hours = _hours_since(oldest_missing)
+            if stale_hours is None:
+                return "divergence check failed"
+            if stale_hours > max_stale:
+                return f"{base_ref} ahead for {stale_hours}h (max {max_stale}h)"
     return None
+
+
+def _hours_since(iso_timestamp):
+    """Whole hours elapsed since an ISO-8601 timestamp, or None if unparseable."""
+    try:
+        then = datetime.fromisoformat(str(iso_timestamp).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=timezone.utc)
+    return int((datetime.now(timezone.utc) - then).total_seconds() // 3600)
 
 
 def _repo_open_prs(cache, repo_full):
