@@ -104,6 +104,13 @@
   line-height: 1;
 }
 
+/* Commits-behind + time-behind pair (BehindBadge) */
+.mx-behind-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mx-space-1);
+}
+
 .mx-badge--sm {
   padding: 2px 8px;
   font-size: var(--mx-font-size-xs);

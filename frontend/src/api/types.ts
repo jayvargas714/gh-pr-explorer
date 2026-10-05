@@ -143,6 +143,8 @@ export interface DivergenceInfo {
   status: string
   ahead_by: number
   behind_by: number
+  /** Committer date of the oldest base commit the branch lacks; null if up to date. */
+  behind_since: string | null
 }
 
 export interface DivergenceMap {
@@ -363,6 +365,9 @@ export interface MergeQueueItem {
   // Commits the branch is behind its base, cached by the PR sync worker.
   // null until computed; absent on optimistic placeholder cards.
   behindBy?: number | null
+  // Committer date of the oldest base commit the branch lacks (same cache);
+  // null when up to date or not computed.
+  behindSince?: string | null
   currentReviewers: Reviewer[]
   statusCheckRollup?: StatusCheck[] | null
   // Swimlane-only: whether the card is pinned within its lane. Present on cards
@@ -506,6 +511,7 @@ export interface PipelineRow {
   prSyncedAt: string | null       // synced_prs.fetched_at
   headSha: string | null          // synced headRefOid; null until the PR re-syncs
   behindBy: number | null         // commits behind base (sync-worker cache); null until computed
+  behindSince: string | null      // oldest base commit the branch lacks (same cache); null if up to date
   hasNewCommits: boolean          // headSha known and != the latest review's SHA
   stage: PipelineStage
   dispatch: PipelineDispatch

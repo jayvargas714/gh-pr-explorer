@@ -63,7 +63,13 @@ export function PRBadges({ pr, divergence, repoFull }: PRBadgesProps) {
 
   const getDivergenceBadge = () => {
     if (!divergence || pr.state !== 'OPEN') return null
-    return <BehindBadge behindBy={divergence.behind_by} key="divergence" />
+    return (
+      <BehindBadge
+        behindBy={divergence.behind_by}
+        behindSince={divergence.behind_since}
+        key="divergence"
+      />
+    )
   }
 
   const getStateBadge = () => {

@@ -239,7 +239,7 @@ export function PipelineRow({ row, selected, expanded }: PipelineRowProps) {
 
         <td className="mx-pipe-table__col-behind">
           {row.prState === 'OPEN' && row.behindBy !== null ? (
-            <BehindBadge behindBy={row.behindBy} size="sm" />
+            <BehindBadge behindBy={row.behindBy} behindSince={row.behindSince} size="sm" />
           ) : (
             <span className="mx-pipe-muted">—</span>
           )}

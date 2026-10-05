@@ -218,7 +218,7 @@ def test_enriched_card_carries_cached_behind_by(tmp_path, monkeypatch):
     synced = SyncedPRsDB(db)
     synced.upsert_pr("acme/widgets", {"number": 5, "state": "OPEN", "isDraft": False,
                                       "author": {"login": "a"}})
-    synced.set_behind("acme/widgets", 5, 12, "b", "h")
+    synced.set_behind("acme/widgets", 5, 12, "b", "h", behind_since="2026-10-01T08:00:00Z")
     monkeypatch.setattr(qe, "get_synced_prs_db", lambda: synced)
     monkeypatch.setattr(qe, "get_auto_verdict_arming_db", lambda: AutoVerdictArmingDB(db))
     monkeypatch.setattr(qe, "get_automation_dispatches_db", lambda: AutomationDispatchesDB(db))
@@ -233,5 +233,7 @@ def test_enriched_card_carries_cached_behind_by(tmp_path, monkeypatch):
                 "added_at": "2026-09-01", "pr_state": "OPEN"}
 
     args = (MergeQueueDB(db), ReviewsDB(db), AuditsDB(db), AutoVerdictsDB(db))
-    assert qe._enrich_one(item(5), *args)["behindBy"] == 12
-    assert qe._enrich_one(item(6), *args)["behindBy"] is None
+    card = qe._enrich_one(item(5), *args)
+    assert (card["behindBy"], card["behindSince"]) == (12, "2026-10-01T08:00:00Z")
+    card = qe._enrich_one(item(6), *args)
+    assert (card["behindBy"], card["behindSince"]) == (None, None)

@@ -10,6 +10,7 @@ from backend.services.pr_sync_worker import sync_behind_counts, sync_cycle
 
 WORKER = "backend.services.pr_sync_worker"
 REPO = "acme/widgets"
+SINCE = "2026-10-01T08:00:00Z"
 
 
 @pytest.fixture
@@ -42,10 +43,13 @@ def _run(store, base_shas, behind, cfg=None):
         value = behind[head_sha]
         if isinstance(value, Exception):
             raise value
-        return value
+        # A bare int is a count; a tuple is (count, oldest missing base commit date).
+        if isinstance(value, tuple):
+            return value
+        return value, (SINCE if value else None)
 
     with patch(f"{WORKER}.fetch_branch_head_sha", side_effect=fake_base), \
-         patch(f"{WORKER}.fetch_pr_behind_by", side_effect=fake_compare):
+         patch(f"{WORKER}.fetch_pr_staleness", side_effect=fake_compare):
         computed = sync_behind_counts(store, REPO, cfg or {"behind_per_cycle": 40})
     return computed, compares
 
@@ -57,7 +61,7 @@ def test_computes_for_open_prs_only(store):
     assert computed == 1
     assert compares == [("B1", "h1")]
     assert store.get_behind_state(REPO)[1] == {
-        "behind_by": 3, "behind_base_sha": "B1", "behind_head_sha": "h1",
+        "behind_by": 3, "behind_since": SINCE, "behind_base_sha": "B1", "behind_head_sha": "h1",
     }
 
 
@@ -67,7 +71,30 @@ def test_skips_prs_whose_sha_pair_is_unchanged(store):
     computed, compares = _run(store, {"main": "B1"}, {"h1": 99})
     assert computed == 0
     assert compares == []
-    assert store.get_behind_by(REPO, 1) == 3
+    assert store.get_behind(REPO, 1)[0] == 3
+
+
+def test_stores_behind_since_and_clears_it_when_up_to_date(store):
+    store.upsert_pr(REPO, _pr(1))
+    _run(store, {"main": "B1"}, {"h1": (3, SINCE)})
+    assert store.get_behind(REPO, 1) == (3, SINCE)
+    store.upsert_pr(REPO, _pr(1, head="new"))
+    _run(store, {"main": "B1"}, {"new1": (0, None)})
+    assert store.get_behind(REPO, 1) == (0, None)
+
+
+def test_recomputes_once_when_behind_since_is_missing(store):
+    """Rows cached before behind_since existed (behind > 0, no date) refresh
+    even though their SHA pair is unchanged; up-to-date rows don't."""
+    store.upsert_pr(REPO, _pr(1))
+    store.upsert_pr(REPO, _pr(2))
+    store.set_behind(REPO, 1, 3, "B1", "h1")
+    store.set_behind(REPO, 2, 0, "B1", "h2")
+    computed, compares = _run(store, {"main": "B1"}, {"h1": (3, SINCE)})
+    assert compares == [("B1", "h1")]
+    assert store.get_behind(REPO, 1) == (3, SINCE)
+    computed, compares = _run(store, {"main": "B1"}, {"h1": (3, SINCE)})
+    assert compares == []
 
 
 def test_recomputes_when_base_moves(store):
@@ -75,7 +102,7 @@ def test_recomputes_when_base_moves(store):
     _run(store, {"main": "B1"}, {"h1": 3})
     computed, compares = _run(store, {"main": "B2"}, {"h1": 4})
     assert compares == [("B2", "h1")]
-    assert store.get_behind_by(REPO, 1) == 4
+    assert store.get_behind(REPO, 1)[0] == 4
 
 
 def test_recomputes_when_head_moves(store):
@@ -84,7 +111,7 @@ def test_recomputes_when_head_moves(store):
     store.upsert_pr(REPO, _pr(1, head="new"))
     computed, compares = _run(store, {"main": "B1"}, {"new1": 0})
     assert compares == [("B1", "new1")]
-    assert store.get_behind_by(REPO, 1) == 0
+    assert store.get_behind(REPO, 1)[0] == 0
 
 
 def test_honours_per_cycle_cap_and_finishes_later(store):
@@ -96,7 +123,7 @@ def test_honours_per_cycle_cap_and_finishes_later(store):
     assert [h for _, h in compares] == ["h1", "h2"]
     computed, compares = _run(store, {"main": "B"}, behind, {"behind_per_cycle": 2})
     assert [h for _, h in compares] == ["h3"]
-    assert store.get_behind_by(REPO, 3) == 3
+    assert store.get_behind(REPO, 3)[0] == 3
 
 
 def test_base_lookup_failure_skips_only_that_base(store):
@@ -106,8 +133,8 @@ def test_base_lookup_failure_skips_only_that_base(store):
         store, {"main": RuntimeError("boom"), "release": "R1"}, {"h2": 5},
     )
     assert compares == [("R1", "h2")]
-    assert store.get_behind_by(REPO, 1) is None
-    assert store.get_behind_by(REPO, 2) == 5
+    assert store.get_behind(REPO, 1)[0] is None
+    assert store.get_behind(REPO, 2)[0] == 5
 
 
 def test_one_compare_failure_does_not_block_others(store):
@@ -115,8 +142,8 @@ def test_one_compare_failure_does_not_block_others(store):
     store.upsert_pr(REPO, _pr(2))
     computed, _ = _run(store, {"main": "B"}, {"h1": RuntimeError("404"), "h2": 7})
     assert computed == 1
-    assert store.get_behind_by(REPO, 1) is None
-    assert store.get_behind_by(REPO, 2) == 7
+    assert store.get_behind(REPO, 1)[0] is None
+    assert store.get_behind(REPO, 2)[0] == 7
 
 
 def test_rate_limit_stops_the_stage(store):
@@ -128,7 +155,7 @@ def test_rate_limit_stops_the_stage(store):
     )
     assert computed == 1
     assert [h for _, h in compares] == ["h1", "h2"]  # h3 never attempted
-    assert store.get_behind_by(REPO, 3) is None
+    assert store.get_behind(REPO, 3)[0] is None
 
 
 def test_prs_missing_shas_or_base_make_no_gh_calls(store):
@@ -139,7 +166,7 @@ def test_prs_missing_shas_or_base_make_no_gh_calls(store):
     del pr2["baseRefName"]
     store.upsert_pr(REPO, pr2)
     with patch(f"{WORKER}.fetch_branch_head_sha") as base, \
-         patch(f"{WORKER}.fetch_pr_behind_by") as compare:
+         patch(f"{WORKER}.fetch_pr_staleness") as compare:
         assert sync_behind_counts(store, REPO, {"behind_per_cycle": 40}) == 0
     base.assert_not_called()
     compare.assert_not_called()

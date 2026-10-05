@@ -106,6 +106,8 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db, auto_verd
         pr_state = item.get("pr_state")
 
     rs = review_summary or {}
+    # Cached by the PR sync worker; None until it has computed one.
+    behind_by, behind_since = get_synced_prs_db().get_behind(item["repo"], item["pr_number"])
     return {
         "id": item["id"],
         "number": item["pr_number"],
@@ -145,8 +147,8 @@ def _enrich_one(item: Dict[str, Any], queue_db, reviews_db, audits_db, auto_verd
         "ciStatus": ci_status,
         "statusCheckRollup": status_check_rollup,
         "isDraft": is_draft,
-        # Cached by the PR sync worker; None until it has computed one.
-        "behindBy": get_synced_prs_db().get_behind_by(item["repo"], item["pr_number"]),
+        "behindBy": behind_by,
+        "behindSince": behind_since,
         "currentReviewers": current_reviewers,
         "revLog": rev_log,
     }

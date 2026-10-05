@@ -23,6 +23,25 @@ export function canMerge(pr: MergeEligibilitySubject): boolean {
   return pr.prState === 'OPEN' && !pr.isDraft && pr.reviewDecision === 'APPROVED'
 }
 
+/** Whole hours since the oldest base commit the branch lacks, or null if unparseable. */
+export function behindHours(behindSince: string, now: number = Date.now()): number | null {
+  const then = Date.parse(behindSince)
+  if (Number.isNaN(then)) return null
+  return Math.max(0, Math.floor((now - then) / 3_600_000))
+}
+
+/** Time-behind label: "<1h", "Nh" below 48h, then "Nd". */
+export function formatBehindAge(hours: number): string {
+  if (hours < 1) return '<1h'
+  if (hours < 48) return `${hours}h`
+  return `${Math.floor(hours / 24)}d`
+}
+
+/** Time-behind badge colour: amber up to a day, red beyond. */
+export function behindAgeVariant(hours: number): 'warning' | 'error' {
+  return hours <= 24 ? 'warning' : 'error'
+}
+
 /** Badge colour for a commits-behind count; thresholds match the PR list. */
 export function behindVariant(behindBy: number): 'success' | 'warning' | 'error' {
   if (behindBy <= 0) return 'success'

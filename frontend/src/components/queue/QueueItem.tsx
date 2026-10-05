@@ -223,7 +223,7 @@ export function QueueItem({ item, index, onRefresh, searchMatch, swimlaneContext
                 <ReviewersBadge reviewers={item.currentReviewers} />
               )}
               {getCIStatusBadge()}
-              {item.prState === 'OPEN' && <BehindBadge behindBy={item.behindBy} />}
+              {item.prState === 'OPEN' && <BehindBadge behindBy={item.behindBy} behindSince={item.behindSince} />}
               {getAutomationBadge()}
               <RevLogBadge
                 entries={item.revLog ?? []}

@@ -330,9 +330,18 @@ def set_pr_auto_verdict_criteria(owner, repo, pr_number):
                               f"Error updating auto verdict criteria for {repo_full}#{pr_number}: {e}")
 
 
+# A head...base compare status seen from the PR's (base...head) side.
+_FLIPPED_STATUS = {"ahead": "behind", "behind": "ahead"}
+
+
 @pr_bp.route("/api/repos/<owner>/<repo>/prs/divergence", methods=["POST"])
 def get_pr_divergence(owner, repo):
-    """Batch fetch branch divergence (ahead/behind) for open PRs."""
+    """Batch fetch branch divergence (ahead/behind + behind_since) for open PRs.
+
+    One reversed compare (head...base, per_page=1) per PR: its ahead/behind and
+    status are flipped back to the PR's point of view, and its oldest commit is
+    the oldest base commit the branch lacks (behind_since; None if up to date).
+    """
     try:
         data = request.get_json()
         if not data or "prs" not in data:
@@ -346,12 +355,18 @@ def get_pr_divergence(owner, repo):
             head = pr_info["head"]
             try:
                 output = run_gh_command([
-                    "api", f"repos/{owner}/{repo}/compare/{base}...{head}",
-                    "--jq", '{"status": .status, "ahead_by": .ahead_by, "behind_by": .behind_by}'
+                    "api", f"repos/{owner}/{repo}/compare/{head}...{base}?per_page=1",
+                    "--jq", '{"status": .status, "ahead_by": .ahead_by, "behind_by": .behind_by, '
+                            '"oldest": .commits[0].commit.committer.date}'
                 ])
                 result = parse_json_output(output)
                 if result:
-                    return (number, result)
+                    return (number, {
+                        "status": _FLIPPED_STATUS.get(result.get("status"), result.get("status")),
+                        "ahead_by": result.get("behind_by"),
+                        "behind_by": result.get("ahead_by"),
+                        "behind_since": result.get("oldest"),
+                    })
             except RuntimeError:
                 pass
             return (number, None)

@@ -31,7 +31,7 @@ REPO = "acme/widgets"
 ROW_KEYS = [
     "key", "repo", "prNumber", "title", "author", "url", "prState", "isDraft",
     "baseRefName", "additions", "deletions", "prUpdatedAt", "prSyncedAt", "headSha",
-    "behindBy", "stage", "dispatch", "automation", "autoVerdict", "reviewDecision",
+    "behindBy", "behindSince", "stage", "dispatch", "automation", "autoVerdict", "reviewDecision",
     "currentReviewers", "ciStatus", "statusCheckRollup", "running", "review",
     "hasNewCommits", "revLog", "rounds", "onBoard", "queueItemId", "notesCount",
     "reviewRequest", "reviewRequestedFromMe",
@@ -289,7 +289,7 @@ def test_has_new_commits_needs_both_shas(env):
 def test_behind_by_comes_from_the_synced_cache(env):
     env["synced"].upsert_pr(REPO, _pr(1))
     env["synced"].upsert_pr(REPO, _pr(2))
-    env["synced"].set_behind(REPO, 1, 6, "base", "head111")
+    env["synced"].set_behind(REPO, 1, 6, "base", "head111", behind_since="2026-10-01T08:00:00Z")
     _dispatch(env, 1)
     _dispatch(env, 2)
     _dispatch(env, 3)  # no synced row at all
@@ -297,7 +297,9 @@ def test_behind_by_comes_from_the_synced_cache(env):
     by_pr = {r["prNumber"]: r for r in build_rows()}
 
     assert by_pr[1]["behindBy"] == 6
+    assert by_pr[1]["behindSince"] == "2026-10-01T08:00:00Z"
     assert by_pr[2]["behindBy"] is None
+    assert by_pr[2]["behindSince"] is None
     assert by_pr[3]["behindBy"] is None
 
 

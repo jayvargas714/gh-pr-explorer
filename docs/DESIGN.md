@@ -565,9 +565,9 @@ The pre-existing CRUD methods (`register_repo()`, `get_repo()`, `list_repos()`, 
 | `set_history_error()` | Records the last history-slice failure |
 | `get_states_by_numbers()` | Batch lookup of PR state by number, chunked at 500 to stay under SQLite's bound-variable limit |
 | `get_pr_rollup_rows()` | One row per synced PR shaped for `analytics_rollup.build_rows()` (author, dates, base ref, additions/deletions, bot flag, parsed reviews); uses one multi-path `json_extract()` per query on SQLite ≥ 3.9.0, falling back to four single-path extracts otherwise |
-| `get_behind_state()` | `{pr_number: {behind_by, behind_base_sha, behind_head_sha}}` for a repo's OPEN rows (the behind-count stage's staleness check) |
-| `get_behind_by()` | Cached commits-behind count for one PR, or `None` (read by queue enrichment) |
-| `set_behind()` | Stores a computed count with the base/head SHA pair it was computed against |
+| `get_behind_state()` | `{pr_number: {behind_by, behind_since, behind_base_sha, behind_head_sha}}` for a repo's OPEN rows (the behind-count stage's staleness check) |
+| `get_behind()` | Cached `(behind_by, behind_since)` for one PR, or `(None, None)` (read by queue enrichment) |
+| `set_behind()` | Stores a computed count + `behind_since` with the base/head SHA pair it was computed against |
 | `set_draft()` | Writes a draft toggle through to `is_draft` and the JSON `isDraft` (called by `POST .../draft`) |
 | `set_state()` | Writes a state change through to `state` and the JSON `state` (called by `POST .../merge` with `MERGED`) |
 
@@ -1045,6 +1045,8 @@ Divergence data is automatically fetched after the PR list loads. The backend us
 
 The same thresholds render through the shared `BehindBadge` component (`components/common/BehindBadge.tsx`, colour from `behindVariant()` in `utils/prActions.ts`) on the PR list, swimlane/merge-queue cards and the pipeline's Behind column. Board, queue and pipeline read the sync worker's cached `behindBy` instead of calling compare live (see [PR List Sync](#pr-list-sync)); the badge is hidden for non-open PRs and until a count has been computed.
 
+**Time-behind badge**: when the branch is behind, `BehindBadge` also renders a `⏱` badge for how long the base has had commits the branch lacks — now minus `behindSince` (PR list: `divergence.behind_since`), the committer date of the oldest missing base commit. It is the same clock as the `maxStaleHours` dispatch gate but is shown regardless of the gate mode. The age is computed in the browser from the stored timestamp (no refetch; it does not tick on a timer). Pure helpers in `utils/prActions.ts`: `behindHours()` (whole hours, clamped at 0), `formatBehindAge()` (`<1h`, `Nh` below 48h, then `Nd`), `behindAgeVariant()` (amber ≤ 24h, red beyond). The tooltip gives the exact local time. Up-to-date PRs (and rows without a `behindSince` yet) show only the commits badge.
+
 #### Draft Toggle and Merge Actions
 
 PR list cards, swimlane/merge-queue cards (`QueueItem`) and pipeline rows share two action controls:
@@ -1292,6 +1294,7 @@ The Merge Queue feature allows users to organize PRs they intend to review or me
 | `reviewId` | integer | Database ID of latest review |
 | `inlineCommentsPosted` | boolean | True if inline comments have been posted |
 | `behindBy` | integer \| null | Commits behind base from the sync worker's cache (`synced_prs.behind_by`, a DB read — no `gh` call); null until computed |
+| `behindSince` | string \| null | Committer date of the oldest base commit the branch lacks (`synced_prs.behind_since`, same cache); null when up to date or not computed |
 
 #### UI Components
 
@@ -2383,10 +2386,11 @@ from SQLite.
   `currentReviewers` are never stored; they are computed at serve time by the same
   `pr_service` helpers as the live path. `get_pr_rollup_rows()` reads this table
   for the analytics rollup (see [Analytics Daily](#analytics-daily)). Three
-  nullable **commits-behind cache** columns — `behind_by`, `behind_base_sha`,
-  `behind_head_sha` — are written only by the behind-count stage (below);
-  `upsert_pr` never touches them, and `get_prs()` / `get_prs_by_numbers()`
-  expose `behind_by` as `behindBy` on each PR dict.
+  nullable **commits-behind cache** columns — `behind_by`, `behind_since`
+  (committer date of the oldest base commit the branch lacks; NULL when up to
+  date), `behind_base_sha`, `behind_head_sha` — are written only by the
+  behind-count stage (below); `upsert_pr` never touches them, and `get_prs()` /
+  `get_prs_by_numbers()` expose them as `behindBy` / `behindSince` on each PR dict.
 - `synced_commit_branches` / `synced_commits` (`backend/database/synced_commits.py`)
   — per-branch commit sync state and rows; see **Commit sync** below.
 
@@ -2438,13 +2442,17 @@ instead of the first three stages):
   for open PRs that carry both `headRefOid` and `baseRefName`. One REST call
   per distinct base ref resolves its head SHA (`repos/{o}/{r}/commits/{ref}`);
   a PR is stale when its stored `(behind_base_sha, behind_head_sha)` differs
-  from `(base head, headRefOid)`. Up to `behind_per_cycle` (default 40) stale
-  PRs are computed per cycle, in PR-number order, with a SHA-to-SHA
-  `compare/{base_sha}...{head_sha}` (works for fork PRs); leftovers finish on
+  from `(base head, headRefOid)`, or when it is behind but has no
+  `behind_since` (rows cached before that column existed — refreshed once). Up
+  to `behind_per_cycle` (default 40) stale PRs are computed per cycle, in
+  PR-number order, with `fetch_pr_staleness` — one reversed SHA-to-SHA
+  `compare/{head_sha}...{base_sha}?per_page=1` (works for fork PRs) yielding
+  both `behind_by` and `behind_since`; leftovers finish on
   later cycles. A failed base lookup skips only that base's PRs, a failed
   compare only that PR. Cost is REST-only: roughly one compare per open PR each
   time the base branch moves. Feeds the Behind badge on board/queue cards and
-  the pipeline's Behind column; does not mark the analytics rollup dirty.
+  the pipeline's Behind column (count + time badges); does not mark the
+  analytics rollup dirty.
 - **Commit sync** (`sync_commits`, per `commit_branches`, default `["main"]`):
   see **Commit sync** below.
 - Eligible repos: registered minus `exclude_repos`, most-recently-visited first,
@@ -3112,7 +3120,7 @@ Returns teams with repository access.
 
 **POST** `/api/repos/<owner>/<repo>/prs/divergence`
 
-Batch-fetches branch ahead/behind information for open PRs using the GitHub compare API. Uses `ThreadPoolExecutor` with 5 workers for parallel fetching.
+Batch-fetches branch ahead/behind information for open PRs using the GitHub compare API. Uses `ThreadPoolExecutor` with 5 workers for parallel fetching. Each PR costs one reversed compare (`compare/{head}...{base}?per_page=1`); its `ahead_by`/`behind_by` and `ahead`/`behind` status are flipped back to the PR's point of view, and its first (oldest) commit's committer date becomes `behind_since` (`null` when up to date) for the time-behind badge.
 
 **Request Body**:
 ```json
@@ -3128,8 +3136,8 @@ Batch-fetches branch ahead/behind information for open PRs using the GitHub comp
 ```json
 {
   "divergence": {
-    "123": { "status": "behind", "ahead_by": 2, "behind_by": 5 },
-    "124": { "status": "identical", "ahead_by": 0, "behind_by": 0 }
+    "123": { "status": "diverged", "ahead_by": 2, "behind_by": 5, "behind_since": "2026-10-01T08:00:00Z" },
+    "124": { "status": "identical", "ahead_by": 0, "behind_by": 0, "behind_since": null }
   }
 }
 ```

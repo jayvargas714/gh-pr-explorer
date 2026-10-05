@@ -459,12 +459,14 @@ class Database:
                         pass
 
             # Migration: commits-behind cache on synced_prs (sync worker's
-            # sync_behind_counts stage), plus the SHA pair it was computed against
+            # sync_behind_counts stage), plus the SHA pair it was computed against;
+            # behind_since = committer date of the oldest base commit the branch lacks
             cursor.execute("PRAGMA table_info(synced_prs)")
             synced_prs_columns = {row[1] for row in cursor.fetchall()}
 
             for col_name, col_type in (
                 ("behind_by", "INTEGER"),
+                ("behind_since", "TEXT"),
                 ("behind_base_sha", "TEXT"),
                 ("behind_head_sha", "TEXT"),
             ):

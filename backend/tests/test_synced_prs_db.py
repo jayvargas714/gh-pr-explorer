@@ -251,9 +251,9 @@ def test_behind_columns_survive_upsert(store):
     store.upsert_pr("acme/widgets", _pr(1))
     store.set_behind("acme/widgets", 1, 4, "base1", "head1")
     store.upsert_pr("acme/widgets", _pr(1, title="renamed"))
-    assert store.get_behind_by("acme/widgets", 1) == 4
+    assert store.get_behind("acme/widgets", 1)[0] == 4
     assert store.get_behind_state("acme/widgets")[1] == {
-        "behind_by": 4, "behind_base_sha": "base1", "behind_head_sha": "head1",
+        "behind_by": 4, "behind_since": None, "behind_base_sha": "base1", "behind_head_sha": "head1",
     }
 
 
@@ -269,8 +269,19 @@ def test_pr_rows_expose_behind_by(store):
     assert by_number[2]["behindBy"] is None
 
 
-def test_get_behind_by_unknown_pr_is_none(store):
-    assert store.get_behind_by("acme/widgets", 99) is None
+def test_get_behind_unknown_pr_is_none(store):
+    assert store.get_behind("acme/widgets", 99) == (None, None)
+
+
+def test_pr_rows_expose_behind_since(store):
+    store.upsert_pr("acme/widgets", _pr(1))
+    store.upsert_pr("acme/widgets", _pr(2))
+    store.set_behind("acme/widgets", 1, 5, "b", "h", behind_since="2026-10-01T08:00:00Z")
+    rows = {p["number"]: p for p in store.get_prs("acme/widgets")}
+    assert rows[1]["behindSince"] == "2026-10-01T08:00:00Z"
+    assert rows[2]["behindSince"] is None
+    assert store.get_prs_by_numbers("acme/widgets", [1])[1]["behindSince"] == "2026-10-01T08:00:00Z"
+    assert store.get_behind("acme/widgets", 1) == (5, "2026-10-01T08:00:00Z")
 
 
 def test_get_behind_state_open_only(store):

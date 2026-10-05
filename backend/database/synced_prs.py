@@ -4,7 +4,7 @@ import json
 import logging
 import sqlite3
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -180,10 +180,11 @@ class SyncedPRsDB:
         pr = json.loads(row["data"])
         pr["fetchedAt"] = row["fetched_at"]
         pr["behindBy"] = row["behind_by"]
+        pr["behindSince"] = row["behind_since"]
         return pr
 
     def get_prs(self, repo: str, states: Optional[Set[str]] = None) -> List[Dict[str, Any]]:
-        query = "SELECT data, fetched_at, behind_by FROM synced_prs WHERE repo = ?"
+        query = "SELECT data, fetched_at, behind_by, behind_since FROM synced_prs WHERE repo = ?"
         params: List[Any] = [repo]
         if states:
             placeholders = ",".join("?" for _ in states)
@@ -199,7 +200,7 @@ class SyncedPRsDB:
         placeholders = ",".join("?" for _ in numbers)
         with self.db.connection() as conn:
             rows = conn.execute(
-                f"SELECT pr_number, data, fetched_at, behind_by FROM synced_prs "
+                f"SELECT pr_number, data, fetched_at, behind_by, behind_since FROM synced_prs "
                 f"WHERE repo = ? AND pr_number IN ({placeholders})",
                 [repo] + list(numbers),
             ).fetchall()
@@ -227,37 +228,40 @@ class SyncedPRsDB:
     # -- commits-behind cache ---------------------------------------------------
 
     def get_behind_state(self, repo: str) -> Dict[int, Dict[str, Any]]:
-        """Cached behind count + the SHA pair it was computed against, per OPEN PR."""
+        """Cached behind count/since + the SHA pair it was computed against, per OPEN PR."""
         with self.db.connection() as conn:
             rows = conn.execute(
-                """SELECT pr_number, behind_by, behind_base_sha, behind_head_sha
+                """SELECT pr_number, behind_by, behind_since, behind_base_sha, behind_head_sha
                    FROM synced_prs WHERE repo = ? AND state = 'OPEN'""",
                 (repo,),
             ).fetchall()
             return {
                 row["pr_number"]: {
                     "behind_by": row["behind_by"],
+                    "behind_since": row["behind_since"],
                     "behind_base_sha": row["behind_base_sha"],
                     "behind_head_sha": row["behind_head_sha"],
                 }
                 for row in rows
             }
 
-    def get_behind_by(self, repo: str, pr_number: int) -> Optional[int]:
+    def get_behind(self, repo: str, pr_number: int) -> Tuple[Optional[int], Optional[str]]:
+        """(behind_by, behind_since); (None, None) when unknown or not computed."""
         with self.db.connection() as conn:
             row = conn.execute(
-                "SELECT behind_by FROM synced_prs WHERE repo = ? AND pr_number = ?",
+                "SELECT behind_by, behind_since FROM synced_prs WHERE repo = ? AND pr_number = ?",
                 (repo, pr_number),
             ).fetchone()
-            return row["behind_by"] if row else None
+            return (row["behind_by"], row["behind_since"]) if row else (None, None)
 
     def set_behind(self, repo: str, pr_number: int, behind_by: int,
-                   base_sha: str, head_sha: str) -> None:
+                   base_sha: str, head_sha: str, behind_since: Optional[str] = None) -> None:
         with self.db.connection() as conn:
             conn.execute(
-                """UPDATE synced_prs SET behind_by = ?, behind_base_sha = ?, behind_head_sha = ?
+                """UPDATE synced_prs SET behind_by = ?, behind_since = ?,
+                          behind_base_sha = ?, behind_head_sha = ?
                    WHERE repo = ? AND pr_number = ?""",
-                (behind_by, base_sha, head_sha, repo, pr_number),
+                (behind_by, behind_since, base_sha, head_sha, repo, pr_number),
             )
 
     def get_states_by_numbers(self, repo: str, numbers: List[int]) -> Dict[int, str]:

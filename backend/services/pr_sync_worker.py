@@ -14,7 +14,7 @@ from backend.config import DEFAULT_PR_SYNC, get_pr_sync_config
 from backend.services import analytics_rollup
 from backend.services.github_service import (
     fetch_branch_head_sha, fetch_commits_page, fetch_full_pr, fetch_graphql_remaining,
-    fetch_pr_behind_by, fetch_pr_numbers, fetch_repo_created_at, get_authenticated_login,
+    fetch_pr_numbers, fetch_pr_staleness, fetch_repo_created_at, get_authenticated_login,
     RateLimitError,
 )
 
@@ -194,11 +194,12 @@ def history_backfill_slice(store, repo_full, cfg):
 
 
 def sync_behind_counts(store, repo_full, cfg):
-    """Refresh the cached commits-behind count for open PRs. Returns how many
-    were computed.
+    """Refresh the cached commits-behind count (and behind_since, the oldest
+    missing base commit's date) for open PRs. Returns how many were computed.
 
     A PR's count is stale when its base branch head or its own head moved
-    since the stored pair. Base heads cost one REST call per distinct base
+    since the stored pair, or when it is behind but has no behind_since yet
+    (cached before that column existed). Base heads cost one REST call per distinct base
     ref; stale PRs cost one compare each, capped by behind_per_cycle so a
     burst of merges to main drains over several cycles instead of the REST
     quota. One base's or one PR's failure never blocks the rest.
@@ -225,21 +226,22 @@ def sync_behind_counts(store, repo_full, cfg):
         if not base_sha:
             continue
         prev = cached.get(pr["number"]) or {}
-        if (prev.get("behind_base_sha"), prev.get("behind_head_sha")) != (base_sha, pr["headRefOid"]):
+        missing_since = bool(prev.get("behind_by")) and not prev.get("behind_since")
+        if missing_since or (prev.get("behind_base_sha"), prev.get("behind_head_sha")) != (base_sha, pr["headRefOid"]):
             stale.append((pr["number"], base_sha, pr["headRefOid"]))
 
     computed = 0
     for number, base_sha, head_sha in stale[:cap]:
         try:
             # SHA-to-SHA compare, so PRs from forks resolve too.
-            behind = fetch_pr_behind_by(owner, name, base_sha, head_sha)
+            behind, behind_since = fetch_pr_staleness(owner, name, base_sha, head_sha)
         except RateLimitError as e:
             logger.warning(f"PR sync: behind counts for {repo_full} paused, rate limited: {e}")
             break
         except RuntimeError as e:
             logger.warning(f"PR sync: behind count failed for {repo_full}#{number}: {e}")
             continue
-        store.set_behind(repo_full, number, behind, base_sha, head_sha)
+        store.set_behind(repo_full, number, behind, base_sha, head_sha, behind_since=behind_since)
         computed += 1
     return computed
 
